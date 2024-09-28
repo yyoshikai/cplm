@@ -12,9 +12,10 @@ from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--data")
+parser.add_argument("--data-dir")
 parser.add_argument("--test", action='store_true')
-parser.add_argument("--token_size", type=int, default=25000)
+parser.add_argument("--token-per-batch", type=int, default=25000)
+parser.add_argument("--token-per-step", type=int, default=int(1.6e5))
 parser.add_argument("--max-step", type=int, default=1000000)
 parser.add_argument("--lr", type=float, default=1e-5)
 args = parser.parse_args()
