@@ -3,10 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class Model(nn.TransformerEncoder):
-    def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, norm: bool):
+    def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, batch_first, norm: bool):
         layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model*d_ff_factor,
-            dropout=dropout, activation=activation, 
+            dropout=dropout, activation=activation, batch_first=batch_first,
             norm_first=True
         )
         if norm:
