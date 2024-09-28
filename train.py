@@ -4,10 +4,10 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 from torch.nn.parallel import DistributedDataParallel
 
-from src.data import ChemDataset
+from src.data import MoleculeDataset, ProteinDataset, RepeatDataset, SliceDataset
 from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
 
@@ -21,6 +21,7 @@ parser.add_argument("--lr", type=float, default=1e-5)
 args = parser.parse_args()
 
 # environments
+WORKDIR = os.environ.get('WORKDIR', "/workspace")
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
 rank = dist.get_rank()
 size = dist.get_world_size()
@@ -28,8 +29,17 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')    
 
 # data
-train_data = ChemDataset('valid' if args.test else 'train')
-valid_data = ChemDataset('valid')
+train_subset = 'valid' if args.test else 'train'
+valid_subset = 'valid'
+tokenizer = MoleculeProteinTokenizer()
+
+train_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb", tokenizer)
+train_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{train_subset}.lmdb", tokenizer)
+train_data = ConcatDataset([train_mol_data, RepeatDataset(train_prot_data, 5)])
+
+valid_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{valid_subset}.lmdb", tokenizer)
+valid_prot_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{valid_subset}.lmdb", tokenizer)
+
 # TODO: data_parallelへの対応, mol:proteinを何らかの割合で混ぜる, 
 train_iter = DataLoader(train_data).__iter__()
 
