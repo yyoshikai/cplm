@@ -105,7 +105,7 @@ class MoleculeProteinTokenizer:
                 tokens.append(self.residue_offset)
                 continue
 
-            for i in range(1, self.n_residue_token):
+            for i in range(1, self.residue_voc_size):
                 voc = self.residue_vocs[i]
                 if residue[:len(voc)] == voc:
                     tokens.append(self.residue_offset+i)
@@ -115,4 +115,4 @@ class MoleculeProteinTokenizer:
 
     @property
     def voc_size(self):
-        raise NotImplementedError
+        return self.residue_offset+self.residue_voc_size

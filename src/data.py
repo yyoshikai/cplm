@@ -62,20 +62,22 @@ class SliceDataset(Dataset):
         return self.size
 
 class MoleculeDataset(Dataset):
-    def __init__(self, lmdb_path, tokenizer: MoleculeProteinTokenizer, seed=0):
+    def __init__(self, lmdb_path, n_conformer, tokenizer: MoleculeProteinTokenizer, seed=0):
         self.net_dataset = LMDBDataset(lmdb_path, key_is_indexed=True)
         self.tokenizer = tokenizer
+        self.n_conformer = n_conformer
         self.rng = np.random.default_rng(seed)
     
     def __getitem__(self, idx):
-        data = self.net_dataset[idx]
-        coord = self.rng.choice(data['coordinates'])
+        mol_idx, conformer_idx = divmod(idx, self.n_conformer)
+        data = self.net_dataset[mol_idx]
+        coord = data['coordinates'][conformer_idx]
 
         tokens = self.tokenizer.tokenize_smi(data['smi'])+self.tokenizer.tokenize_coord(coord)
         return torch.tensor(tokens, dtype=torch.long)
     
     def __len__(self):
-        return len(self.net_dataset)
+        return len(self.net_dataset) * self.n_conformer
 
 class ProteinDataset(Dataset):
     def __init__(self, lmdb_path, tokenizer: MoleculeProteinTokenizer):
