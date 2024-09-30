@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 
 class Model(nn.TransformerEncoder):
     def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, batch_first, norm: bool):
@@ -15,4 +16,7 @@ class Model(nn.TransformerEncoder):
             norm = None
 
         super().__init__(layer, num_layers=num_layers, norm=norm)
-        
+
+    def forward(self, src):
+        super().forward(src, is_causal=True)
+

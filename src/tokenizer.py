@@ -77,7 +77,7 @@ class MoleculeProteinTokenizer:
         self.coord_f_offset = self.coord_i_offset + (COORD_SUP-COORD_MIN)
 
         smi_offset = self.coord_f_offset + 1000
-        self.smi_tokenizer = get_string_tokenizer(f"{os.path.basename(__file__)}/smiles_tokens.txt", smi_offset)
+        self.smi_tokenizer = get_string_tokenizer(f"{os.path.dirname(__file__)}/smiles_tokens.txt", smi_offset)
         self.residue_offset = smi_offset + self.smi_tokenizer.voc_size
         self.residue_vocs = ['CA', 'C', 'N', 'O', 'S']
         self.residue_voc_size = len(self.residue_vocs)

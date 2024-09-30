@@ -73,6 +73,9 @@ class MoleculeDataset(Dataset):
 
         tokens = self.tokenizer.tokenize_smi(data['smi'])+self.tokenizer.tokenize_coord(coord)
         return torch.tensor(tokens, dtype=torch.long)
+    
+    def __len__(self):
+        return len(self.net_dataset)
 
 class ProteinDataset(Dataset):
     def __init__(self, lmdb_path, tokenizer: MoleculeProteinTokenizer):
@@ -84,3 +87,5 @@ class ProteinDataset(Dataset):
         tokens = self.tokenizer.tokenize_protein(data['atoms'], data['coordinates'][0])
         return torch.tensor(tokens, dtype=torch.long)
 
+    def __len__(self):
+        return len(self.net_dataset)

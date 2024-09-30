@@ -13,7 +13,6 @@ from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--data-dir")
 parser.add_argument("--test", action='store_true')
 parser.add_argument("--token-per-batch", type=int, default=25000)
 parser.add_argument("--token-per-step", type=int, default=int(1.6e5))
@@ -50,6 +49,7 @@ next_item = None
 # model
 tokenizer = MoleculeProteinTokenizer()
 model = Model(8, 768, 12, 4, 0.1, 'gelu', batch_first, True)
+model.to(device)
 model = DistributedDataParallel(model)
 criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=tokenizer.pad_token)
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -99,3 +99,5 @@ for step in range(args.max_step):
     loss = criterion(pred, batch[1:])
     loss.backward()
     optimizer.step()
+
+dist.destroy_process_group()
