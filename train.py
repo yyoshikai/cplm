@@ -75,7 +75,7 @@ n_accum_token = 0
 
 # model
 tokenizer = MoleculeProteinTokenizer()
-model = Model(8, 768, 12, 4, 0.1, 'gelu', batch_first, True, 
+model = Model(8, 768, 12, 4, 0.1, 'gelu', True, 
         tokenizer.voc_size, tokenizer.pad_token)
 model.to(device)
 model = DistributedDataParallel(model)

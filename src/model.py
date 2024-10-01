@@ -1,20 +1,76 @@
-from typing import Optional, Union, Callable
+from typing import Optional, Union, Callable, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.modules.transformer import _get_clones, _get_activation_fn
+from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
+
+
+class MultiheadAttention(nn.Module):
+
+    def __init__(self, embed_dim, num_heads, dropout=0., bias=True,
+                    device=None, dtype=None) -> None:
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        super().__init__()
+        self.embed_dim = embed_dim
+
+        self.num_heads = num_heads
+        self.dropout = dropout
+        self.head_dim = embed_dim // num_heads
+        assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
+
+        self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **factory_kwargs))
+
+        if bias:
+            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
+        else:
+            self.register_parameter('in_proj_bias', None)
+        self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=bias, **factory_kwargs)
+
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        nn.init.xavier_uniform_(self.in_proj_weight)
+
+        if self.in_proj_bias is not None:
+            nn.init.constant_(self.in_proj_bias, 0.)
+            nn.init.constant_(self.out_proj.bias, 0.)
+        
+    def forward(
+            self,
+            query: Tensor,
+            key: Tensor,
+            value: Tensor,
+            key_padding_mask: Optional[Tensor] = None,
+            need_weights: bool = True,
+            attn_mask: Optional[Tensor] = None,
+            average_attn_weights: bool = True,
+            is_causal : bool = False) -> Tuple[Tensor, Optional[Tensor]]:
+
+        attn_output, attn_output_weights = F.multi_head_attention_forward(
+            query, key, value, self.embed_dim, self.num_heads,
+            self.in_proj_weight, self.in_proj_bias,
+            None, None, False,
+            self.dropout, self.out_proj.weight, self.out_proj.bias,
+            training=self.training,
+            key_padding_mask=key_padding_mask,
+            need_weights=need_weights,
+            attn_mask=attn_mask,
+            average_attn_weights=average_attn_weights,
+            is_causal=is_causal)
+        return attn_output, attn_output_weights
 
 class TransformerEncoderLayer(nn.Module):
-    __constants__ = ['batch_first', 'norm_first']
+    __constants__ = ['norm_first']
 
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
                  activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
-                 layer_norm_eps: float = 1e-5, batch_first: bool = False, norm_first: bool = False,
+                 layer_norm_eps: float = 1e-5, norm_first: bool = False,
                  device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=batch_first,
+        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout,
                                             **factory_kwargs)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward, **factory_kwargs)
@@ -78,11 +134,11 @@ class TransformerEncoder(nn.Module):
         return output
 
 class Model(TransformerEncoder):
-    def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, batch_first, norm: bool, 
+    def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, norm: bool, 
                 num_embeddings, padding_idx, ):
         layer = TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model*d_ff_factor,
-            dropout=dropout, activation=activation, batch_first=batch_first,
+            dropout=dropout, activation=activation,
             norm_first=True
         )
         if norm:
