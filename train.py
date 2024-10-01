@@ -45,9 +45,8 @@ torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 if args.test:
     torch.backends.cudnn.deterministic = True
-    torch.use_deterministic_algorithms = True
+    torch.use_deterministic_algorithms(True, warn_only=True)
     torch.backends.cudnn.benchmark = False
-
 
 if is_main:
     os.makedirs(f"{result_dir}/models", exist_ok=True)
@@ -78,6 +77,7 @@ tokenizer = MoleculeProteinTokenizer()
 model = Model(8, 768, 12, 4, 0.1, 'gelu', True, 
         tokenizer.voc_size, tokenizer.pad_token)
 model.to(device)
+# model = torch.compile(model, mode='default') 遅かった。
 model = DistributedDataParallel(model)
 criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=tokenizer.pad_token)
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -140,6 +140,3 @@ for step in range(args.max_step):
     # print(f"rank {rank}: data={data_end-data_start:.03f}, loss={loss_end-data_end:.03f}, optim={optim_end-data_end:.03f}")
 
 dist.destroy_process_group()
-
-import transformers
-transformers.RoFormerModel

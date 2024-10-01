@@ -8,5 +8,8 @@ out of memory
 
 <速度など余裕があれば>
 ・並列して読み込む
+・huggingface?
+    ・TorchScript
+    ・
 
 
