@@ -6,102 +6,36 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.modules.transformer import _get_clones, _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
-from torch.nn.functional import _canonical_mask, _in_projection, _in_projection_packed, \
-    _none_or_dtype, pad, softmax, linear, dropout, scaled_dot_product_attention
+from torch.nn.functional import  _in_projection_packed, scaled_dot_product_attention
 
 def multi_head_attention_forward(
     query: Tensor,
-    key: Tensor,
-    value: Tensor,
-    embed_dim_to_check: int,
     num_heads: int,
     in_proj_weight: Optional[Tensor],
     in_proj_bias: Optional[Tensor],
-    bias_k: Optional[Tensor],
-    bias_v: Optional[Tensor],
-    add_zero_attn: bool,
     dropout_p: float,
     out_proj_weight: Tensor,
     out_proj_bias: Optional[Tensor],
     training: bool = True,
-    key_padding_mask: Optional[Tensor] = None,
     attn_mask: Optional[Tensor] = None,
-) -> Tuple[Tensor, Optional[Tensor]]:
+) -> Tensor:
     
     # set up shape vars
     tgt_len, bsz, embed_dim = query.shape
-    src_len, _, _ = key.shape
+    src_len, _, _ = query.shape
+    head_dim = embed_dim // num_heads
 
-    assert embed_dim == embed_dim_to_check, \
-        f"was expecting embedding dimension of {embed_dim_to_check}, but got {embed_dim}"
-    if isinstance(embed_dim, torch.Tensor):
-        # embed_dim can be a tensor when JIT tracing
-        head_dim = embed_dim.div(num_heads, rounding_mode='trunc')
-    else:
-        head_dim = embed_dim // num_heads
+    proj = F.linear(query, in_proj_weight, in_proj_bias)
+    proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
+    q, k, v = proj[0], proj[1], proj[2]
+    attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
 
-    q, k, v = _in_projection_packed(query, key, value, in_proj_weight, in_proj_bias)
-    attn_mask = _canonical_mask(
-        mask=attn_mask,
-        mask_name="attn_mask",
-        other_type=_none_or_dtype(key_padding_mask),
-        other_name="key_padding_mask",
-        target_type=q.dtype,
-        check_other=False,
-    )
-
-    if attn_mask is not None:
-        # ensure attn_mask's dim is 3
-        if attn_mask.dim() == 2:
-            correct_2d_size = (tgt_len, src_len)
-            if attn_mask.shape != correct_2d_size:
-                raise RuntimeError(f"The shape of the 2D attn_mask is {attn_mask.shape}, but should be {correct_2d_size}.")
-            attn_mask = attn_mask.unsqueeze(0)
-        elif attn_mask.dim() == 3:
-            correct_3d_size = (bsz * num_heads, tgt_len, src_len)
-            if attn_mask.shape != correct_3d_size:
-                raise RuntimeError(f"The shape of the 3D attn_mask is {attn_mask.shape}, but should be {correct_3d_size}.")
-        else:
-            raise RuntimeError(f"attn_mask's dimension {attn_mask.dim()} is not supported")
-
-    # add bias along batch dimension (currently second)
-    if bias_k is not None and bias_v is not None:
-        k = torch.cat([k, bias_k.repeat(1, bsz, 1)])
-        v = torch.cat([v, bias_v.repeat(1, bsz, 1)])
-        if attn_mask is not None:
-            attn_mask = pad(attn_mask, (0, 1))
-    else:
-        assert bias_k is None
-        assert bias_v is None
-
-    #
-    # reshape q, k, v for multihead attention and make em batch first
-    #
     q = q.view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
     k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
     v = v.view(v.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
 
-    # add zero attention along batch dimension (now first)
-    if add_zero_attn:
-        zero_attn_shape = (bsz * num_heads, 1, head_dim)
-        k = torch.cat([k, torch.zeros(zero_attn_shape, dtype=k.dtype, device=k.device)], dim=1)
-        v = torch.cat([v, torch.zeros(zero_attn_shape, dtype=v.dtype, device=v.device)], dim=1)
-        if attn_mask is not None:
-            attn_mask = pad(attn_mask, (0, 1))
-
-    # update source sequence length after adjustments
-    src_len = k.size(1)
-
-    # adjust dropout probability
     if not training:
         dropout_p = 0.0
-
-
-    if attn_mask is not None:
-        if attn_mask.size(0) == 1 and attn_mask.dim() == 3:
-            attn_mask = attn_mask.unsqueeze(0)
-        else:
-            attn_mask = attn_mask.view(bsz, num_heads, -1, src_len)
 
     q = q.view(bsz, num_heads, tgt_len, head_dim)
     k = k.view(bsz, num_heads, src_len, head_dim)
@@ -110,7 +44,7 @@ def multi_head_attention_forward(
     attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, False)
     attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
 
-    attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
+    attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
     attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
     return attn_output
 
@@ -144,14 +78,11 @@ class MultiheadAttention(nn.Module):
     def forward(
             self,
             query: Tensor,
-            key: Tensor,
-            value: Tensor,
             attn_mask: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
 
         return multi_head_attention_forward(
-            query, key, value, self.embed_dim, self.num_heads,
+            query, self.num_heads,
             self.in_proj_weight, self.in_proj_bias,
-            None, None, False,
             self.dropout, self.out_proj.weight, self.out_proj.bias,
             training=self.training,
             attn_mask=attn_mask)
@@ -195,8 +126,7 @@ class TransformerEncoderLayer(nn.Module):
         return x
 
     def _sa_block(self, x: Tensor, attn_mask: Tensor) -> Tensor:
-        x = self.self_attn(x, x, x,
-                           attn_mask=attn_mask)
+        x = self.self_attn(x, attn_mask=attn_mask)
         return self.dropout1(x)
 
     def _ff_block(self, x: Tensor) -> Tensor:
