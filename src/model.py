@@ -12,13 +12,12 @@ class MultiheadAttention(nn.Module):
     bias_k: Optional[torch.Tensor]
     bias_v: Optional[torch.Tensor]
 
-    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False,
-                 kdim=None, vdim=None, device=None, dtype=None) -> None:
+    def __init__(self, embed_dim, num_heads, dropout=0., device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.embed_dim = embed_dim
-        self.kdim = kdim if kdim is not None else embed_dim
-        self.vdim = vdim if vdim is not None else embed_dim
+        self.kdim = embed_dim
+        self.vdim = embed_dim
 
         self.num_heads = num_heads
         self.dropout = dropout
@@ -26,36 +25,16 @@ class MultiheadAttention(nn.Module):
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
 
         self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **factory_kwargs))
-        self.register_parameter('q_proj_weight', None)
-        self.register_parameter('k_proj_weight', None)
-        self.register_parameter('v_proj_weight', None)
 
-        if bias:
-            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
-        else:
-            self.register_parameter('in_proj_bias', None)
-        self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=bias, **factory_kwargs)
-
-        if add_bias_kv:
-            self.bias_k = nn.Parameter(torch.empty((1, 1, embed_dim), **factory_kwargs))
-            self.bias_v = nn.Parameter(torch.empty((1, 1, embed_dim), **factory_kwargs))
-        else:
-            self.bias_k = self.bias_v = None
-
-        self.add_zero_attn = add_zero_attn
+        self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
+        self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=True, **factory_kwargs)
 
         self._reset_parameters()
 
     def _reset_parameters(self):
         nn.init.xavier_uniform_(self.in_proj_weight)
-
-        if self.in_proj_bias is not None:
-            nn.init.constant_(self.in_proj_bias, 0.)
-            nn.init.constant_(self.out_proj.bias, 0.)
-        if self.bias_k is not None:
-            nn.init.xavier_normal_(self.bias_k)
-        if self.bias_v is not None:
-            nn.init.xavier_normal_(self.bias_v)
+        nn.init.constant_(self.in_proj_bias, 0.)
+        nn.init.constant_(self.out_proj.bias, 0.)
 
     def forward(
             self,
@@ -82,7 +61,7 @@ class MultiheadAttention(nn.Module):
         attn_output, attn_output_weights = F.multi_head_attention_forward(
             query, key, value, self.embed_dim, self.num_heads,
             self.in_proj_weight, self.in_proj_bias,
-            self.bias_k, self.bias_v, self.add_zero_attn,
+            None, None, False,
             self.dropout, self.out_proj.weight, self.out_proj.bias,
             training=self.training,
             key_padding_mask=key_padding_mask,
