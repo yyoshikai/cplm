@@ -1,7 +1,9 @@
 import sys, os
 import argparse
 from time import time
+import random
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -21,6 +23,7 @@ parser.add_argument("--token-per-batch", type=int, default=25000)
 parser.add_argument("--token-per-step", type=int, default=int(1.6e5))
 parser.add_argument("--max-step", type=int, default=1000000)
 parser.add_argument("--lr", type=float, default=1e-5)
+parser.add_argument("--seed", type=int, default=0)
 args = parser.parse_args()
 if args.test: args.studyname+='_test'
 result_dir = f"training/results/{args.studyname}"
@@ -29,6 +32,15 @@ main_rank = 0
 batch_first = False
 
 # environments
+random.seed(args.seed)
+np.random.seed(args.seed)
+torch.manual_seed(args.seed)
+torch.cuda.manual_seed(args.seed)
+if args.test:
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
+
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
 rank = dist.get_rank()
@@ -106,7 +118,7 @@ for step in range(args.max_step):
     loss.backward()
     accum_loss += loss.item()
     loss_end = time()
-
+    print(loss.item(), flush=True)
     if n_accum_token >= args.token_per_step:
         # print("optimizer stepped", flush=True)
         optimizer.step()

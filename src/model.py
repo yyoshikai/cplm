@@ -1,9 +1,34 @@
+from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torch.nn.modules.transformer import _get_clones
 
-class Model(nn.TransformerEncoder):
+class TransformerEncoder(nn.Module):
+    __constants__ = ['norm']
+
+    def __init__(self, encoder_layer, num_layers, norm=None, enable_nested_tensor=True, mask_check=True):
+        super().__init__()
+        torch._C._log_api_usage_once(f"torch.nn.modules.{self.__class__.__name__}")
+        self.layers = _get_clones(encoder_layer, num_layers)
+        self.num_layers = num_layers
+        self.norm = norm
+        self.enable_nested_tensor = enable_nested_tensor
+        self.mask_check = mask_check
+
+    def forward(self, src: Tensor) -> Tensor:
+
+        output = src
+        for mod in self.layers:
+            output = mod(output, src_mask=None, is_causal=True, src_key_padding_mask=None)
+
+        if self.norm is not None:
+            output = self.norm(output)
+
+        return output
+
+class Model(TransformerEncoder):
     def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, batch_first, norm: bool, 
                 num_embeddings, padding_idx, ):
         layer = nn.TransformerEncoderLayer(
@@ -22,5 +47,5 @@ class Model(nn.TransformerEncoder):
 
     def forward(self, src: torch.Tensor):
         x = self.embedding(src)
-        x = super().forward(x, is_causal=True)
+        x = super().forward(x)
         return self.predictor(x)
