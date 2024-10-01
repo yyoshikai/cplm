@@ -9,8 +9,7 @@ from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 
 class MultiheadAttention(nn.Module):
 
-    def __init__(self, embed_dim, num_heads, dropout=0., bias=True,
-                    device=None, dtype=None) -> None:
+    def __init__(self, embed_dim, num_heads, dropout=0., device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.embed_dim = embed_dim
@@ -21,12 +20,9 @@ class MultiheadAttention(nn.Module):
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
 
         self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **factory_kwargs))
-
-        if bias:
-            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
-        else:
-            self.register_parameter('in_proj_bias', None)
-        self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=bias, **factory_kwargs)
+        
+        self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
+        self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=True, **factory_kwargs)
 
         self._reset_parameters()
 
@@ -48,7 +44,7 @@ class MultiheadAttention(nn.Module):
             average_attn_weights: bool = True,
             is_causal : bool = False) -> Tuple[Tensor, Optional[Tensor]]:
 
-        attn_output, attn_output_weights = F.multi_head_attention_forward(
+        return F.multi_head_attention_forward(
             query, key, value, self.embed_dim, self.num_heads,
             self.in_proj_weight, self.in_proj_bias,
             None, None, False,
@@ -59,7 +55,6 @@ class MultiheadAttention(nn.Module):
             attn_mask=attn_mask,
             average_attn_weights=average_attn_weights,
             is_causal=is_causal)
-        return attn_output, attn_output_weights
 
 class TransformerEncoderLayer(nn.Module):
     __constants__ = ['norm_first']
