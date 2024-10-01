@@ -1,7 +1,9 @@
 import sys, os
 import argparse
+import random
 from time import time
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -21,12 +23,12 @@ parser.add_argument("--token-per-batch", type=int, default=25000)
 parser.add_argument("--token-per-step", type=int, default=int(1.6e5))
 parser.add_argument("--max-step", type=int, default=1000000)
 parser.add_argument("--lr", type=float, default=1e-5)
+parser.add_argument("--seed", default=0)
 args = parser.parse_args()
 if args.test: args.studyname+='_test'
 result_dir = f"training/results/{args.studyname}"
 record_opt_step = 1 if args.test else 100
 main_rank = 0
-batch_first = False
 
 # environments
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
@@ -36,6 +38,16 @@ size = dist.get_world_size()
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 is_main = rank == main_rank
+
+random.seed(args.seed)
+np.random.seed(args.seed)
+torch.manual_seed(args.seed)
+torch.cuda.manual_seed(args.seed)
+if args.test:
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms = True
+    torch.backends.cudnn.benchmark = False
+
 
 if is_main:
     os.makedirs(f"{result_dir}/models", exist_ok=True)
@@ -63,7 +75,7 @@ n_accum_token = 0
 
 # model
 tokenizer = MoleculeProteinTokenizer()
-model = Model(8, 768, 12, 4, 0.1, 'gelu', batch_first, True, 
+model = Model(8, 768, 12, 4, 0.1, 'gelu', True, 
         tokenizer.voc_size, tokenizer.pad_token)
 model.to(device)
 model = DistributedDataParallel(model)
@@ -96,8 +108,7 @@ for step in range(args.max_step):
             next_item = None
         else:
             break
-    batch = pad_sequence(batch, batch_first=batch_first,
-            padding_value=tokenizer.pad_token).to(torch.long)
+    batch = pad_sequence(batch, padding_value=tokenizer.pad_token).to(torch.long)
     batch = batch.to(device)
     data_end = time()
 
@@ -106,7 +117,7 @@ for step in range(args.max_step):
     loss.backward()
     accum_loss += loss.item()
     loss_end = time()
-
+    print(loss.item())
     if n_accum_token >= args.token_per_step:
         # print("optimizer stepped", flush=True)
         optimizer.step()
@@ -129,3 +140,6 @@ for step in range(args.max_step):
     # print(f"rank {rank}: data={data_end-data_start:.03f}, loss={loss_end-data_end:.03f}, optim={optim_end-data_end:.03f}")
 
 dist.destroy_process_group()
+
+import transformers
+transformers.RoFormerModel
