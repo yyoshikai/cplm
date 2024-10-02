@@ -40,23 +40,21 @@ def multi_head_attention_forward(
     v = v.view(bsz, num_heads, src_len, head_dim)
 
     # rotate
-    """
     position_enc = np.array(
         [[pos / np.power(10000, 2 * j / head_dim) for j in range(head_dim//2)] for pos in range(src_len)]
     )
-    sin = torch.FloatTensor(np.sin(position_enc))
-    cos = torch.FloatTensor(np.cos(position_enc))
+    sin = torch.tensor(np.sin(position_enc), device=q.device, dtype=q.dtype)
+    cos = torch.tensor(np.cos(position_enc), device=q.device, dtype=q.dtype)
 
     sin = sin[:src_len]
     cos = cos[:src_len]
-    sin_pos = torch.stack([sin, sin], head_dim=-1).reshape(src_len, head_dim)
-    cos_pos = torch.stack([cos, cos], head_dim=-1).reshape(src_len, head_dim)
+    sin_pos = torch.stack([sin, sin], dim=-1).reshape(src_len, head_dim)
+    cos_pos = torch.stack([cos, cos], dim=-1).reshape(src_len, head_dim)
 
     rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
     q = q * cos_pos + rotate_half_q * sin_pos
     rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
     k = k * cos_pos + rotate_half_k * sin_pos
-    """
 
     attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p if training else 0.0, False)
     attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
