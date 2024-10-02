@@ -1,13 +1,14 @@
 from typing import Optional, Union, Callable, Tuple
 import math
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.modules.transformer import _get_clones, _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
-from torch.nn.functional import  _in_projection_packed, scaled_dot_product_attention
-
+from torch.nn.functional import scaled_dot_product_attention
+from transformers import RoFormerModel
 def multi_head_attention_forward(
     query: Tensor,
     num_heads: int,
@@ -17,7 +18,7 @@ def multi_head_attention_forward(
     out_proj_weight: Tensor,
     out_proj_bias: Optional[Tensor],
     training: bool = True,
-    attn_mask: Optional[Tensor] = None,
+    attn_mask: Tensor = None,
 ) -> Tensor:
     
     # set up shape vars
@@ -34,14 +35,30 @@ def multi_head_attention_forward(
     k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
     v = v.view(v.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
 
-    if not training:
-        dropout_p = 0.0
-
     q = q.view(bsz, num_heads, tgt_len, head_dim)
     k = k.view(bsz, num_heads, src_len, head_dim)
     v = v.view(bsz, num_heads, src_len, head_dim)
 
-    attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, False)
+    # rotate
+    """
+    position_enc = np.array(
+        [[pos / np.power(10000, 2 * j / head_dim) for j in range(head_dim//2)] for pos in range(src_len)]
+    )
+    sin = torch.FloatTensor(np.sin(position_enc))
+    cos = torch.FloatTensor(np.cos(position_enc))
+
+    sin = sin[:src_len]
+    cos = cos[:src_len]
+    sin_pos = torch.stack([sin, sin], head_dim=-1).reshape(src_len, head_dim)
+    cos_pos = torch.stack([cos, cos], head_dim=-1).reshape(src_len, head_dim)
+
+    rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
+    q = q * cos_pos + rotate_half_q * sin_pos
+    rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
+    k = k * cos_pos + rotate_half_k * sin_pos
+    """
+
+    attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p if training else 0.0, False)
     attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
 
     attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
@@ -62,23 +79,14 @@ class MultiheadAttention(nn.Module):
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
 
         self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **factory_kwargs))
-        
         self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
         self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=True, **factory_kwargs)
 
-        self._reset_parameters()
-
-    def _reset_parameters(self):
         nn.init.xavier_uniform_(self.in_proj_weight)
-
-        if self.in_proj_bias is not None:
-            nn.init.constant_(self.in_proj_bias, 0.)
-            nn.init.constant_(self.out_proj.bias, 0.)
+        nn.init.constant_(self.in_proj_bias, 0.)
+        nn.init.constant_(self.out_proj.bias, 0.)
         
-    def forward(
-            self,
-            query: Tensor,
-            attn_mask: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
+    def forward(self, query: Tensor, attn_mask: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
 
         return multi_head_attention_forward(
             query, self.num_heads,
