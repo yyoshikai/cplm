@@ -17,6 +17,7 @@ def multi_head_attention_forward(
     dropout_p: float,
     out_proj_weight: Tensor,
     out_proj_bias: Optional[Tensor],
+    sin: Tensor, cos: Tensor,
     training: bool = True,
     attn_mask: Tensor = None,
 ) -> Tensor:
@@ -38,13 +39,6 @@ def multi_head_attention_forward(
     q = q.view(bsz, num_heads, tgt_len, head_dim)
     k = k.view(bsz, num_heads, src_len, head_dim)
     v = v.view(bsz, num_heads, src_len, head_dim)
-
-    # rotate
-    position_enc = np.array(
-        [[pos / np.power(10000, 2 * j / head_dim) for j in range(head_dim//2)] for pos in range(src_len)]
-    )
-    sin = torch.tensor(np.sin(position_enc), device=q.device, dtype=q.dtype)
-    cos = torch.tensor(np.cos(position_enc), device=q.device, dtype=q.dtype)
 
     sin = sin[:src_len]
     cos = cos[:src_len]
@@ -84,12 +78,13 @@ class MultiheadAttention(nn.Module):
         nn.init.constant_(self.in_proj_bias, 0.)
         nn.init.constant_(self.out_proj.bias, 0.)
         
-    def forward(self, query: Tensor, attn_mask: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
+    def forward(self, query: Tensor, attn_mask: Tensor, sin, cos) -> Tuple[Tensor, Optional[Tensor]]:
 
         return multi_head_attention_forward(
             query, self.num_heads,
             self.in_proj_weight, self.in_proj_bias,
             self.dropout, self.out_proj.weight, self.out_proj.bias,
+            sin, cos,
             training=self.training,
             attn_mask=attn_mask)
 
@@ -120,19 +115,19 @@ class TransformerEncoderLayer(nn.Module):
             activation = _get_activation_fn(activation)
         self.activation = activation
 
-    def forward(self, src: Tensor, src_mask: Tensor) -> Tensor:
+    def forward(self, src: Tensor, src_mask: Tensor, sin, cos) -> Tensor:
 
         x = src
         if self.norm_first:
-            x = x + self._sa_block(self.norm1(x), src_mask)
+            x = x + self._sa_block(self.norm1(x), src_mask, sin, cos)
             x = x + self._ff_block(self.norm2(x))
         else:
-            x = self.norm1(x + self._sa_block(x, src_mask))
+            x = self.norm1(x + self._sa_block(x, src_mask, sin, cos))
             x = self.norm2(x + self._ff_block(x))
         return x
 
-    def _sa_block(self, x: Tensor, attn_mask: Tensor) -> Tensor:
-        x = self.self_attn(x, attn_mask=attn_mask)
+    def _sa_block(self, x: Tensor, attn_mask: Tensor, sin, cos) -> Tensor:
+        x = self.self_attn(x, attn_mask=attn_mask, sin=sin, cos=cos)
         return self.dropout1(x)
 
     def _ff_block(self, x: Tensor) -> Tensor:
@@ -151,11 +146,11 @@ class TransformerEncoder(nn.Module):
         self.num_layers = num_layers
         self.norm = norm
 
-    def forward(self, src: Tensor, mask: Tensor) -> Tensor:
+    def forward(self, src: Tensor, mask: Tensor, sin, cos) -> Tensor:
 
         output = src
         for mod in self.layers:
-            output = mod(output, src_mask=mask)
+            output = mod(output, src_mask=mask, sin=sin, cos=cos)
 
         if self.norm is not None:
             output = self.norm(output)
@@ -178,12 +173,22 @@ class Model(TransformerEncoder):
         super().__init__(layer, num_layers=num_layers, norm=norm)
         self.embedding = nn.Embedding(num_embeddings, d_model, padding_idx)
         self.predictor = nn.Linear(d_model, num_embeddings)
+        self.head_dim = d_model // nhead
 
     def forward(self, src: torch.Tensor):
         x = self.embedding(src)
         length = x.shape[0]
         mask = nn.Transformer.generate_square_subsequent_mask(length).to(x.device).to(x.dtype)
-        x = super().forward(x, mask)
+
+        
+        # rotate
+        position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
+                for pos in range(len(src))])
+        sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
+        cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
+
+
+        x = super().forward(x, mask, sin, cos)
         return self.predictor(x)
     
 
