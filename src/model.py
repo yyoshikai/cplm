@@ -1,5 +1,8 @@
 from typing import Optional, Union, Callable, Tuple
 import math
+from time import time
+import logging
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,7 +11,7 @@ from torch import Tensor
 from torch.nn.modules.transformer import _get_clones, _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
-from transformers import RoFormerModel
+from torch.nn.attention import SDPBackend
 def multi_head_attention_forward(
     query: Tensor,
     num_heads: int,
@@ -49,8 +52,7 @@ def multi_head_attention_forward(
     q = q * cos_pos + rotate_half_q * sin_pos
     rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
     k = k * cos_pos + rotate_half_k * sin_pos
-
-    attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p if training else 0.0, False)
+    attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0, is_causal=True)
     attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
 
     attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
@@ -79,7 +81,6 @@ class MultiheadAttention(nn.Module):
         nn.init.constant_(self.out_proj.bias, 0.)
         
     def forward(self, query: Tensor, attn_mask: Tensor, sin, cos) -> Tuple[Tensor, Optional[Tensor]]:
-
         return multi_head_attention_forward(
             query, self.num_heads,
             self.in_proj_weight, self.in_proj_bias,
@@ -134,11 +135,9 @@ class TransformerEncoderLayer(nn.Module):
         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         return self.dropout2(x)
 
-
-
 class TransformerEncoder(nn.Module):
     __constants__ = ['norm']
-
+    logger = logging.getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, encoder_layer, num_layers, norm=None):
         super().__init__()
         torch._C._log_api_usage_once(f"torch.nn.modules.{self.__class__.__name__}")
@@ -151,13 +150,13 @@ class TransformerEncoder(nn.Module):
         output = src
         for mod in self.layers:
             output = mod(output, src_mask=mask, sin=sin, cos=cos)
-
         if self.norm is not None:
             output = self.norm(output)
 
         return output
 
 class Model(TransformerEncoder):
+    logger = logging.getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, norm: bool, 
                 num_embeddings, padding_idx, ):
         layer = TransformerEncoderLayer(
@@ -180,15 +179,14 @@ class Model(TransformerEncoder):
         length = x.shape[0]
         mask = nn.Transformer.generate_square_subsequent_mask(length).to(x.device).to(x.dtype)
 
-        
         # rotate
+        # rstart = time()
         position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
                 for pos in range(len(src))])
         sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
         cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
-
+        # rend = time()
+        # print(rstart - rend)
 
         x = super().forward(x, mask, sin, cos)
         return self.predictor(x)
-    
-
