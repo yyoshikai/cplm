@@ -4,10 +4,10 @@ from time import time
 import random
 import math
 import gc
+import psutil
 import logging, yaml
 from logging.config import dictConfig
 
-import psutil
 import numpy as np
 import pandas as pd
 import torch
@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader, ConcatDataset
 from torch.nn.parallel import DistributedDataParallel
 from torch.nn.utils.rnn import pad_sequence
 
-from src.data import MoleculeDataset, ProteinDataset, RepeatDataset, SliceDataset
+from src.data import LMDBDataset, MoleculeDataset, ProteinDataset, RepeatDataset, SliceDataset
 from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
@@ -28,8 +28,8 @@ from tools.path import timestamp
 parser = argparse.ArgumentParser()
 parser.add_argument("--studyname", default='default')
 parser.add_argument("--test", action='store_true')
-parser.add_argument("--token-per-batch", type=int, default=25000)
-parser.add_argument("--token-per-step", type=int, default=int(1.6e6))
+parser.add_argument("--batch-size", type=int, default=50)
+parser.add_argument("--step-size", type=int, default=4000)
 parser.add_argument("--max-step", type=int, default=1000000)
 parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--weight_decay", type=float, default=0.01)
@@ -40,6 +40,12 @@ parser.add_argument("--pin-memory", action='store_true')
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
 parser.add_argument("--file-log-level", choices=['NOTSET', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default='DEBUG')
 parser.add_argument("--gc", action='store_true')
+# for debug
+parser.add_argument("--lmdb", action='store_true')
+parser.add_argument("--mol", action='store_true')
+parser.add_argument("--no-env", action='store_true')
+parser.add_argument("--no-txn", action='store_true')
+
 args = parser.parse_args()
 
 if args.test: args.studyname+='_test'
@@ -89,14 +95,17 @@ train_subset = 'valid' if args.test else 'train'
 valid_subset = 'valid'
 tokenizer = MoleculeProteinTokenizer()
 
-train_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb", 10, tokenizer)
-train_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{train_subset}.lmdb", tokenizer)
-train_data = ConcatDataset([train_mol_data, RepeatDataset(train_prot_data, 5)])
-train_data = SliceDataset(train_data, size, rank)
-
-valid_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{valid_subset}.lmdb", 10, tokenizer)
-valid_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{valid_subset}.lmdb", tokenizer)
-
+if args.lmdb:
+    train_data = LMDBDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb",
+            keep_env=not args.no_env, keep_txn=not args.no_txn, key_is_indexed=True)
+else:
+    train_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb", 10, tokenizer)
+    if args.mol:
+        train_data = train_mol_data
+    else:
+        train_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{train_subset}.lmdb", tokenizer)
+        train_data = ConcatDataset([train_mol_data, RepeatDataset(train_prot_data, 5)])
+        train_data = SliceDataset(train_data, size, rank)
 
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
 train_iter = train_loader.__iter__()
@@ -104,33 +113,7 @@ next_item = None
 n_accum_token = 0
 
 # model
-tokenizer = MoleculeProteinTokenizer()
-model = Model(8, 768, 12, 4, 0.1, 'gelu', True, 
-        tokenizer.voc_size, tokenizer.pad_token)
-model.to(torch.bfloat16)
-model.to(device)
-model = DistributedDataParallel(model)
-criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=tokenizer.pad_token)
-optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
-optimizer.zero_grad()
-
-def schedule(step):
-    if step <= 2000:
-        return step / 2000
-    elif step <= 55000:
-        return math.cos(math.pi*((step-2000)/(55000-2000)))*0.49+0.51
-    else:
-        return 0.02
-scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
-
-
-accum_loss = 0
-opt_step = 0
-accum_losses = []
-accum_n_tokens = []
-lrs = []
 data_times = []
-loss_times = []
 
 for step in range(args.max_step):
 
@@ -141,31 +124,20 @@ for step in range(args.max_step):
     while True:
         if next_item is None:
             try:
-                next_item = train_iter.__next__().squeeze(0)
+                next_item = train_iter.__next__()
             except StopIteration:
                 logger.info(f"rank {rank}: epoch finished at step {step}")
                 train_iter = train_loader.__iter__()
-                next_item = train_iter.__next__().squeeze(0)
-        if ((len(batch)+1) * max(max_length, len(next_item)) <= args.token_per_batch):
+                next_item = train_iter.__next__()
+        if ((len(batch)+1) <= args.batch_size):
             batch.append(next_item)
             max_length = max(max_length, len(next_item))
-            n_accum_token += len(next_item)
+            n_accum_token += 1
             next_item = None
         else:
             break
-    batch = pad_sequence(batch, batch_first=batch_first,
-            padding_value=tokenizer.pad_token).to(torch.long)
-    batch = batch.to(device)
     data_end = time()
     data_times.append(data_end-data_start)
-
-    with torch.autocast('cuda', dtype=torch.bfloat16):
-        pred = model(batch[:-1])
-        loss = criterion(pred.reshape(-1, tokenizer.voc_size), batch[1:].ravel())
-        loss.backward()
-    accum_loss += loss.item()
-    loss_end = time()
-    loss_times.append(loss_end-data_end)
 
     # sum accum_token
     logger.debug(f"n_accum_token={n_accum_token}")
@@ -173,38 +145,14 @@ for step in range(args.max_step):
     dist.all_reduce(reduced_accum_token)
     logger.debug(f"reduced_accum_token={reduced_accum_token}")
 
-    logger.debug(f"loss={loss.item()}")
-    if reduced_accum_token >= args.token_per_step:
+    if reduced_accum_token >= args.step_size:
         logger.debug("optimizer stepped")
-        optim_start = time()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
-        optimizer.step()
-        optimizer.zero_grad()
-        optim_end = time()
-        opt_step += 1
-        accum_losses.append(accum_loss)
-        accum_n_tokens.append(n_accum_token)
-        lrs.append(scheduler.get_last_lr())
-        scheduler.step()
-        if opt_step % record_opt_step == 0:
-            df = pd.DataFrame({
-                'loss': accum_losses,
-                'n_token': accum_n_tokens,
-                'lr': lrs,
-            })
-            df.to_csv(f"{result_dir}/step_data/{rank}.csv")
-            df = pd.DataFrame({
-                'data_time': data_times,
-                'forward_time': loss_times,
-            })
-            df.to_csv(f"{result_dir}/step_data/{rank}_step.csv")
-            if is_main:
-                torch.save(model.state_dict(), f"{result_dir}/models/{opt_step}.pth")
-            if args.gc:
-                gc.collect()
-        logger.debug(f"optim_time={optim_end-optim_start:.03f}")
         n_accum_token = 0
         accum_loss = 0
+    
+        if args.gc:
+            gc.collect()
+    
     mem = psutil.virtual_memory()
     logger.debug(f"memory={mem.used/(2**30):.03f}/{mem.total/(2**30):.03f}")
 

@@ -7,18 +7,26 @@ from torch.utils.data import Dataset, ConcatDataset
 import lmdb
 
 from .tokenizer import MoleculeProteinTokenizer
-from .lmdb import load_lmdb
 
 class LMDBDataset(Dataset):
     logger = getLogger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, lmdb_path, key_is_indexed=False):
-        self.env, self.txn = load_lmdb(lmdb_path) 
+    def __init__(self, lmdb_path, key_is_indexed=False, keep_env=True, keep_txn=True):
+        self.lmdb_path = lmdb_path
+        self.env = self.txn = None
+        if keep_env:
+            self.env = lmdb.open(lmdb_path, subdir=False, readonly=True,
+                lock=False, readahead=False, meminit=False, max_readers=256)
+            if keep_txn:
+                self.txn = self.env.begin()
         self.key_is_indexed = key_is_indexed
         self._lazy_keys = None
     
     def __getitem__(self, idx):
-        return pickle.loads(self.txn.get(self.key(idx)))
+        env = self.env or lmdb.open(self.lmdb_path, subdir=False, readonly=True,
+                lock=False, readahead=False, meminit=False, max_readers=256)
+        txn = self.txn or env.begin()
+        data = pickle.loads(txn.get(self.key(idx)))
     
     def key(self, idx):
         if self.key_is_indexed:
@@ -31,7 +39,9 @@ class LMDBDataset(Dataset):
             return self._lazy_keys[idx]
 
     def __len__(self):
-        return self.env.stat()['entries']
+        env = self.env or lmdb.open(self.lmdb_path, subdir=False, readonly=True,
+                lock=False, readahead=False, meminit=False, max_readers=256)
+        return env.stat()['entries']
 
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):
