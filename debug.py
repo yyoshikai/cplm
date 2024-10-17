@@ -95,17 +95,12 @@ train_subset = 'valid' if args.test else 'train'
 valid_subset = 'valid'
 tokenizer = MoleculeProteinTokenizer()
 
-if args.lmdb:
-    train_data = LMDBDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb",
-            keep_env=not args.no_env, keep_txn=not args.no_txn, key_is_indexed=True)
-else:
-    train_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb", 10, tokenizer)
-    if args.mol:
-        train_data = train_mol_data
-    else:
-        train_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{train_subset}.lmdb", tokenizer)
-        train_data = ConcatDataset([train_mol_data, RepeatDataset(train_prot_data, 5)])
-        train_data = SliceDataset(train_data, size, rank)
+train_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb", 10, tokenizer, 
+        keep_env=not args.no_env, keep_txn=not args.no_txn)
+train_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{train_subset}.lmdb", tokenizer, 
+        keep_env=not args.no_env, keep_txn=not args.no_txn)
+train_data = ConcatDataset([train_mol_data, RepeatDataset(train_prot_data, 5)])
+train_data = SliceDataset(train_data, size, rank)
 
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
 train_iter = train_loader.__iter__()

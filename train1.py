@@ -1,3 +1,8 @@
+"""
+241017作成
+- PDBデータから読み込み, PDBのみ学習するように変更
+
+"""
 import sys, os
 import argparse
 from time import time
@@ -18,7 +23,7 @@ from torch.utils.data import DataLoader, ConcatDataset
 from torch.nn.parallel import DistributedDataParallel
 from torch.nn.utils.rnn import pad_sequence
 
-from src.data import MoleculeDataset, CoordTransform, ProteinDataset, RepeatDataset, SliceDataset
+from src.data import MoleculeDataset, ProteinDataset, RepeatDataset, SliceDataset
 from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
@@ -42,11 +47,6 @@ parser.add_argument("--pin-memory", action='store_true')
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
 parser.add_argument("--file-log-level", choices=['NOTSET', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default='INFO')
 parser.add_argument("--gc", action='store_true')
-parser.add_argument("--protein-only", action='store_true')
-parser.add_argument("--normalize-coord", action='store_true')
-parser.add_argument("--random-rotate", action='store_true')
-parser.add_argument("--coord-noise-std", type=float, default=0.0)
-
 args = parser.parse_args()
 
 if args.test: args.studyname+='_test'
@@ -95,23 +95,34 @@ mem = psutil.virtual_memory()
 logger.info(f"Total memory={mem.total/(2**30):.03f}")
 
 # data
+"""
 train_subset = 'valid' if args.test else 'train'
+valid_subset = 'valid'
 tokenizer = MoleculeProteinTokenizer()
-coord_transform = CoordTransform(args.seed, args.normalize_coord, args.random_rotate, args.coord_noise_std)
-train_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb",
-        10, tokenizer, coord_transform, seed=args.seed)
-train_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{train_subset}.lmdb",
-        tokenizer, coord_transform)
-if args.protein_only:
-    train_data = train_prot_data
-else:
-    train_data = ConcatDataset([train_mol_data, RepeatDataset(train_prot_data, 5)])
+
+train_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb", 10, tokenizer)
+train_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{train_subset}.lmdb", tokenizer)
+train_data = ConcatDataset([train_mol_data, RepeatDataset(train_prot_data, 5)])
 train_data = SliceDataset(train_data, size, rank)
+
+valid_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{valid_subset}.lmdb", 10, tokenizer)
+valid_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{valid_subset}.lmdb", tokenizer)
+
 
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
 train_iter = train_loader.__iter__()
 next_item = None
 n_accum_token = 0
+"""
+structure_data = PDBFragmentDataset(f"{WORKDIR}/cheminfodata/pdb/240101/mmCIF", mmcif=True)
+
+
+
+
+
+
+
+
 
 # model
 tokenizer = MoleculeProteinTokenizer()
@@ -162,13 +173,23 @@ for step in range(args.max_step):
         if ((len(batch)+1) * max(max_length, len(next_item)) <= args.token_per_batch):
             batch.append(next_item)
             max_length = max(max_length, len(next_item))
+            # if next_item[0] == 3: n_prot += 1
             n_accum_token += len(next_item)
             next_item = None
         else:
             break
+    # n_total += len(batch)
+    # logger.info(f"n_prot={n_prot}/{n_total}")
     batch = pad_sequence(batch, batch_first=batch_first,
             padding_value=tokenizer.pad_token).to(torch.long)
     batch = batch.to(device)
+
+    logger.info("batch:")
+
+    batch_list = batch.T.cpu().numpy().tolist()
+    for item in batch_list:
+        if(item[0] == 3):
+            logger.info(item)
 
     data_end = time()
     data_times.append(data_end-data_start)
@@ -226,5 +247,6 @@ for step in range(args.max_step):
         logger.debug(f"optim_time={optim_end-optim_start:.03f}")
         n_accum_token = 0
         accum_loss = 0
+    break
 
 dist.destroy_process_group()

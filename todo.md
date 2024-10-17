@@ -1,19 +1,20 @@
 
 <機能的に必要なこと>
 座標の範囲がどのくらいかを調べる。
-rotational encoding
-
-割合が多すぎる
-out of memory
+    -200~200くらいまであった。
 
 <速度など余裕があれば>
-・並列して読み込む
 ・positional embeddingをクラス変数にする
     state_dictで読み込まないようになどしたい。
 
 We employ Flash-Attention2 Dao (2023) and DeepSpeed optimization accelerator. 
 As the distributed optimizer, we use DeepSpeed ZeRO Stage-3 optimizer (Rajbhandari et al., 2020). 
     DeepSpeed使った方がbatch size大きくできる？
+
+
+なぜ遅いのか？
+    DeepSpeed optimization accelerator
+
 
 
 ## B Technical Description of the Training Pipeline
