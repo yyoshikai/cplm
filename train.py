@@ -23,7 +23,7 @@ from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
-from tools.path import timestamp, cleardir
+from tools.path import timestamp, cleardir, make_result_dir
 
 
 parser = argparse.ArgumentParser()
@@ -46,9 +46,10 @@ parser.add_argument("--protein-only", action='store_true')
 parser.add_argument("--normalize-coord", action='store_true')
 parser.add_argument("--random-rotate", action='store_true')
 parser.add_argument("--coord-noise-std", type=float, default=0.0)
-
+parser.add_argument("--coord-range", type=int, default=20)
 args = parser.parse_args()
 
+# environment
 if args.test: args.studyname+='_test'
 result_dir = f"training/results/{timestamp()}_{args.studyname}"
 if args.record_opt_step is None:
@@ -56,7 +57,7 @@ if args.record_opt_step is None:
 main_rank = 0
 batch_first = False
 
-# environments
+## DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
 rank = dist.get_rank()
 size = dist.get_world_size()
@@ -64,6 +65,18 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 is_main = rank == main_rank
 
+
+if is_main:
+    ## make result dir
+    os.makedirs(f"{result_dir}/models", exist_ok=True)
+    os.makedirs(f"{result_dir}/step_data", exist_ok=True)
+    os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
+
+    ## save args
+    with open(f"{result_dir}/config.yaml", 'w') as f:
+        yaml.dump(vars(args), f)
+
+## seed
 random.seed(args.seed)
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
@@ -79,10 +92,7 @@ if args.sdp_kernel is not None:
     torch.backends.cuda.enable_math_sdp(args.sdp_kernel == 'MATH')
     torch.backends.cuda.enable_mem_efficient_sdp(args.sdp_kernel == 'EFFICIENT')
 
-os.makedirs(f"{result_dir}/models", exist_ok=True)
-os.makedirs(f"{result_dir}/step_data", exist_ok=True)
-os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
-
+## logger
 log_config = yaml.safe_load(open("src/logging.yaml").read())
 log_config['formatters']['default']['format'] = "[{asctime}]"+f"[{rank}/{size}]"+"[{levelname}] {message}"
 log_config['handlers']['file']['filename'] = f"{result_dir}/log.txt"
@@ -91,12 +101,9 @@ log_config['handlers']['file']['level'] = args.file_log_level
 dictConfig(log_config)
 logger = logging.getLogger()
 
-mem = psutil.virtual_memory()
-logger.info(f"Total memory={mem.total/(2**30):.03f}")
-
 # data
 train_subset = 'valid' if args.test else 'train'
-tokenizer = MoleculeProteinTokenizer()
+tokenizer = MoleculeProteinTokenizer(coord_min=-args.coord_range, coord_sup=args.coord_range)
 coord_transform = CoordTransform(args.seed, args.normalize_coord, args.random_rotate, args.coord_noise_std)
 train_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb",
         10, tokenizer, coord_transform, seed=args.seed)
@@ -114,7 +121,6 @@ next_item = None
 n_accum_token = 0
 
 # model
-tokenizer = MoleculeProteinTokenizer()
 model = Model(8, 768, 12, 4, 0.1, 'gelu', True, 
         tokenizer.voc_size, tokenizer.pad_token)
 model.to(torch.bfloat16)
@@ -132,6 +138,8 @@ def schedule(step):
     else:
         return 0.02
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
+
+
 
 accum_loss = 0
 opt_step = 0
