@@ -17,14 +17,15 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader, ConcatDataset
 from torch.nn.parallel import DistributedDataParallel
 from torch.nn.utils.rnn import pad_sequence
-
-from src.data import MoleculeDataset, CoordTransform, ProteinDataset, RepeatDataset, SliceDataset
-from src.tokenizer import MoleculeProteinTokenizer
-from src.model import Model
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
-from tools.path import timestamp, cleardir, make_result_dir
 
+from src.data import MoleculeDataset, CoordTransform, ProteinDataset, RepeatDataset, SliceDataset, LMDBDataset
+from src.data.protein import PDBFragmentDataset
+from src.tokenizer import MoleculeProteinTokenizer
+from src.model import Model
+from tools.path import timestamp, cleardir, make_result_dir
+from tools.logger import add_file_handler, add_stream_handler
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--studyname", default='default')
@@ -42,7 +43,11 @@ parser.add_argument("--pin-memory", action='store_true')
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
 parser.add_argument("--file-log-level", choices=['NOTSET', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default='INFO')
 parser.add_argument("--gc", action='store_true')
+parser.add_argument("--mol-data", default=f"{WORKDIR}/cheminfodata/unimol/ligands/train.lmdb")
+parser.add_argument("--prot-data", default=f"{WORKDIR}/cheminfodata/unimol/pockets/train.lmdb")
+parser.add_argument("--sample-fragment", action='store_true')
 parser.add_argument("--protein-only", action='store_true')
+
 parser.add_argument("--normalize-coord", action='store_true')
 parser.add_argument("--random-rotate", action='store_true')
 parser.add_argument("--coord-noise-std", type=float, default=0.0)
@@ -66,11 +71,11 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
 is_main = rank == main_rank
 
 
+## make result dir
+os.makedirs(f"{result_dir}/models", exist_ok=True)
+os.makedirs(f"{result_dir}/step_data", exist_ok=True)
+os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
 if is_main:
-    ## make result dir
-    os.makedirs(f"{result_dir}/models", exist_ok=True)
-    os.makedirs(f"{result_dir}/step_data", exist_ok=True)
-    os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
 
     ## save args
     with open(f"{result_dir}/config.yaml", 'w') as f:
@@ -93,22 +98,24 @@ if args.sdp_kernel is not None:
     torch.backends.cuda.enable_mem_efficient_sdp(args.sdp_kernel == 'EFFICIENT')
 
 ## logger
-log_config = yaml.safe_load(open("src/logging.yaml").read())
-log_config['formatters']['default']['format'] = "[{asctime}]"+f"[{rank}/{size}]"+"[{levelname}] {message}"
-log_config['handlers']['file']['filename'] = f"{result_dir}/log.txt"
-log_config['handlers']['console']['level'] = 'DEBUG' if args.test else 'INFO'
-log_config['handlers']['file']['level'] = args.file_log_level
-dictConfig(log_config)
+fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{levelname}] {message}"
 logger = logging.getLogger()
+add_stream_handler(logger, logging.DEBUG if args.test else logging.INFO, fmt=fmt)
+add_file_handler(logger, f"{result_dir}/log.log", args.file_log_level, fmt=fmt)
+logger.setLevel(logging.NOTSET if is_main else logging.WARNING)
+log_step = 1 if args.test else 1000
 
 # data
-train_subset = 'valid' if args.test else 'train'
 tokenizer = MoleculeProteinTokenizer(coord_min=-args.coord_range, coord_sup=args.coord_range)
 coord_transform = CoordTransform(args.seed, args.normalize_coord, args.random_rotate, args.coord_noise_std)
-train_mol_data = MoleculeDataset(f"{WORKDIR}/cheminfodata/unimol/ligands/{train_subset}.lmdb",
+train_mol_data = MoleculeDataset(args.mol_data,
         10, tokenizer, coord_transform, seed=args.seed)
-train_prot_data = ProteinDataset(f"{WORKDIR}/cheminfodata/unimol/pockets/{train_subset}.lmdb",
-        tokenizer, coord_transform)
+
+if args.sample_fragment:
+    train_prot_data = PDBFragmentDataset(args.prot_data)
+else:
+    train_prot_data = LMDBDataset(args.prot_data, key_is_indexed=True)
+train_prot_data = ProteinDataset(train_prot_data, tokenizer, coord_transform)
 if args.protein_only:
     train_data = train_prot_data
 else:
@@ -153,6 +160,7 @@ loss_times = []
 
 # n_prot = 0
 # n_total = 0
+logger.info("Training started.")
 for step in range(args.max_step):
 
     # get batch
@@ -190,12 +198,9 @@ for step in range(args.max_step):
     loss_times.append(loss_end-data_end)
 
     # sum accum_token
-    logger.debug(f"n_accum_token={n_accum_token}")
     reduced_accum_token = torch.tensor(n_accum_token, dtype=torch.int, device=device)
     dist.all_reduce(reduced_accum_token)
-    logger.debug(f"reduced_accum_token={reduced_accum_token}")
 
-    logger.debug(f"loss={loss.item()}")
     if reduced_accum_token >= args.token_per_step:
         logger.debug("optimizer stepped")
         optim_start = time()
@@ -234,5 +239,7 @@ for step in range(args.max_step):
         logger.debug(f"optim_time={optim_end-optim_start:.03f}")
         n_accum_token = 0
         accum_loss = 0
+    if (step+1) % log_step == 0:
+        logger.info(f"{step+1} step finished.")
 
 dist.destroy_process_group()

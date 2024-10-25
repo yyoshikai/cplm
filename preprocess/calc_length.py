@@ -3,7 +3,7 @@ import argparse
 import concurrent.futures as cf
 import pickle
 import lmdb
-from src.data import MoleculeTokenizer, LMDBDataset
+from src.data.data import MoleculeTokenizer, LMDBDataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--input", required=True)
