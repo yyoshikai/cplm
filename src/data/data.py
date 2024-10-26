@@ -25,24 +25,20 @@ class LMDBDataset(Dataset):
         return pickle.loads(self.txn().get(self.key(idx)))
 
     def env(self):
-        self.logger.info("Loading env...")
         if self._lazy_env is not None:
             return self._lazy_env
         env = lmdb.open(self.lmdb_path, subdir=False, readonly=True,
                 lock=False, readahead=False, meminit=False, max_readers=256)
         if self.keep_env:
             self._lazy_env = env
-        self.logger.info("Loaded.")
         return env
 
     def txn(self):
-        self.logger.info("Loading txn...")
         if self._lazy_txn is not None:
             return self._lazy_txn
         txn = self.env().begin()
         if self.keep_txn:
             self._lazy_txn = txn
-        self.logger.info("txn loaded")
         return txn
     
     def key(self, idx):

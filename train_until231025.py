@@ -1,4 +1,3 @@
-# 241025 若干argumentを変更した。
 import sys, os
 import argparse
 from time import time
@@ -42,16 +41,16 @@ parser.add_argument("--clip_grad_norm", type=int, default=1.0)
 parser.add_argument("--num-workers", type=int, default=0)
 parser.add_argument("--pin-memory", action='store_true')
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
+parser.add_argument("--file-log-level", choices=['NOTSET', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default='INFO')
 parser.add_argument("--gc", action='store_true')
-parser.add_argument("--mol-repeat", type=int, default=1)
 parser.add_argument("--mol-data", default=f"{WORKDIR}/cheminfodata/unimol/ligands/train.lmdb")
-parser.add_argument("--pocket-repeat", type=int, default=5)
-parser.add_argument("--pocket-data", default=f"{WORKDIR}/cheminfodata/unimol/pockets/train.lmdb")
+parser.add_argument("--prot-data", default=f"{WORKDIR}/cheminfodata/unimol/pockets/train.lmdb")
+parser.add_argument("--sample-fragment", action='store_true')
+parser.add_argument("--protein-only", action='store_true')
 
-parser.add_argument("--frag-data")
-parser.add_argument("--frag-repeat", type=int, default=0)
-
-parser.add_argument("--coord-noise-std", type=float, default=50.0)
+parser.add_argument("--normalize-coord", action='store_true')
+parser.add_argument("--random-rotate", action='store_true')
+parser.add_argument("--coord-noise-std", type=float, default=0.0)
 parser.add_argument("--coord-range", type=int, default=20)
 args = parser.parse_args()
 
@@ -102,43 +101,25 @@ if args.sdp_kernel is not None:
 fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{levelname}] {message}"
 logger = logging.getLogger()
 add_stream_handler(logger, logging.DEBUG if args.test else logging.INFO, fmt=fmt)
-add_file_handler(logger, f"{result_dir}/log.log", logging.DEBUG, fmt=fmt, mode='w')
+add_file_handler(logger, f"{result_dir}/log.log", args.file_log_level, fmt=fmt)
 logger.setLevel(logging.NOTSET if is_main else logging.WARNING)
 log_step = 1 if args.test else 1000
 
-logger.info(f"num_workers={args.num_workers}")
-
 # data
 tokenizer = MoleculeProteinTokenizer(coord_min=-args.coord_range, coord_sup=args.coord_range)
-coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
+coord_transform = CoordTransform(args.seed, args.normalize_coord, args.random_rotate, args.coord_noise_std)
 train_mol_data = MoleculeDataset(args.mol_data,
         10, tokenizer, coord_transform, seed=args.seed)
 
-datas = []
-## mol data
-if args.mol_repeat > 0:
-    mol_data = MoleculeDataset(args.mol_data, 10, tokenizer, coord_transform, seed=args.seed)
-    mol_data = RepeatDataset(mol_data, args.mol_repeat)
-    logger.info(f"mol data: {len(mol_data)}")
-    datas.append(mol_data)
-## pocket data
-if args.pocket_repeat > 0:
-    pocket_data = LMDBDataset(args.pocket_data, key_is_indexed=True)
-    pocket_data = ProteinDataset(pocket_data, tokenizer, coord_transform)
-    pocket_data = RepeatDataset(pocket_data, args.pocket_repeat)
-    logger.info(f"pocket data: {len(pocket_data)}")
-    datas.append(pocket_data)
-## fragment data
-if args.frag_repeat > 0:
-    frag_data = PDBFragmentDataset(args.frag_data)
-    frag_data = ProteinDataset(frag_data, tokenizer, coord_transform)
-    frag_data = RepeatDataset(frag_data, args.frag_repeat)
-    logger.info(f"frag data: {len(frag_data)}")
-    datas.append(frag_data)
-if len(datas) == 1:
-    train_data = datas[0]
+if args.sample_fragment:
+    train_prot_data = PDBFragmentDataset(args.prot_data)
 else:
-    train_data = ConcatDataset(datas)
+    train_prot_data = LMDBDataset(args.prot_data, key_is_indexed=True)
+train_prot_data = ProteinDataset(train_prot_data, tokenizer, coord_transform)
+if args.protein_only:
+    train_data = train_prot_data
+else:
+    train_data = ConcatDataset([train_mol_data, RepeatDataset(train_prot_data, 5)])
 train_data = SliceDataset(train_data, size, rank)
 
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
@@ -203,9 +184,7 @@ for step in range(args.max_step):
             break
     batch = pad_sequence(batch, batch_first=batch_first,
             padding_value=tokenizer.pad_token).to(torch.long)
-    logger.debug(f"start: {np.unique(batch[0], return_counts=True)}")
     batch = batch.to(device)
-
 
     data_end = time()
     data_times.append(data_end-data_start)
