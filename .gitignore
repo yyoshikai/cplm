@@ -132,3 +132,4 @@ dmypy.json
 /training
 /.vscode
 /preprocess/results
+*.ent
