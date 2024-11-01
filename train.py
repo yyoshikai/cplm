@@ -176,6 +176,8 @@ mems = []
 
 data_times = []
 loss_times = []
+batch_sizes = []
+max_lens = []
 
 # n_prot = 0
 # n_total = 0
@@ -203,8 +205,9 @@ for step in range(args.max_step):
             break
     batch = pad_sequence(batch, batch_first=batch_first,
             padding_value=tokenizer.pad_token).to(torch.long)
-    logger.debug(f"start: {np.unique(batch[0], return_counts=True)}")
     batch = batch.to(device)
+    batch_sizes.append(batch.shape[1])
+    max_lens.append(batch.shape[0])
 
 
     data_end = time()
@@ -232,7 +235,7 @@ for step in range(args.max_step):
         opt_step += 1
         accum_losses.append(accum_loss)
         accum_n_tokens.append(n_accum_token)
-        lrs.append(scheduler.get_last_lr())
+        lrs.append(scheduler.get_last_lr()[0])
 
         mem = psutil.virtual_memory()
         mems.append(mem.used/(2**30))
@@ -249,6 +252,8 @@ for step in range(args.max_step):
             df = pd.DataFrame({
                 'data_time': data_times,
                 'forward_time': loss_times,
+                'batch_size': batch_sizes,
+                'max_len': max_lens
             })
             df.to_csv(f"{result_dir}/step_data/{rank}_step.csv")
             if is_main:
