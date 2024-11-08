@@ -36,6 +36,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--studyname", default='default')
 parser.add_argument("--test", action='store_true')
 
+parser.add_argument("--pretrain-name", required=True)
+parser.add_argument("--pretrain-step", type=int, required=True)
+
 ## hyperparameters
 parser.add_argument("--token-per-step", type=int, default=int(1.6e6))
 parser.add_argument("--max-step", type=int, default=1000000)
@@ -46,12 +49,7 @@ parser.add_argument("--coord-noise-std", type=float, default=50.0)
 parser.add_argument("--coord-range", type=int, default=20)
 
 ## data
-parser.add_argument("--mol-repeat", type=int, default=1)
-parser.add_argument("--mol-data", default=f"{WORKDIR}/cheminfodata/unimol/ligands/train.lmdb")
-parser.add_argument("--pocket-repeat", type=int, default=5)
-parser.add_argument("--pocket-data", default=f"{WORKDIR}/cheminfodata/unimol/pockets/train.lmdb")
-parser.add_argument("--frag-repeat", type=int, default=0)
-parser.add_argument("--frag-data")
+parser.add_argument("--data-type", required=True)
 
 ## environments
 parser.add_argument("--token-per-batch", type=int, default=25000)
@@ -66,7 +64,8 @@ args = parser.parse_args()
 
 # environment
 if args.test: args.studyname+='_test'
-result_dir = f"training/results/{timestamp()}_{args.studyname}"
+result_dir = f"training/finetune/{timestamp()}_{args.studyname}"
+pretrain_dir = f"training/results/{args.pretrain_name}"
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 100
 main_rank = 0
@@ -117,34 +116,9 @@ logger.info(f"num_workers={args.num_workers}")
 # data
 tokenizer = MoleculeProteinTokenizer(coord_min=-args.coord_range, coord_sup=args.coord_range)
 coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
-train_mol_data = MoleculeDataset(args.mol_data,
-        10, tokenizer, coord_transform, seed=args.seed)
 
-datas = []
-## mol data
-if args.mol_repeat > 0:
-    mol_data = MoleculeDataset(args.mol_data, 10, tokenizer, coord_transform, seed=args.seed)
-    mol_data = RepeatDataset(mol_data, args.mol_repeat)
-    logger.info(f"mol data: {len(mol_data)}")
-    datas.append(mol_data)
-## pocket data
-if args.pocket_repeat > 0:
-    pocket_data = LMDBDataset(args.pocket_data, key_is_indexed=True)
-    pocket_data = ProteinDataset(pocket_data, tokenizer, coord_transform)
-    pocket_data = RepeatDataset(pocket_data, args.pocket_repeat)
-    logger.info(f"pocket data: {len(pocket_data)}")
-    datas.append(pocket_data)
-## fragment data
-if args.frag_repeat > 0:
-    frag_data = PDBFragmentDataset(args.frag_data)
-    frag_data = ProteinDataset(frag_data, tokenizer, coord_transform)
-    frag_data = RepeatDataset(frag_data, args.frag_repeat)
-    logger.info(f"frag data: {len(frag_data)}")
-    datas.append(frag_data)
-if len(datas) == 1:
-    train_data = datas[0]
-else:
-    train_data = ConcatDataset(datas)
+train_data = LMDBDataset(f"preprocess/results/docking_types/{args.data_type}", key_is_indexed=True)
+train_data = DockingData()
 train_data = SliceDataset(train_data, size, rank)
 
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
@@ -158,6 +132,10 @@ model = Model(8, 768, 12, 4, 0.1, 'gelu', True,
 model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)
+
+## load state dict
+model.load_state_dict(f"{pretrain_dir}/models/{args.pretrain_step}.pth")
+
 criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=tokenizer.pad_token)
 optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
 optimizer.zero_grad()
@@ -170,8 +148,6 @@ def schedule(step):
     else:
         return 0.02
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
-
-
 
 accum_loss = 0
 opt_step = 0
