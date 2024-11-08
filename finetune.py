@@ -19,7 +19,7 @@ from torch.nn.utils.rnn import pad_sequence
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data import CoordTransform, SliceDataset, LMDBDataset, DockingDataset
+from src.data import CoordTransform, SliceDataset, LMDBDataset, CDDataset, FinetuneDataset
 from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
 from src.utils import RandomState
@@ -114,9 +114,8 @@ logger.info(f"num_workers={args.num_workers}")
 
 # data
 tokenizer = MoleculeProteinTokenizer(coord_min=-pretrain_config.coord_range, coord_sup=pretrain_config.coord_range)
-coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
-
-train_data = DockingDataset(f"{WORKDIR}/cplm/preprocess/results/docking_types/{args.data_type}.lmdb", tokenizer)
+train_data = CDDataset(f"{WORKDIR}/cplm/preprocess/results/docking_types/{args.data_type}.lmdb")
+train_data = FinetuneDataset(train_data, tokenizer)
 train_data = SliceDataset(train_data, size, rank)
 
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
@@ -194,6 +193,12 @@ for step in range(args.max_step):
     batch = batch.to(device)
     batch_sizes.append(batch.shape[1])
     max_lens.append(batch.shape[0])
+    # make weight
+    weight = torch.zeros_like(batch, dtype=torch.float)
+    smi_count = torch.cumsum(batch == tokenizer.mol_start_token, dim=0)
+    weight[smi_count >= 1] = 1
+    coord_count = torch.cumsum(batch == tokenizer.coord_start_token, dim=0)
+    weight[coord_count >= 2] = 5
 
 
     data_end = time()
@@ -201,7 +206,7 @@ for step in range(args.max_step):
 
     with torch.autocast('cuda', dtype=torch.bfloat16):
         pred = model(batch[:-1])
-        loss = criterion(pred.reshape(-1, tokenizer.voc_size), batch[1:].ravel())
+        loss = criterion(pred.reshape(-1, tokenizer.voc_size), batch[1:].ravel(), weight=weight[1:].ravel())
         loss.backward()
     accum_loss += loss.item()
     loss_end = time()

@@ -2,12 +2,12 @@ import os
 import itertools
 from collections.abc import Iterable
 import numpy as np
+from .data import get_random_rotation_matrix
 
 """
 modelsのTokenizerから, pad_token, start_token, end_tokenを除き, offsetを追加
 """
 
-import numpy as np
 
 class StringTokenizer():
     def __init__(self, vocs, offset=0):
@@ -147,7 +147,7 @@ class MoleculeProteinTokenizer:
         coord = self.detokenize_coord(coord_tokens, remove_start=False)
         return smi, coord
 
-    def tokenize_protein(self, atoms, coord) -> list[int]:
+    def tokenize_atoms(self, atoms):
         tokens = [self.prot_start_token]
         for ires, residue in enumerate(atoms):
             if residue[:2] == 'CA':
@@ -159,8 +159,8 @@ class MoleculeProteinTokenizer:
                 if residue[:len(voc)] == voc:
                     tokens.append(self.residue_offset+i)
                     break
-        return tokens + self.tokenize_coord(coord)
-    
+        return tokens
+
     def detokenize_protein(self, tokens: Iterable[int]) -> tuple[list[str], np.ndarray]:
         tokens = iter(tokens)
         if next(tokens) != self.prot_start_token:

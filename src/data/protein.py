@@ -38,13 +38,12 @@ class ProteinDataset(Dataset):
         if self.coord_ca_only:
             coords = coords[np.array(atoms) == 'CA']
 
-        tokens = self.tokenizer.tokenize_protein(atoms, coords)
+        tokens = self.tokenizer.tokenize_atoms(atoms) \
+            +self.tokenizer.tokenize_coord(coords)
         return torch.tensor(tokens, dtype=torch.long)
 
     def __len__(self):
         return len(self.net_dataset)
-
-
 
 def _process0_init(radius_mean_i, radius_std_i, max_n_atom_i, logger_i: logging.Logger):
     global parser, ppbuilder, amino_resnames, radius_mean, radius_std, max_n_atom, logger
