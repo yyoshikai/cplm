@@ -2,15 +2,13 @@
 import sys, os
 import argparse
 from time import time
-import random
 import math
 import gc
-import shutil
 import logging, yaml
 from logging.config import dictConfig
 
 import psutil
-import numpy as np
+from addict import Dict
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -45,7 +43,6 @@ parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--weight-decay", type=float, default=0.01)
 parser.add_argument("--clip_grad_norm", type=int, default=1.0)
 parser.add_argument("--coord-noise-std", type=float, default=50.0)
-parser.add_argument("--coord-range", type=int, default=20)
 
 ## data
 parser.add_argument("--data-type", required=True)
@@ -88,6 +85,9 @@ if is_main:
     with open(f"{result_dir}/config.yaml", 'w') as f:
         yaml.dump(vars(args), f)
 
+## load config
+pretrain_config = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
+
 ## seed
 rstate = RandomState(args.seed)
 if args.test:
@@ -113,14 +113,10 @@ log_step = 1 if args.test else 1000
 logger.info(f"num_workers={args.num_workers}")
 
 # data
-tokenizer = MoleculeProteinTokenizer(coord_min=-args.coord_range, coord_sup=args.coord_range)
+tokenizer = MoleculeProteinTokenizer(coord_min=-pretrain_config.coord_range, coord_sup=pretrain_config.coord_range)
 coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
 
-train_data = LMDBDataset(f"preprocess/results/docking_types/{args.data_type}", key_is_indexed=True)
-
-
-
-train_data = DockingDataset(train_data, )
+train_data = DockingDataset(f"{WORKDIR}/cplm/preprocess/results/docking_types/{args.data_type}.lmdb", tokenizer)
 train_data = SliceDataset(train_data, size, rank)
 
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
@@ -128,6 +124,7 @@ train_iter = train_loader.__iter__()
 next_item = None
 n_accum_token = 0
 
+logger.info(f"special tokens: {tokenizer.added_tok2voc}")
 # model
 model = Model(8, 768, 12, 4, 0.1, 'gelu', True, 
         tokenizer.voc_size, tokenizer.pad_token)
@@ -136,7 +133,7 @@ model.to(device)
 model = DistributedDataParallel(model)
 
 ## load state dict
-model.load_state_dict(f"{pretrain_dir}/models/{args.pretrain_step}.pth")
+model.load_state_dict(torch.load(f"{pretrain_dir}/models/{args.pretrain_step}.pth", weights_only=True))
 
 criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=tokenizer.pad_token)
 optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
@@ -186,7 +183,12 @@ for step in range(args.max_step):
             n_accum_token += len(next_item)
             next_item = None
         else:
-            break
+            if len(batch) == 0:
+                logger.warning(f"Item was too large even for single item per batch({len(next_item)}), and was skipped.")
+                next_item = None
+                continue
+            else:
+                break
     batch = pad_sequence(batch, batch_first=batch_first,
             padding_value=tokenizer.pad_token).to(torch.long)
     batch = batch.to(device)

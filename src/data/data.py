@@ -133,7 +133,8 @@ def get_random_rotation_matrix(rng: np.random.Generator):
     axis2 = axis2 / np.linalg.norm(axis2)
     return np.array([axis0, axis1, axis2])
 
-class MoleculeDataset(Dataset):
+class UniMolLigandDataset(Dataset):
+    logger = getLogger(f'{__module__}.{__qualname__}')
     def __init__(self, lmdb_path, n_conformer, tokenizer: MoleculeProteinTokenizer, 
                 coord_transform: CoordTransform, seed=0, **kwargs):
         self.net_dataset = LMDBDataset(lmdb_path, key_is_indexed=True, **kwargs)
@@ -141,17 +142,33 @@ class MoleculeDataset(Dataset):
         self.n_conformer = n_conformer
         self.coord_transform = coord_transform
         self.rng = np.random.default_rng(seed)
-    
+
+    @lru_cache(maxsize=1)    
     def __getitem__(self, idx):
+        self.logger.debug(f"__getitem__({idx})")
         mol_idx, conformer_idx = divmod(idx, self.n_conformer)
         data = self.net_dataset[mol_idx]
-        smi = data['smi']
-        coord = data['coordinates'][conformer_idx]
-        coord = self.coord_transform(coord)
-        tokens = self.tokenizer.tokenize_smi(smi)+self.tokenizer.tokenize_coord(coord)
-        return torch.tensor(tokens, dtype=torch.long)
+        return {'smi': data['smi'], 'coordinate': data['coordinates'][conformer_idx]}
     
     def __len__(self):
         return len(self.net_dataset) * self.n_conformer
 
+class MoleculeDataset(Dataset):
+    def __init__(self, net_dataset: Dataset, 
+            coord_transform: CoordTransform, 
+            tokenizer: MoleculeProteinTokenizer):
+        self.net_dataset = net_dataset
+        self.coord_transform = coord_transform
+        self.tokenizer = tokenizer
 
+    def __geittem__(self, idx):
+        data = self.net_dataset[idx]
+        smi = data['smi']
+        coord = data['coordinate']
+        coord = self.coord_transform(coord)
+        tokens = self.tokenizer.tokenize_smi(smi)+self.tokenizer.tokenize_coord(coord)
+        return torch.tensor(tokens, dtype=torch.long)
+        
+
+    def __len__(self):
+        return len(self.net_dataset)

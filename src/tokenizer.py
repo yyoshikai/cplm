@@ -85,9 +85,24 @@ class MoleculeProteinTokenizer:
         self.residue_offset = smi_offset + self.smi_tokenizer.voc_size
         self.residue_vocs = ['CA', 'C', 'N', 'O', 'S']
         self.residue_voc_size = len(self.residue_vocs)
-
+        
+        self.added_offset = self.residue_offset + self.residue_voc_size
+        self.added_tok2voc = []
+        self.added_voc2tok = {}
         pass
-    
+
+    def add_voc(self, voc):
+        if voc in self.added_tok2voc: return
+        self.added_tok2voc.append(voc)
+        self.added_voc2tok[voc] = self.added_offset+len(self.added_tok2voc)-1
+
+    def tokenize_float(self, value: float) -> list[int]:
+        value = np.clip(value, self.coord_min, self.coord_sup-0.001)-self.coord_min
+        coord_i = int(value)+self.coord_i_offset
+        coord_f = int((value%1)*1000)+self.coord_f_offset
+        return [coord_i, coord_f]
+
+
     def tokenize_coord(self, coord: np.ndarray) -> list[int]:
         coord = coord.ravel()
         coord = np.clip(coord, self.coord_min, self.coord_sup-0.001)-self.coord_min
@@ -132,12 +147,10 @@ class MoleculeProteinTokenizer:
         coord = self.detokenize_coord(coord_tokens, remove_start=False)
         return smi, coord
 
-    def tokenize_protein(self, residues, coord) -> list[int]:
+    def tokenize_protein(self, atoms, coord) -> list[int]:
         tokens = [self.prot_start_token]
-        ca_idxs = []
-        for ires, residue in enumerate(residues):
+        for ires, residue in enumerate(atoms):
             if residue[:2] == 'CA':
-                ca_idxs.append(ires)
                 tokens.append(self.residue_offset)
                 continue
 
@@ -146,7 +159,6 @@ class MoleculeProteinTokenizer:
                 if residue[:len(voc)] == voc:
                     tokens.append(self.residue_offset+i)
                     break
-        coord = coord[ca_idxs]
         return tokens + self.tokenize_coord(coord)
     
     def detokenize_protein(self, tokens: Iterable[int]) -> tuple[list[str], np.ndarray]:
@@ -156,17 +168,17 @@ class MoleculeProteinTokenizer:
         prot_tokens = list(itertools.takewhile(lambda x: x != self.coord_start_token, tokens))
         coord_tokens = list(tokens)
         
-        residues = []
+        atoms = []
         for token in prot_tokens:
             if 0 <= token-self.residue_offset < self.residue_voc_size:
-                residues.append(self.residue_vocs[token-self.residue_offset])
+                atoms.append(self.residue_vocs[token-self.residue_offset])
             else:
-                residues.append('[UNK]')
+                atoms.append('[UNK]')
 
         coord = self.detokenize_coord(coord_tokens, remove_start=False)
         
-        return residues, coord
+        return atoms, coord
 
     @property
     def voc_size(self):
-        return self.residue_offset+self.residue_voc_size
+        return self.added_offset+len(self.added_tok2voc)

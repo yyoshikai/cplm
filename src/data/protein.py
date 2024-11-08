@@ -23,16 +23,20 @@ except ModuleNotFoundError:
 from tools.logger import get_logger, add_file_handler
 
 class ProteinDataset(Dataset):
-    def __init__(self, net_dataset, tokenizer: MoleculeProteinTokenizer, coord_transform: CoordTransform):
+    def __init__(self, net_dataset, tokenizer: MoleculeProteinTokenizer, 
+            coord_transform: CoordTransform, coord_ca_only: bool=True):
         self.net_dataset = net_dataset
         self.tokenizer = tokenizer
         self.coord_transform = coord_transform
+        self.coord_ca_only = coord_ca_only
 
     def __getitem__(self, idx):
         data = self.net_dataset[idx]
         atoms = data['atoms']
         coords = data['coordinates'][0]
         coords = self.coord_transform(coords)
+        if self.coord_ca_only:
+            coords = coords[np.array(atoms) == 'CA']
 
         tokens = self.tokenizer.tokenize_protein(atoms, coords)
         return torch.tensor(tokens, dtype=torch.long)

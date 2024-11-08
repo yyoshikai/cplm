@@ -154,6 +154,15 @@ class TransformerEncoder(nn.Module):
             output = self.norm(output)
 
         return output
+    
+def expand_param(param: torch.Tensor, dim: int, size: int):
+    mean = torch.mean(param, dim=dim, keepdim=True)
+    std = torch.std(param, dim=dim, keepdim=True)
+    added_shape = list(param.shape)
+    added_shape[dim] = size - added_shape[dim]
+    added_param = torch.randn(*added_shape, device=param.device, dtype=param.dtype)*std+mean
+    param = torch.cat([param, added_param], dim=dim)
+    return param
 
 class Model(TransformerEncoder):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
@@ -174,6 +183,19 @@ class Model(TransformerEncoder):
         self.predictor = nn.Linear(d_model, num_embeddings)
         self.head_dim = d_model // nhead
 
+        def modify_embedding_size(module, state_dict, prefix, local_metadata, 
+                strict, missing_keys, unexpected_keys, error_msgs) -> None:
+            state_emb_weight = state_dict[prefix+'embedding.weight']
+            state_n_emb = state_emb_weight.shape[0]
+            if state_n_emb < num_embeddings:
+                self.logger.warning(f"num_embedding of state_dict({state_n_emb}) is smaller "
+                    f"than current model({num_embeddings}). state_dict will be expanded.")
+                state_dict[prefix+'embedding.weight'] = expand_param(state_emb_weight, 0, num_embeddings)
+                state_dict[prefix+'predictor.weight'] = expand_param(state_dict[prefix+'predictor.weight'], 0, num_embeddings)
+                state_dict[prefix+'predictor.bias'] = expand_param(state_dict[prefix+'predictor.bias'], 0, num_embeddings)
+
+        self._register_load_state_dict_pre_hook(modify_embedding_size, with_module=True)
+
     def forward(self, src: torch.Tensor):
         x = self.embedding(src)
         length = x.shape[0]
@@ -190,3 +212,4 @@ class Model(TransformerEncoder):
 
         x = super().forward(x, mask, sin, cos)
         return self.predictor(x)
+    

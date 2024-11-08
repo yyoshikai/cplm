@@ -21,7 +21,7 @@ from torch.nn.utils.rnn import pad_sequence
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data import MoleculeDataset, CoordTransform, ProteinDataset, RepeatDataset, SliceDataset, LMDBDataset
+from src.data import UniMolLigandDataset, CoordTransform, MoleculeDataset, ProteinDataset, RepeatDataset, SliceDataset, LMDBDataset
 from src.data.protein import PDBFragmentDataset
 from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
@@ -121,6 +121,9 @@ coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
 datas = []
 ## mol data
 if args.mol_repeat > 0:
+    mol_data = LMDBDataset(args.mol_data, key_is_indexed=True)
+    mol_data = UniMolLigandDataset(args.mol_data, )
+
     mol_data = MoleculeDataset(args.mol_data, 10, tokenizer, coord_transform, seed=args.seed)
     mol_data = RepeatDataset(mol_data, args.mol_repeat)
     logger.info(f"mol data: {len(mol_data)}")
@@ -204,7 +207,12 @@ for step in range(args.max_step):
             n_accum_token += len(next_item)
             next_item = None
         else:
-            break
+            if len(batch) == 0:
+                logger.warning(f"Item was too large even for single item per batch({len(next_item)}), and not used.")
+                next_item = None
+                continue
+            else:
+                break
     batch = pad_sequence(batch, batch_first=batch_first,
             padding_value=tokenizer.pad_token).to(torch.long)
     batch = batch.to(device)
