@@ -105,7 +105,7 @@ if args.sdp_kernel is not None:
     torch.backends.cuda.enable_mem_efficient_sdp(args.sdp_kernel == 'EFFICIENT')
 
 ## logger
-fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{levelname}] {message}"
+fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
 logger = logging.getLogger()
 add_stream_handler(logger, logging.DEBUG if args.test else logging.INFO, fmt=fmt)
 add_file_handler(logger, f"{result_dir}/log.log", logging.DEBUG, fmt=fmt, mode='w')
