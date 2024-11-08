@@ -9,7 +9,11 @@ from ..lmdb import new_lmdb
 class DockingDataset(Dataset):
     logger = logging.getLogger(__qualname__)
     def __init__(self, net_dataset):
-        pass
+        self.net_dataset = net_dataset
+
+    def __len__(self):
+        return len(self.net_dataset)
+    
 
     @classmethod
     def process_types(cls, input, output):

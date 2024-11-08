@@ -1,4 +1,5 @@
 import pickle
+from functools import lru_cache
 from logging import getLogger
 import math
 
@@ -20,8 +21,10 @@ class LMDBDataset(Dataset):
         
         self._lazy_env = self._lazy_txn = None
         self._lazy_keys = None
-    
+
+    @lru_cache(maxsize=1)
     def __getitem__(self, idx):
+        self.logger.debug(f"__getitem__({idx})")
         return pickle.loads(self.txn().get(self.key(idx)))
 
     def env(self):
@@ -54,24 +57,6 @@ class LMDBDataset(Dataset):
     def __len__(self):
         return self.env().stat()['entries']
 
-class CoordTransform:
-    def __init__(self, seed:int=0, normalize_coord=False, random_rotate=False, coord_noise_std=0.0):
-        self.rng = np.random.default_rng(seed)
-        self.normalize_coord = normalize_coord
-        self.random_rotate = random_rotate
-        self.coord_noise_std = coord_noise_std
-    
-    def __call__(self, coords: np.ndarray) -> np.ndarray:
-        if self.normalize_coord:
-            coords = coords - np.mean(coords, axis=0, keepdims=True)
-        if self.random_rotate:
-            matrix = get_random_rotation_matrix(self.rng)
-            coords = np.matmul(coords, matrix)
-        if self.coord_noise_std > 0:
-            noise = self.rng.normal(size=3, scale=self.coord_noise_std)   
-            coords += noise
-        return coords
-
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):
         self.net_dataset = net_dataset
@@ -99,6 +84,33 @@ class SliceDataset(Dataset):
 
     def __len__(self):
         return self.size
+
+class KeyDataset(Dataset):
+    def __init__(self, dataset: Dataset, key):
+        self.dataset = dataset
+        self.key = key
+    def __getitem__(self, idx):
+        return self.dataset[idx][self.key]
+    def __len__(self):
+        return len(self.dataset)
+
+class CoordTransform:
+    def __init__(self, seed:int=0, normalize_coord=False, random_rotate=False, coord_noise_std=0.0):
+        self.rng = np.random.default_rng(seed)
+        self.normalize_coord = normalize_coord
+        self.random_rotate = random_rotate
+        self.coord_noise_std = coord_noise_std
+    
+    def __call__(self, coords: np.ndarray) -> np.ndarray:
+        if self.normalize_coord:
+            coords = coords - np.mean(coords, axis=0, keepdims=True)
+        if self.random_rotate:
+            matrix = get_random_rotation_matrix(self.rng)
+            coords = np.matmul(coords, matrix)
+        if self.coord_noise_std > 0:
+            noise = self.rng.normal(size=3, scale=self.coord_noise_std)   
+            coords += noise
+        return coords
 
 def get_random_rotation_matrix(rng: np.random.Generator):
     # get axes

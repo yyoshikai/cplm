@@ -117,8 +117,6 @@ logger.info(f"num_workers={args.num_workers}")
 # data
 tokenizer = MoleculeProteinTokenizer(coord_min=-args.coord_range, coord_sup=args.coord_range)
 coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
-train_mol_data = MoleculeDataset(args.mol_data,
-        10, tokenizer, coord_transform, seed=args.seed)
 
 datas = []
 ## mol data
@@ -141,10 +139,8 @@ if args.frag_repeat > 0:
     frag_data = RepeatDataset(frag_data, args.frag_repeat)
     logger.info(f"frag data: {len(frag_data)}")
     datas.append(frag_data)
-if len(datas) == 1:
-    train_data = datas[0]
-else:
-    train_data = ConcatDataset(datas)
+
+train_data = ConcatDataset(datas)
 train_data = SliceDataset(train_data, size, rank)
 
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
