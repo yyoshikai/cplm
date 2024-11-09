@@ -22,7 +22,7 @@ except ModuleNotFoundError:
     FastMMCIFParser = PPBuilder = None
 from tools.logger import get_logger, add_file_handler
 
-# net_datasetが {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
+# net_datasetは {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class ProteinDataset(Dataset):
     def __init__(self, net_dataset, tokenizer: MoleculeProteinTokenizer, 
