@@ -48,9 +48,9 @@ parser.add_argument("--coord-range", type=int, default=20)
 ## data
 parser.add_argument("--mol-repeat", type=int, default=1)
 parser.add_argument("--mol-data", default=f"{WORKDIR}/cheminfodata/unimol/ligands/train.lmdb")
-parser.add_argument("--pocket-repeat", type=int, default=5)
+parser.add_argument("--pocket-repeat", type=int, default=1)
 parser.add_argument("--pocket-data", default=f"{WORKDIR}/cheminfodata/unimol/pockets/train.lmdb")
-parser.add_argument("--frag-repeat", type=int, default=0)
+parser.add_argument("--frag-repeat", type=int, default=1)
 parser.add_argument("--frag-data")
 
 ## environments

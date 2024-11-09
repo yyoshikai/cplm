@@ -58,6 +58,7 @@ parser.add_argument("--gc", action='store_true')
 
 args = parser.parse_args()
 
+
 # environment
 if args.test: args.studyname+='_test'
 result_dir = f"training/finetune/{timestamp()}_{args.studyname}"

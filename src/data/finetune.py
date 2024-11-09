@@ -11,6 +11,57 @@ from ..tokenizer import MoleculeProteinTokenizer
 from ..utils import load_gninatypes
 from rdkit import Chem
 
+def randomize_smiles(smi, rstate: np.random.RandomState):
+    mol = Chem.MolFromSmiles(smi)
+    nums = np.arange(mol.GetNumAtoms())
+    rstate.shuffle(nums)
+    mol = Chem.RenumberAtoms(mol, nums.tolist())
+    ran = Chem.MolToSmiles(mol, canonical=False, isomericSmiles=True)
+    return ran
+
+# dataset: {'lig_smi': str, 'lig_coord': np.ndarray, 'rec_atoms': list[str],
+#       'rec_coord': np.ndarray, 'score': float}
+class FinetuneDataset(Dataset):
+    def __init__(self, dataset:Dataset, 
+            tokenizer: MoleculeProteinTokenizer, 
+            seed:int=0):
+        self.dataset = dataset
+        tokenizer.add_voc('end')
+        tokenizer.add_voc('score')
+        self.tokenizer = tokenizer
+        self.rstate = np.random.RandomState(seed)
+        
+    def __getitem__(self, idx):
+        data = self.dataset[idx]
+
+        # randomize SMILES
+        lig_smi_ran = randomize_smiles(data['lig_smi'])
+
+        # random rotations
+        lig_coord = data['lig_coord']
+        rec_coord = data['rec_coord']
+        rotation_matrix = get_random_rotation_matrix(self.rstate)
+        lig_coord = np.matmul(lig_coord, rotation_matrix)
+        rec_coord = np.matmul(rec_coord, rotation_matrix)
+
+        # adjust ligand to O
+        mean = np.mean(lig_coord, axis=0)
+        lig_coord -= mean
+        rec_coord -= mean
+
+        rec_atoms = self.tokenizer.tokenize_atoms(data['rec_atoms'])
+        rec_coord = self.tokenizer.tokenize_coord(rec_coord)
+        score = [self.tokenizer.added_voc2tok['score']]+\
+            self.tokenizer.tokenize_float(data['score'])
+        lig_smi = self.tokenizer.tokenize_smi(lig_smi_ran)
+        lig_coord = self.tokenizer.tokenize_coord(lig_coord)
+
+        return rec_atoms+rec_coord+score+lig_smi+lig_coord
+
+    def __len__(self):
+        return len(self.net_dataset)
+
+
 
 cddir = "/workspace/cheminfodata/crossdocked/CrossDocked2020"
 class CDDataset(Dataset):
@@ -26,7 +77,7 @@ class CDDataset(Dataset):
             C: 必ず入る
             heavy: 必ず入る
         座標:
-            
+
 
         """
         self.net_dataset = LMDBDataset(lmdb_path, True)
@@ -112,53 +163,3 @@ class CDDataset(Dataset):
                 idx+=1
         txn.commit()
         env.close()
-
-def randomize_smiles(smi, rstate: np.random.RandomState):
-    mol = Chem.MolFromSmiles(smi)
-    nums = np.arange(mol.GetNumAtoms())
-    rstate.shuffle(nums)
-    mol = Chem.RenumberAtoms(mol, nums.tolist())
-    ran = Chem.MolToSmiles(mol, canonical=False, isomericSmiles=True)
-    return ran
-
-class FinetuneDataset(Dataset):
-    def __init__(self, net_dataset:Dataset, 
-            tokenizer: MoleculeProteinTokenizer, 
-            seed:int=0):
-        self.net_dataset = net_dataset
-        tokenizer.add_voc('end')
-        tokenizer.add_voc('score')
-        self.tokenizer = tokenizer
-        self.rstate = np.random.RandomState(seed)
-        
-
-    def __getitem__(self, idx):
-        data = self.net_dataset[idx]
-
-        # randomize SMILES
-        lig_smi_ran = randomize_smiles(data['lig_smi'])
-
-        # random rotations
-        lig_coord = data['lig_coord']
-        rec_coord = data['rec_coord']
-        rotation_matrix = get_random_rotation_matrix(self.rstate)
-        lig_coord = np.matmul(lig_coord, rotation_matrix)
-        rec_coord = np.matmul(rec_coord, rotation_matrix)
-
-        # adjust ligand to O
-        mean = np.mean(lig_coord, axis=0)
-        lig_coord -= mean
-        rec_coord -= mean
-
-        rec_atoms = self.tokenizer.tokenize_atoms(data['rec_atoms'])
-        rec_coord = self.tokenizer.tokenize_coord(rec_coord)
-        score = [self.tokenizer.added_voc2tok['score']]+\
-            self.tokenizer.tokenize_float(data['score'])
-        lig_smi = self.tokenizer.tokenize_smi(lig_smi_ran)
-        lig_coord = self.tokenizer.tokenize_coord(lig_coord)
-
-        return rec_atoms+rec_coord+score+lig_smi+lig_coord
-
-    def __len__(self):
-        return len(self.net_dataset)
-

@@ -2,12 +2,10 @@ import os
 import itertools
 from collections.abc import Iterable
 import numpy as np
-from .data import get_random_rotation_matrix
 
 """
 modelsのTokenizerから, pad_token, start_token, end_tokenを除き, offsetを追加
 """
-
 
 class StringTokenizer():
     def __init__(self, vocs, offset=0):
