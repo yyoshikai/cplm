@@ -6,23 +6,24 @@ from torch.utils.data import Dataset
 from rdkit import Chem
 from .data import LMDBDataset, CoordTransform
 from ..tokenizer import MoleculeProteinTokenizer
+from .tokenizer import FloatTokenizer, StringTokenizer, TokenEncoder
 
 # Pretrain時, 分子の処理用のデータセット
 class MoleculeDataset(Dataset):
-    def __init__(self, dataset: Dataset, 
-            coord_transform: CoordTransform, 
-            tokenizer: MoleculeProteinTokenizer):
+    def __init__(self, dataset: Dataset, coord_transform: CoordTransform, 
+            smiles_tokenizer: StringTokenizer, coord_tokenizer: FloatTokenizer
+        ):
         self.dataset = dataset
         self.coord_transform = coord_transform
-        self.tokenizer = tokenizer
+        self.smiles_tokenizer = smiles_tokenizer
+        self.coord_tokenizer = coord_tokenizer
 
     def __geittem__(self, idx):
         data = self.dataset[idx]
         smi = data['smi']
         coord = data['coordinate']
         coord = self.coord_transform(coord)
-        tokens = self.tokenizer.tokenize_smi(smi)+self.tokenizer.tokenize_coord(coord)
-        return torch.tensor(tokens, dtype=torch.long)
+        return self.smiles_tokenizer.tokenize(smi)+self.coord_tokenizer.tokenize_array(coord.ravel())
         
     def __len__(self):
         return len(self.dataset)

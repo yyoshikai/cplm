@@ -23,7 +23,6 @@ sys.path.append(WORKDIR)
 
 from src.data import *
 from src.data.protein import PDBFragmentDataset
-from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
 from src.utils import RandomState
 from tools.path import timestamp, cleardir, make_result_dir
@@ -115,12 +114,14 @@ log_step = 1 if args.test else 1000
 logger.info(f"num_workers={args.num_workers}")
 
 # data
-tokenizer = MoleculeProteinTokenizer(coord_min=-args.coord_range, coord_sup=args.coord_range)
 coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
 
 datas = []
+tokens = set()
 ## mol data
 if args.mol_repeat > 0:
+    smiles_vocs = open("src/smil")
+    smiles_tokenizer = StringTokenizer()
     mol_data = UniMolLigandDataset(args.mol_data, key_is_indexed=True)
     mol_data = MoleculeDataset(args.mol_data, 10, tokenizer, coord_transform, seed=args.seed)
     mol_data = RepeatDataset(mol_data, args.mol_repeat)

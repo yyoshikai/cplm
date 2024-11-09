@@ -14,6 +14,7 @@ from tqdm import tqdm as _tqdm
 from time import time
 
 from ..tokenizer import MoleculeProteinTokenizer 
+from .tokenizer import ProteinAtomTokenizer, FloatTokenizer
 from ..lmdb import new_lmdb, load_lmdb
 from .data import CoordTransform, LMDBDataset
 try:
@@ -25,7 +26,8 @@ from tools.logger import get_logger, add_file_handler
 # net_datasetは {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class ProteinDataset(Dataset):
-    def __init__(self, net_dataset, tokenizer: MoleculeProteinTokenizer, 
+    def __init__(self, net_dataset: Dataset, atom_tokenizer: ProteinAtomTokenizer, 
+            coord_tokenizer: FloatTokenizer,
             coord_transform: CoordTransform, 
             atom_heavy: bool = True, atom_h: bool = False,
             coord_heavy: bool=False, coord_h: bool = False):
@@ -34,7 +36,8 @@ class ProteinDataset(Dataset):
         coord_heavy: ca, heavy, h のうちheavyのcoordを抽出するかどうか。
         """
         self.net_dataset = net_dataset
-        self.tokenizer = tokenizer
+        self.atom_tokenizer = atom_tokenizer
+        self.coord_tokenizer = coord_tokenizer
         self.coord_transform = coord_transform
         self.atom_heavy = atom_heavy
         self.atom_h = atom_h
@@ -62,9 +65,9 @@ class ProteinDataset(Dataset):
         coords = coords[coord_mask]
 
         coords = self.coord_transform(coords)
-        tokens = self.tokenizer.tokenize_atoms(atoms) \
-            +self.tokenizer.tokenize_coord(coords)
-        return torch.tensor(tokens, dtype=torch.long)
+        tokens = self.atom_tokenizer.tokenize(atoms) \
+            +self.coord_tokenizer.tokenize_array(coords.ravel())
+        return tokens
 
     def __len__(self):
         return len(self.net_dataset)
