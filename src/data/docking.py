@@ -8,14 +8,27 @@ from openbabel import pybel
 from ..lmdb import new_lmdb
 from .data import LMDBDataset, get_random_rotation_matrix
 from ..tokenizer import MoleculeProteinTokenizer
+from ..utils import load_gninatypes
 from rdkit import Chem
 
 
-# とりあえずやってみる。
 cddir = "/workspace/cheminfodata/crossdocked/CrossDocked2020"
 class CDDataset(Dataset):
     logger = logging.getLogger(__qualname__)
-    def __init__(self, lmdb_path):
+    def __init__(self, lmdb_path, 
+            atom_h,
+            coord_ca, coord_heavy, coord_h):
+        """
+        CrossDockedの何らかのデータから取り出す。
+        タンパク質は全てのタンパク質にする。
+
+        原子:
+            C: 必ず入る
+            heavy: 必ず入る
+        座標:
+            
+
+        """
         self.net_dataset = LMDBDataset(lmdb_path, True)
 
     @lru_cache(maxsize=1)
@@ -28,12 +41,9 @@ class CDDataset(Dataset):
         lig_smi = lig_mol.write().split('\t')[0]
 
         # ligand coordinate
-        struct_fmt = 'fffi'
-        struct_len = struct.calcsize(struct_fmt)
-        struct_unpack = struct.Struct(struct_fmt).unpack_from
-        with open(f"{cddir}/{pocket}/{rec}_rec_{lig}_lig_{lig_cond}.gninatypes",'rb') as tfile:
-            lig_coord = [struct_unpack(chunk) for chunk in iter(partial(tfile.read, struct_len), b'')]
+        lig_coord = load_gninatypes(f"{cddir}/{pocket}/{rec}_rec_{lig}_lig_{lig_cond}.gninatypes")
         lig_coord = np.array(lig_coord)[:, :3]
+        
 
         # ポケットの原子と座標
         rec_atoms = []

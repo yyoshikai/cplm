@@ -1,4 +1,5 @@
-import random
+import random, struct
+from functools import partial
 import numpy as np
 import torch
 
@@ -23,3 +24,10 @@ class RandomState:
         np.random.set_state(state_dict['numpy'])
         torch.set_rng_state(state_dict['torch'])
         torch.cuda.set_rng_state_all(state_dict['cuda'])
+
+def load_gninatypes(path, struct_fmt='fffi'):
+    struct_len = struct.calcsize(struct_fmt)
+    struct_unpack = struct.Struct(struct_fmt).unpack_from
+    with open(path,'rb') as tfile:
+        data = [struct_unpack(chunk) for chunk in iter(partial(tfile.read, struct_len), b'')]
+    return data

@@ -200,7 +200,6 @@ for step in range(args.max_step):
     coord_count = torch.cumsum(batch == tokenizer.coord_start_token, dim=0)
     weight[coord_count >= 2] = 5
 
-
     data_end = time()
     data_times.append(data_end-data_start)
 

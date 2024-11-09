@@ -19,7 +19,7 @@ args = parser.parse_args()
 
 
 args = vars(args)
-args['out_path'] = f"./preprocess/results/{args.pop('processname')+'.lmdb'}"
+args['out_path'] = f"./preprocess/results/pdb_fragment/{args.pop('processname')+'.lmdb'}"
 logger = getLogger()
 add_stream_handler(logger)
 PDBFragmentDataset.process1(**args)

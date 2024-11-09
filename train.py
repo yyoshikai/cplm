@@ -21,7 +21,7 @@ from torch.nn.utils.rnn import pad_sequence
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data import UniMolLigandDataset, CoordTransform, MoleculeDataset, ProteinDataset, RepeatDataset, SliceDataset, LMDBDataset
+from src.data import *
 from src.data.protein import PDBFragmentDataset
 from src.tokenizer import MoleculeProteinTokenizer
 from src.model import Model
@@ -121,16 +121,14 @@ coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
 datas = []
 ## mol data
 if args.mol_repeat > 0:
-    mol_data = LMDBDataset(args.mol_data, key_is_indexed=True)
-    mol_data = UniMolLigandDataset(args.mol_data, )
-
+    mol_data = UniMolLigandDataset(args.mol_data, key_is_indexed=True)
     mol_data = MoleculeDataset(args.mol_data, 10, tokenizer, coord_transform, seed=args.seed)
     mol_data = RepeatDataset(mol_data, args.mol_repeat)
     logger.info(f"mol data: {len(mol_data)}")
     datas.append(mol_data)
 ## pocket data
 if args.pocket_repeat > 0:
-    pocket_data = LMDBDataset(args.pocket_data, key_is_indexed=True)
+    pocket_data = UniMolPocketDataset(args.pocket_data, key_is_indexed=True)
     pocket_data = ProteinDataset(pocket_data, tokenizer, coord_transform)
     pocket_data = RepeatDataset(pocket_data, args.pocket_repeat)
     logger.info(f"pocket data: {len(pocket_data)}")
@@ -142,10 +140,9 @@ if args.frag_repeat > 0:
     frag_data = RepeatDataset(frag_data, args.frag_repeat)
     logger.info(f"frag data: {len(frag_data)}")
     datas.append(frag_data)
-
 train_data = ConcatDataset(datas)
-train_data = SliceDataset(train_data, size, rank)
 
+train_data = SliceDataset(train_data, size, rank)
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
 train_iter = train_loader.__iter__()
 next_item = None

@@ -22,28 +22,64 @@ except ModuleNotFoundError:
     FastMMCIFParser = PPBuilder = None
 from tools.logger import get_logger, add_file_handler
 
+# net_datasetが {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
+# 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class ProteinDataset(Dataset):
     def __init__(self, net_dataset, tokenizer: MoleculeProteinTokenizer, 
-            coord_transform: CoordTransform, coord_ca_only: bool=True):
+            coord_transform: CoordTransform, 
+            atom_heavy: bool = True, atom_h: bool = False,
+            coord_heavy: bool=False, coord_h: bool = False):
+        """
+        Pretrain用のポケットデータを生成する。
+        coord_heavy: ca, heavy, h のうちheavyのcoordを抽出するかどうか。
+        """
         self.net_dataset = net_dataset
         self.tokenizer = tokenizer
         self.coord_transform = coord_transform
-        self.coord_ca_only = coord_ca_only
+        self.atom_heavy = atom_heavy
+        self.atom_h = atom_h
+        self.coord_heavy = coord_heavy
+        self.coord_h = coord_h
 
     def __getitem__(self, idx):
         data = self.net_dataset[idx]
-        atoms = data['atoms']
-        coords = data['coordinates'][0]
-        coords = self.coord_transform(coords)
-        if self.coord_ca_only:
-            coords = coords[np.array(atoms) == 'CA']
+        atoms = np.array(data['atoms'])
+        coords = data['coordinate']
+        assert len(atoms) == len(coords)
 
+        # calc mask
+        is_ca = atoms == 'CA'
+        is_h = atoms == 'H'
+        is_heavy = (~is_ca)&(~is_h)
+
+        atom_mask = is_ca.copy()
+        if self.atom_heavy: atom_mask &= is_heavy
+        if self.atom_h: atom_mask &= is_h
+        atoms = atoms[atom_mask]
+        coord_mask = is_ca.copy()
+        if self.coord_heavy: coord_mask &= is_heavy
+        if self.coord_h: coord_mask &= is_h
+        coords = coords[coord_mask]
+
+        coords = self.coord_transform(coords)
         tokens = self.tokenizer.tokenize_atoms(atoms) \
             +self.tokenizer.tokenize_coord(coords)
         return torch.tensor(tokens, dtype=torch.long)
 
     def __len__(self):
         return len(self.net_dataset)
+
+class UniMolPocketDataset(Dataset):
+    def __init__(self, lmdb_path, **kwargs):
+        self.dataset = LMDBDataset(lmdb_path, **kwargs)
+    
+    def __getitem__(self, idx):
+        data = self.dataset[idx]
+        data['coordinate'] = data.pop('coordinates')[0]
+        return data
+
+    def __len__(self):
+        return len(self.dataset)
 
 def _process0_init(radius_mean_i, radius_std_i, max_n_atom_i, logger_i: logging.Logger):
     global parser, ppbuilder, amino_resnames, radius_mean, radius_std, max_n_atom, logger
@@ -141,7 +177,6 @@ def _process0_in(path):
 def process0_get_name(path: str) -> str:
     return os.path.basename(path).split('.')[0]
 
-
 class PDBFragmentDataset(Dataset):
     logger = logging.getLogger(__qualname__)
     def __init__(self, path):
@@ -175,7 +210,7 @@ class PDBFragmentDataset(Dataset):
         atoms = elements
         coords = prot['coords'][sub_idxs]
 
-        return {'atoms': atoms, 'coordinates': [coords]}
+        return {'atoms': atoms, 'coordinate': coords}
 
     @classmethod
     def process0(cls, root_dir: str, out_path: str,
