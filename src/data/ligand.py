@@ -1,5 +1,6 @@
 from logging import getLogger
 from functools import lru_cache
+from time import time
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -7,9 +8,11 @@ from rdkit import Chem
 from .data import LMDBDataset, CoordTransform
 from ..tokenizer import MoleculeProteinTokenizer
 from .tokenizer import FloatTokenizer, StringTokenizer, TokenEncoder
+from ..utils import logtime
 
 # Pretrain時, 分子の処理用のデータセット
 class MoleculeDataset(Dataset):
+    logger = getLogger(f'{__module__}.{__qualname__}')
     def __init__(self, dataset: Dataset, coord_transform: CoordTransform, 
             smiles_tokenizer: StringTokenizer, coord_tokenizer: FloatTokenizer
         ):
@@ -20,13 +23,17 @@ class MoleculeDataset(Dataset):
 
     def __geittem__(self, idx):
         data = self.dataset[idx]
-        smi = data['smi']
-        coord = data['coordinate']
-        coord = self.coord_transform(coord)
-        return self.smiles_tokenizer.tokenize(smi)+self.coord_tokenizer.tokenize_array(coord.ravel())
-        
+        with logtime(self.logger, f"[{idx}]"):
+            smi = data['smi']
+            coord = data['coordinate']
+            coord = self.coord_transform(coord)
+            return ['[LIGAND]']+self.smiles_tokenizer.tokenize(smi)+['[XYZ]']+self.coord_tokenizer.tokenize_array(coord.ravel())+['END']
+
     def __len__(self):
         return len(self.dataset)
+
+    def vocs(self):
+        return self.smiles_tokenizer.vocs()|self.coord_tokenizer.vocs()|{'[LIGAND]', '[XYZ]', '[END]'}
 
 class UniMolLigandDataset(Dataset):
     logger = getLogger(f'{__module__}.{__qualname__}')

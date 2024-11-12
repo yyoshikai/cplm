@@ -12,6 +12,7 @@ from torch.nn.modules.transformer import _get_clones, _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
 from torch.nn.attention import SDPBackend
+from .data.tokenizer import TokenEncoder
 def multi_head_attention_forward(
     query: Tensor,
     num_heads: int,
@@ -167,7 +168,7 @@ def expand_param(param: torch.Tensor, dim: int, size: int):
 class Model(TransformerEncoder):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, norm: bool, 
-                num_embeddings, padding_idx, ):
+                vocs: list, padding_idx: int):
         layer = TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model*d_ff_factor,
             dropout=dropout, activation=activation,
@@ -177,24 +178,39 @@ class Model(TransformerEncoder):
             norm = nn.LayerNorm(d_model ,elementwise_affine=False)
         else:
             norm = None
-
+        num_embeddings = len(vocs)
         super().__init__(layer, num_layers=num_layers, norm=norm)
         self.embedding = nn.Embedding(num_embeddings, d_model, padding_idx)
         self.predictor = nn.Linear(d_model, num_embeddings)
         self.head_dim = d_model // nhead
+        self.vocs = vocs
 
-        def modify_embedding_size(module, state_dict, prefix, local_metadata, 
+        def save_vocs(module, state_dict, prefix, local_metadata):
+            state_dict[prefix+'vocs'] = self.vocs
+        self._register_state_dict_hook(save_vocs)
+
+        def match_embedding(module, state_dict, prefix, local_metadata, 
                 strict, missing_keys, unexpected_keys, error_msgs) -> None:
-            state_emb_weight = state_dict[prefix+'embedding.weight']
-            state_n_emb = state_emb_weight.shape[0]
-            if state_n_emb < num_embeddings:
-                self.logger.warning(f"num_embedding of state_dict({state_n_emb}) is smaller "
-                    f"than current model({num_embeddings}). state_dict will be expanded.")
-                state_dict[prefix+'embedding.weight'] = expand_param(state_emb_weight, 0, num_embeddings)
-                state_dict[prefix+'predictor.weight'] = expand_param(state_dict[prefix+'predictor.weight'], 0, num_embeddings)
-                state_dict[prefix+'predictor.bias'] = expand_param(state_dict[prefix+'predictor.bias'], 0, num_embeddings)
-
-        self._register_load_state_dict_pre_hook(modify_embedding_size, with_module=True)
+            state_vocs = np.array(state_dict[prefix+'vocs'], dtype=object)
+            self_vocs = np.array(self.vocs, dtype=object)
+            if np.any(state_vocs != self_vocs):
+                self.logger.warning(f"vocs in state_dict does not match current vocs."
+                        "Some weights will be permuted.")
+                self.logger.debug(f"Removed from state_dict: {sorted(set(state_vocs)-set(self.vocs))}")
+                self.logger.debug(f"New in model: {sorted(set(self.vocs)-set(state_vocs))}")
+                common_vocs = list(set(list(state_vocs))&set(list(self_vocs)))
+                state_idx = np.array([np.where(state_vocs == v)[0][0] for v in common_vocs])
+                self_idx = np.array([np.where(self_vocs == v)[0][0] for v in common_vocs])
+                for key in ['embedding.weight', 'predictor.weight', 'predictor.bias']:
+                    state_param = state_dict[prefix+key]
+                    size = list(state_param.shape)
+                    size[0] = len(self_vocs)
+                    mean = torch.mean(state_param, dim=0, keepdim=True)
+                    std = torch.std(state_param, dim=0, keepdim=True)
+                    new_param = torch.randn(*size, dtype=state_param.dtype, device=state_param.device)*std+mean
+                    new_param[self_idx] = state_param[state_idx]
+                    state_dict[prefix+key] = new_param
+        self._register_load_state_dict_pre_hook(match_embedding, with_module=True)
 
     def forward(self, src: torch.Tensor):
         x = self.embedding(src)

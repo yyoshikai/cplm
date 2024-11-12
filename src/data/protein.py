@@ -1,11 +1,9 @@
 import sys, os
-import logging
-import bisect, gzip
+import logging, bisect, gzip, pickle, gc
 import concurrent.futures as cf
+from logging import getLogger
 from collections import defaultdict
-import pickle
 from glob import glob
-import gc
 import psutil
 import numpy as np
 import torch
@@ -16,7 +14,8 @@ from time import time
 from ..tokenizer import MoleculeProteinTokenizer 
 from .tokenizer import ProteinAtomTokenizer, FloatTokenizer
 from ..lmdb import new_lmdb, load_lmdb
-from .data import CoordTransform, LMDBDataset
+from .data import CoordTransform, LMDBDataset, LMDB
+from ..utils import logtime
 try:
     from Bio.PDB import FastMMCIFParser, PPBuilder
 except ModuleNotFoundError:
@@ -26,6 +25,7 @@ from tools.logger import get_logger, add_file_handler
 # net_datasetは {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class ProteinDataset(Dataset):
+    logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, net_dataset: Dataset, atom_tokenizer: ProteinAtomTokenizer, 
             coord_tokenizer: FloatTokenizer,
             coord_transform: CoordTransform, 
@@ -46,40 +46,45 @@ class ProteinDataset(Dataset):
 
     def __getitem__(self, idx):
         data = self.net_dataset[idx]
-        atoms = np.array(data['atoms'])
-        coords = data['coordinate']
-        assert len(atoms) == len(coords)
+        with logtime(self.logger, f"[{idx}]"):
+            atoms = np.array(data['atoms'])
+            coords = data['coordinate']
+            assert len(atoms) == len(coords)
 
-        # calc mask
-        is_ca = atoms == 'CA'
-        is_h = atoms == 'H'
-        is_heavy = (~is_ca)&(~is_h)
+            # calc mask
+            is_ca = atoms == 'CA'
+            is_h = atoms == 'H'
+            is_heavy = (~is_ca)&(~is_h)
 
-        atom_mask = is_ca.copy()
-        if self.atom_heavy: atom_mask &= is_heavy
-        if self.atom_h: atom_mask &= is_h
-        atoms = atoms[atom_mask]
-        coord_mask = is_ca.copy()
-        if self.coord_heavy: coord_mask &= is_heavy
-        if self.coord_h: coord_mask &= is_h
-        coords = coords[coord_mask]
+            atom_mask = is_ca.copy()
+            if self.atom_heavy: atom_mask &= is_heavy
+            if self.atom_h: atom_mask &= is_h
+            atoms = atoms[atom_mask]
+            coord_mask = is_ca.copy()
+            if self.coord_heavy: coord_mask &= is_heavy
+            if self.coord_h: coord_mask &= is_h
+            coords = coords[coord_mask]
 
-        coords = self.coord_transform(coords)
-        tokens = self.atom_tokenizer.tokenize(atoms) \
-            +self.coord_tokenizer.tokenize_array(coords.ravel())
-        return tokens
+            coords = self.coord_transform(coords)
+            return ['[POCKET]']+self.atom_tokenizer.tokenize(atoms) \
+                +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords.ravel())+['[END]']
+
+    def vocs(self):
+        return self.atom_tokenizer.vocs()|self.coord_tokenizer.vocs()|{'[POCKET]', '[XYZ]', '[END]'}
 
     def __len__(self):
         return len(self.net_dataset)
 
 class UniMolPocketDataset(Dataset):
+    logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, lmdb_path, **kwargs):
         self.dataset = LMDBDataset(lmdb_path, **kwargs)
     
     def __getitem__(self, idx):
         data = self.dataset[idx]
-        data['coordinate'] = data.pop('coordinates')[0]
-        return data
+        with logtime(self.logger, f"[{idx}]"):
+            data['coordinate'] = data.pop('coordinates')[0]
+            return data
 
     def __len__(self):
         return len(self.dataset)
@@ -204,16 +209,16 @@ class PDBFragmentDataset(Dataset):
         prot_idx = bisect.bisect_right(self.offsets, idx) - 1
         assert 0 <= prot_idx < len(self.dataset), f"index {idx} is out of bounds"
         prot = self.dataset[prot_idx]
-        sub_idx = idx - self.offsets[prot_idx]
-        sub_idxs = prot['sub_idxss'][sub_idx]
+        with logtime(self.logger, f"[{idx}]"):
+            sub_idx = idx - self.offsets[prot_idx]
+            sub_idxs = prot['sub_idxss'][sub_idx]
 
-        atoms = prot['atoms'][sub_idxs]
-        elements = prot['elements'][sub_idxs]
-        elements[atoms == 'CA'] = 'CA'
-        atoms = elements
-        coords = prot['coords'][sub_idxs]
-
-        return {'atoms': atoms, 'coordinate': coords}
+            atoms = prot['atoms'][sub_idxs]
+            elements = prot['elements'][sub_idxs]
+            elements[atoms == 'CA'] = 'CA'
+            atoms = elements
+            coords = prot['coords'][sub_idxs]
+            return {'atoms': atoms, 'coordinate': coords}
 
     @classmethod
     def process0(cls, root_dir: str, out_path: str,
@@ -319,4 +324,48 @@ class PDBFragmentDataset(Dataset):
         logger.info("Found errors:")
         for key, names in errors.items():
             logger.info(f"  {key}: {len(names)}")
-        
+
+def partial_load(path, idxs: np.ndarray):
+    with open(path, 'rb') as f:
+        major, minor = np.lib.format.read_magic(f)
+        shape, fortran, dtype = np.lib.format.read_array_header_1_0(f) # version compatibility
+        init_pos = f.tell()
+        # print(f"{init_pos=}")
+        assert not fortran, "Fortran order arrays not supported"
+
+        row_size = int(np.prod(shape[1:]))
+        values = []
+        for idx in idxs:
+            f.seek(init_pos)
+            v = np.fromfile(f, dtype=dtype, count=row_size, offset=idx*row_size*dtype.itemsize)
+            values.append(v)
+        # print(values)
+        values = np.array(values, dtype=dtype).reshape((-1,)+shape[1:])
+        return values
+
+class PDBFragment2Dataset(Dataset):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, path):
+        """
+        遅かった。
+        """
+        self.path = path
+        self.sub_idxss = LMDB(f"{path}/sub_idxss.lmdb")
+        with open(f"{path}/offsets.pkl", 'rb') as f:
+            self.offsets = pickle.load(f)
+    def __getitem__(self, idx: int):
+        with logtime(self.logger, f"[{idx}]"):
+            prot_idx = bisect.bisect_right(self.offsets, idx) - 1
+            assert 0 <= prot_idx < len(self.offsets), f"index {idx} is out of bounds"
+            sub_idx = idx - self.offsets[prot_idx]
+            sub_idxs = self.sub_idxss[f"{prot_idx}_{sub_idx}".encode('ascii')]
+            
+            atoms = np.load(f"{self.path}/atoms/{prot_idx}.npy")[sub_idxs]
+            elements = np.load(f"{self.path}/elements/{prot_idx}.npy")[sub_idxs]
+            elements[atoms == 'CA'] = 'CA'
+            atoms = elements
+            coords = np.load(f"{self.path}/coords/{prot_idx}.npy")[sub_idxs]
+            return {'atoms': atoms, 'coordinate': coords}
+
+    def __len__(self):
+        return self.offsets[-1]

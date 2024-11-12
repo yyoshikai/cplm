@@ -66,9 +66,7 @@ class FinetuneDataset(Dataset):
 cddir = "/workspace/cheminfodata/crossdocked/CrossDocked2020"
 class CDDataset(Dataset):
     logger = logging.getLogger(__qualname__)
-    def __init__(self, lmdb_path, 
-            atom_h,
-            coord_ca, coord_heavy, coord_h):
+    def __init__(self, lmdb_path):
         """
         CrossDockedの何らかのデータから取り出す。
         タンパク質は全てのタンパク質にする。

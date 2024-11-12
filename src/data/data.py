@@ -1,42 +1,38 @@
 import pickle
 from functools import lru_cache
 from logging import getLogger
-import math
-
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 import lmdb
 
-from ..tokenizer import MoleculeProteinTokenizer
+from ..utils import logtime
 
-class LMDBDataset(Dataset):
+class LMDB(Dataset):
     logger = getLogger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, lmdb_path, key_is_indexed=False, keep_env=False, keep_txn=False):
-        self.lmdb_path = lmdb_path
+    def __init__(self, path, keep_env=False, keep_txn=False):
+        self.path = path
         self.keep_env = keep_env
         self.keep_txn = keep_txn
-        self.key_is_indexed = key_is_indexed
         
         self._lazy_env = self._lazy_txn = None
         self._lazy_keys = None
 
-    @lru_cache(maxsize=1)
-    def __getitem__(self, idx):
-        self.logger.debug(f"__getitem__({idx})")
-        return pickle.loads(self.txn().get(self.key(idx)))
+    def __getitem__(self, key):
+        with logtime(self.logger, f"({self.path})[{key.decode('ascii')}]:"): #?
+            return pickle.loads(self.txn().get(key))
 
-    def env(self):
+    def env(self) -> lmdb.Environment:
         if self._lazy_env is not None:
             return self._lazy_env
-        env = lmdb.open(self.lmdb_path, subdir=False, readonly=True,
+        env = lmdb.open(self.path, subdir=False, readonly=True,
                 lock=False, readahead=False, meminit=False, max_readers=256)
         if self.keep_env:
             self._lazy_env = env
         return env
 
-    def txn(self):
+    def txn(self) -> lmdb.Transaction:
         if self._lazy_txn is not None:
             return self._lazy_txn
         txn = self.env().begin()
@@ -44,18 +40,37 @@ class LMDBDataset(Dataset):
             self._lazy_txn = txn
         return txn
     
+    def keys(self):
+        return list(self.txn().cursor().iternext(values=False))
+
+    def __len__(self):
+        return self.env().stat()['entries']
+    
+
+
+class LMDBDataset(Dataset):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+
+    def __init__(self, lmdb_path, key_is_indexed=False, keep_env=False, keep_txn=False):
+        self.lmdb = LMDB(lmdb_path, keep_env, keep_txn)
+        self.key_is_indexed = key_is_indexed
+        self._lazy_keys = None
+
+    def __getitem__(self, idx):
+        return self.lmdb[self.key(idx)]
+    
     def key(self, idx):
         if self.key_is_indexed:
             return str(idx).encode('ascii')
         else:
             if self._lazy_keys is None:
                 self.logger.info("Getting all key list...")
-                self._lazy_keys = list(self.txn().cursor().iternext(values=False))
+                self._lazy_keys = self.lmdb.keys()
                 self.logger.info("Done.")
             return self._lazy_keys[idx]
 
     def __len__(self):
-        return self.env().stat()['entries']
+        return len(self.lmdb)
 
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):

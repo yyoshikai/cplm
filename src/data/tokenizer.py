@@ -1,19 +1,48 @@
+import itertools, math
 from collections.abc import Iterable
 from logging import getLogger
 import numpy as np
+import torch
+from torch.utils.data import Dataset
+from ..utils import logtime
 
 class TokenEncoder:
-    def __init__(self, tokens: Iterable[str]):
-        self.i2tok = sorted(tokens)
-        self.tok2i = {tok: i for i, tok in enumerate(tokens, 1)}
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, vocs: Iterable[str]):
+        assert '[PAD]' not in vocs
+        self.i2voc = ['[PAD]']+sorted(vocs)
         self.pad_token = 0
+        self.voc2i = {voc: i for i, voc in enumerate(vocs, 1)}
     
     def encode(self, tokens: str):
-        return [self.tok2i[t] for t in tokens]
-    
+        # try:
+            return [self.voc2i[t] for t in tokens]
+        # except KeyError as e:
+        #     self.logger.error(f"KeyError in {tokens}")
+        #     raise e
+            
     def decode(self, tokens: int):
-        return [self.i2tok[t] for t in tokens]
+        return [self.i2voc[t] for t in 
+            itertools.takewhile(lambda x: x!= self.pad_token, tokens)]
 
+    @property
+    def voc_size(self) -> int:
+        return len(self.i2voc)
+
+class TokenEncodeDataset(Dataset):
+    logger = getLogger(f"{__qualname__}.{__module__}")
+    def __init__(self, dataset, encoder: TokenEncoder):
+        self.dataset = dataset
+        self.encoder = encoder
+    
+    def __getitem__(self, idx):
+        data = self.dataset[idx]
+        with logtime(self.logger, f"[{idx}]"):
+            data = torch.tensor(self.encoder.encode(data), dtype=torch.long)
+        return data
+
+    def __len__(self):
+        return len(self.dataset)
 
 class ProteinAtomTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
@@ -29,10 +58,11 @@ class ProteinAtomTokenizer:
                     break
             else:
                 self.logger.warning(f"Unknown atom {atom} in {atoms}")
-                self.tokens.append(self.unk_voc)
+                tokens.append(self.unk_voc)
+        return tokens
 
     def vocs(self):
-        return self.atom_vocs+self.unk_voc
+        return set(self.atom_vocs+[self.unk_voc])
                 
 class StringTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
@@ -53,39 +83,33 @@ class StringTokenizer:
                 tokens.append(self.unk_voc)
                 string = string[1:]
     def vocs(self):
-        return self.vocs_+self.unk_voc
+        return set(self.vocs_+self.unk_voc)
 
 class FloatTokenizer:
     logger = getLogger(f"{__qualname__}.{__module__}")
 
     def __init__(self, vmin: float, vmax: float, decimal: int=3):
+        self.decimal = decimal
         self.vmin = vmin
         self.vmax = vmax
-        self.decimal = decimal
-
 
     def tokenize(self, x: float):
-        if x < self.vmin: 
+        x = float(x)
+        if x < self.vmin:
             self.logger.warning(f"float value out of range: {x}")
             x = self.vmin
         if x > self.vmax:
             self.logger.warning(f"float value out of range: {x}")
             x = self.vmax
-        x = f"{x:.03f}"
         xi, xf = str(x).split('.')
-        xf = '.'+xf
+        xf = '.'+xf[:self.decimal].ljust(self.decimal, '0')
 
         return [xi, xf]
 
-    def tokenize_array(self, x: np.ndarray):
-        x = np.clip(x, self.vmin, self.vmax-10**(-self.decimal))
-        xi = x.astype(int).map(str)
-        xf = ((x%1)*1000).astype(int).map(lambda x: '.'+str(x))
-        coord_tokens = np.stack([xi, xf], axis=1)
-
-        return coord_tokens.ravel().tolist()
+    def tokenize_array(self, x: Iterable[float]):
+        return list(itertools.chain.from_iterable(self.tokenize(x) for x in x))
     
-
     def vocs(self):
-        return [str(i) for i in range(int(self.vmin), int(self.vmax)+1)] + \
-            [f".{f:.03f}" for f in range(0, 1, 10**-self.decimal)]
+        return {str(i) for i in range(max(0, math.floor(self.vmin)), math.floor(self.vmax)+1)}\
+            |{'-'+str(i) for i in range(max(0, math.floor(-self.vmax)), math.floor(-self.vmin)+1)}\
+            |{'.'+str(i).zfill(self.decimal) for i in range(10**self.decimal)}

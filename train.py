@@ -22,7 +22,8 @@ WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
 from src.data import *
-from src.data.protein import PDBFragmentDataset
+from src.data.protein import PDBFragmentDataset, PDBFragment2Dataset
+from src.data.tokenizer import TokenEncodeDataset
 from src.model import Model
 from src.utils import RandomState
 from tools.path import timestamp, cleardir, make_result_dir
@@ -51,6 +52,7 @@ parser.add_argument("--pocket-repeat", type=int, default=1)
 parser.add_argument("--pocket-data", default=f"{WORKDIR}/cheminfodata/unimol/pockets/train.lmdb")
 parser.add_argument("--frag-repeat", type=int, default=1)
 parser.add_argument("--frag-data")
+parser.add_argument("--frag2", action='store_true')
 
 ## environments
 parser.add_argument("--token-per-batch", type=int, default=25000)
@@ -106,7 +108,8 @@ if args.sdp_kernel is not None:
 ## logger
 fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
 logger = logging.getLogger()
-add_stream_handler(logger, logging.DEBUG if args.test else logging.INFO, fmt=fmt)
+# add_stream_handler(logger, logging.DEBUG if args.test else logging.INFO, fmt=fmt)
+add_stream_handler(logger, logging.INFO, fmt=fmt)
 add_file_handler(logger, f"{result_dir}/log.log", logging.DEBUG, fmt=fmt, mode='w')
 logger.setLevel(logging.NOTSET if is_main else logging.WARNING)
 log_step = 1 if args.test else 1000
@@ -115,33 +118,46 @@ logger.info(f"num_workers={args.num_workers}")
 
 # data
 coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
-
 datas = []
-tokens = set()
+vocs = set()
+smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
+coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
+protein_atom_tokenizer = ProteinAtomTokenizer()
 ## mol data
 if args.mol_repeat > 0:
     smiles_vocs = open("src/smil")
     smiles_tokenizer = StringTokenizer()
-    mol_data = UniMolLigandDataset(args.mol_data, key_is_indexed=True)
-    mol_data = MoleculeDataset(args.mol_data, 10, tokenizer, coord_transform, seed=args.seed)
+    mol_data = UniMolLigandDataset(args.mol_data, 10, atom_h=True, coord_h=True, key_is_indexed=True)
+    mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
+    vocs |= mol_data.vocs()
     mol_data = RepeatDataset(mol_data, args.mol_repeat)
     logger.info(f"mol data: {len(mol_data)}")
     datas.append(mol_data)
 ## pocket data
 if args.pocket_repeat > 0:
     pocket_data = UniMolPocketDataset(args.pocket_data, key_is_indexed=True)
-    pocket_data = ProteinDataset(pocket_data, tokenizer, coord_transform)
+    pocket_data = ProteinDataset(pocket_data, protein_atom_tokenizer, coord_tokenizer, coord_transform)
+    vocs |= pocket_data.vocs()
     pocket_data = RepeatDataset(pocket_data, args.pocket_repeat)
     logger.info(f"pocket data: {len(pocket_data)}")
     datas.append(pocket_data)
 ## fragment data
 if args.frag_repeat > 0:
-    frag_data = PDBFragmentDataset(args.frag_data)
-    frag_data = ProteinDataset(frag_data, tokenizer, coord_transform)
+    frag_data = (PDBFragment2Dataset if args.frag2 else PDBFragmentDataset)(args.frag_data)
+    frag_data = ProteinDataset(frag_data, protein_atom_tokenizer, coord_tokenizer, coord_transform)
+    vocs |= frag_data.vocs()
     frag_data = RepeatDataset(frag_data, args.frag_repeat)
     logger.info(f"frag data: {len(frag_data)}")
     datas.append(frag_data)
 train_data = ConcatDataset(datas)
+
+token_encoder = TokenEncoder(vocs)
+train_data = TokenEncodeDataset(train_data, token_encoder)
+
+#for debug
+with open(f"{result_dir}/vocs.txt", 'w') as f:
+    for voc in token_encoder.i2voc:
+        f.write(voc+'\n')
 
 train_data = SliceDataset(train_data, size, rank)
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
@@ -150,12 +166,11 @@ next_item = None
 n_accum_token = 0
 
 # model
-model = Model(8, 768, 12, 4, 0.1, 'gelu', True, 
-        tokenizer.voc_size, tokenizer.pad_token)
+model = Model(8, 768, 12, 4, 0.1, 'gelu', True, token_encoder.i2voc, token_encoder.pad_token)
 model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)
-criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=tokenizer.pad_token)
+criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=token_encoder.pad_token)
 optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
 optimizer.zero_grad()
 
@@ -167,7 +182,6 @@ def schedule(step):
     else:
         return 0.02
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
-
 
 
 accum_loss = 0
@@ -212,7 +226,7 @@ for step in range(args.max_step):
             else:
                 break
     batch = pad_sequence(batch, batch_first=batch_first,
-            padding_value=tokenizer.pad_token).to(torch.long)
+            padding_value=token_encoder.pad_token).to(torch.long)
     batch = batch.to(device)
     batch_sizes.append(batch.shape[1])
     max_lens.append(batch.shape[0])
@@ -223,7 +237,7 @@ for step in range(args.max_step):
 
     with torch.autocast('cuda', dtype=torch.bfloat16):
         pred = model(batch[:-1])
-        loss = criterion(pred.reshape(-1, tokenizer.voc_size), batch[1:].ravel())
+        loss = criterion(pred.reshape(-1, token_encoder.voc_size), batch[1:].ravel())
         loss.backward()
     accum_loss += loss.item()
     loss_end = time()
