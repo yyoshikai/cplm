@@ -34,6 +34,7 @@ s
 [si
 [te
 H
+[H]
 [He
 [Li
 [Be

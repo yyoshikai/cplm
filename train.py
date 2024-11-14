@@ -43,7 +43,7 @@ parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--weight-decay", type=float, default=0.01)
 parser.add_argument("--clip_grad_norm", type=int, default=1.0)
 parser.add_argument("--coord-noise-std", type=float, default=50.0)
-parser.add_argument("--coord-range", type=int, default=20)
+parser.add_argument("--coord-range", type=int, default=200)
 
 ## data
 parser.add_argument("--mol-repeat", type=int, default=1)
@@ -69,7 +69,7 @@ args = parser.parse_args()
 if args.test: args.studyname+='_test'
 result_dir = f"training/results/{timestamp()}_{args.studyname}"
 if args.record_opt_step is None:
-    args.record_opt_step = 1 if args.test else 100
+    args.record_opt_step = 1 if args.test else 1000
 main_rank = 0
 batch_first = False
 
@@ -125,14 +125,15 @@ coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
 protein_atom_tokenizer = ProteinAtomTokenizer()
 ## mol data
 if args.mol_repeat > 0:
-    smiles_vocs = open("src/smil")
-    smiles_tokenizer = StringTokenizer()
-    mol_data = UniMolLigandDataset(args.mol_data, 10, atom_h=True, coord_h=True, key_is_indexed=True)
+    smiles_vocs = open("src/data/smiles_tokens.txt").read().splitlines()
+    smiles_tokenizer = StringTokenizer(smiles_vocs)
+    mol_data = UniMolLigandDataset(args.mol_data, 10, atom_h=True, coord_h=True)
     mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
     vocs |= mol_data.vocs()
     mol_data = RepeatDataset(mol_data, args.mol_repeat)
     logger.info(f"mol data: {len(mol_data)}")
     datas.append(mol_data)
+
 ## pocket data
 if args.pocket_repeat > 0:
     pocket_data = UniMolPocketDataset(args.pocket_data, key_is_indexed=True)
@@ -141,6 +142,7 @@ if args.pocket_repeat > 0:
     pocket_data = RepeatDataset(pocket_data, args.pocket_repeat)
     logger.info(f"pocket data: {len(pocket_data)}")
     datas.append(pocket_data)
+
 ## fragment data
 if args.frag_repeat > 0:
     frag_data = (PDBFragment2Dataset if args.frag2 else PDBFragmentDataset)(args.frag_data)
@@ -151,12 +153,12 @@ if args.frag_repeat > 0:
     datas.append(frag_data)
 train_data = ConcatDataset(datas)
 
-token_encoder = TokenEncoder(vocs)
-train_data = TokenEncodeDataset(train_data, token_encoder)
+voc_encoder = VocEncoder(vocs)
+train_data = TokenEncodeDataset(train_data, voc_encoder)
 
 #for debug
 with open(f"{result_dir}/vocs.txt", 'w') as f:
-    for voc in token_encoder.i2voc:
+    for voc in voc_encoder.i2voc:
         f.write(voc+'\n')
 
 train_data = SliceDataset(train_data, size, rank)
@@ -166,11 +168,11 @@ next_item = None
 n_accum_token = 0
 
 # model
-model = Model(8, 768, 12, 4, 0.1, 'gelu', True, token_encoder.i2voc, token_encoder.pad_token)
+model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)
-criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=token_encoder.pad_token)
+criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=voc_encoder.pad_token)
 optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
 optimizer.zero_grad()
 
@@ -182,7 +184,6 @@ def schedule(step):
     else:
         return 0.02
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
-
 
 accum_loss = 0
 opt_step = 0
@@ -225,8 +226,15 @@ for step in range(args.max_step):
                 continue
             else:
                 break
+    # log tokens
+    # for i in range(len(batch)):
+    #     vocs = voc_encoder.decode(batch[i])
+    #     logger.debug(f"{i}:{','.join(vocs)}") 
+
     batch = pad_sequence(batch, batch_first=batch_first,
-            padding_value=token_encoder.pad_token).to(torch.long)
+            padding_value=voc_encoder.pad_token).to(torch.long)
+    
+
     batch = batch.to(device)
     batch_sizes.append(batch.shape[1])
     max_lens.append(batch.shape[0])
@@ -237,7 +245,7 @@ for step in range(args.max_step):
 
     with torch.autocast('cuda', dtype=torch.bfloat16):
         pred = model(batch[:-1])
-        loss = criterion(pred.reshape(-1, token_encoder.voc_size), batch[1:].ravel())
+        loss = criterion(pred.reshape(-1, voc_encoder.voc_size), batch[1:].ravel())
         loss.backward()
     accum_loss += loss.item()
     loss_end = time()
@@ -248,7 +256,7 @@ for step in range(args.max_step):
     dist.all_reduce(reduced_accum_token)
 
     if reduced_accum_token >= args.token_per_step:
-        logger.debug("optimizer stepped")
+        # logger.debug("optimizer stepped")
         optim_start = time()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
         optimizer.step()
@@ -284,10 +292,9 @@ for step in range(args.max_step):
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
             if args.gc:
                 gc.collect()
-        logger.debug(f"optim_time={optim_end-optim_start:.03f}")
+        # logger.debug(f"optim_time={optim_end-optim_start:.03f}")
         n_accum_token = 0
         accum_loss = 0
     if (step+1) % log_step == 0:
         logger.info(f"{step+1} step finished.")
-
 dist.destroy_process_group()

@@ -6,22 +6,22 @@ import torch
 from torch.utils.data import Dataset
 from ..utils import logtime
 
-class TokenEncoder:
+class VocEncoder:
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, vocs: Iterable[str]):
         assert '[PAD]' not in vocs
-        self.i2voc = ['[PAD]']+sorted(vocs)
+        self.i2voc = ['[PAD]']+sorted(set(vocs))
         self.pad_token = 0
-        self.voc2i = {voc: i for i, voc in enumerate(vocs, 1)}
+        self.voc2i = {voc: i for i, voc in enumerate(self.i2voc)}
     
-    def encode(self, tokens: str):
+    def encode(self, words: str):
         # try:
-            return [self.voc2i[t] for t in tokens]
+            return [self.voc2i[t] for t in words]
         # except KeyError as e:
-        #     self.logger.error(f"KeyError in {tokens}")
+        #     self.logger.error(f"KeyError in {words}")
         #     raise e
             
-    def decode(self, tokens: int):
+    def decode(self, tokens: Iterable[int]):
         return [self.i2voc[t] for t in 
             itertools.takewhile(lambda x: x!= self.pad_token, tokens)]
 
@@ -30,8 +30,8 @@ class TokenEncoder:
         return len(self.i2voc)
 
 class TokenEncodeDataset(Dataset):
-    logger = getLogger(f"{__qualname__}.{__module__}")
-    def __init__(self, dataset, encoder: TokenEncoder):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, dataset, encoder: VocEncoder):
         self.dataset = dataset
         self.encoder = encoder
     
@@ -46,7 +46,7 @@ class TokenEncodeDataset(Dataset):
 
 class ProteinAtomTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S'], unk_voc='[UNK]'):
+    def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN'], unk_voc='[UNK]'):
         self.atom_vocs = sorted(atom_vocs, key=len, reverse=True)
         self.unk_voc = unk_voc
     def tokenize(self, atoms: list[str]):
@@ -57,7 +57,7 @@ class ProteinAtomTokenizer:
                     tokens.append(voc)
                     break
             else:
-                self.logger.warning(f"Unknown atom {atom} in {atoms}")
+                self.logger.warning(f"Unknown atom {atom}")
                 tokens.append(self.unk_voc)
         return tokens
 
@@ -82,19 +82,21 @@ class StringTokenizer:
                 self.logger.warning(f"Unknown word {string} in {org_string}")
                 tokens.append(self.unk_voc)
                 string = string[1:]
+        return tokens
     def vocs(self):
-        return set(self.vocs_+self.unk_voc)
+        return set(self.vocs_+[self.unk_voc])
 
 class FloatTokenizer:
-    logger = getLogger(f"{__qualname__}.{__module__}")
+    logger = getLogger(f"{__module__}.{__qualname__}")
 
     def __init__(self, vmin: float, vmax: float, decimal: int=3):
         self.decimal = decimal
-        self.vmin = vmin
-        self.vmax = vmax
+        self.vmin = float(vmin)
+        self.vmax = float(vmax)
 
     def tokenize(self, x: float):
         x = float(x)
+        self.logger.warning(f"Tokenizing {x}")
         if x < self.vmin:
             self.logger.warning(f"float value out of range: {x}")
             x = self.vmin

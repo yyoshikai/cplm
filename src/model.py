@@ -11,8 +11,6 @@ from torch import Tensor
 from torch.nn.modules.transformer import _get_clones, _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
-from torch.nn.attention import SDPBackend
-from .data.tokenizer import TokenEncoder
 def multi_head_attention_forward(
     query: Tensor,
     num_heads: int,
@@ -189,8 +187,10 @@ class Model(TransformerEncoder):
             state_dict[prefix+'vocs'] = self.vocs
         self._register_state_dict_hook(save_vocs)
 
-        def match_embedding(module, state_dict, prefix, local_metadata, 
+        def load_pre_hook(module, state_dict, prefix, local_metadata, 
                 strict, missing_keys, unexpected_keys, error_msgs) -> None:
+            
+            # match embedding
             state_vocs = np.array(state_dict[prefix+'vocs'], dtype=object)
             self_vocs = np.array(self.vocs, dtype=object)
             if np.any(state_vocs != self_vocs):
@@ -210,7 +210,10 @@ class Model(TransformerEncoder):
                     new_param = torch.randn(*size, dtype=state_param.dtype, device=state_param.device)*std+mean
                     new_param[self_idx] = state_param[state_idx]
                     state_dict[prefix+key] = new_param
-        self._register_load_state_dict_pre_hook(match_embedding, with_module=True)
+            
+            # remove vocs
+            del state_dict[prefix+'vocs']
+        self._register_load_state_dict_pre_hook(load_pre_hook, with_module=True)
 
     def forward(self, src: torch.Tensor):
         x = self.embedding(src)

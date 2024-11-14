@@ -1,5 +1,4 @@
 import random, struct, logging
-from contextlib import nullcontext
 from functools import partial
 from time import time
 import numpy as np
@@ -35,6 +34,15 @@ def load_gninatypes(path, struct_fmt='fffi'):
     return data
 
 class logtime:
+    def __init__(self, logger, prefix):
+        pass
+    def __enter__(self):
+        pass
+    def __exit__(self, *excinfo):
+        pass
+
+"""
+class logtime:
     def __init__(self, logger: logging.Logger, prefix: str=''):
         self.logger = logger
         self.prefix = prefix
@@ -42,3 +50,4 @@ class logtime:
         self.start = time()
     def __exit__(self, exc_type, exc_value, traceback):
         self.logger.debug(f"{self.prefix} {time()-self.start:.4f}")
+"""

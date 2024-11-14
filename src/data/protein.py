@@ -22,6 +22,11 @@ except ModuleNotFoundError:
     FastMMCIFParser = PPBuilder = None
 from tools.logger import get_logger, add_file_handler
 
+# https://stackoverflow.com/questions/39042214/how-can-i-slice-each-element-of-a-numpy-array-of-strings
+def slice_str(x: np.ndarray, end: int):
+    b = x.view((str,1)).reshape(len(x),-1)[:, :end]
+    return np.fromstring(b.tostring(),dtype=(str,end))
+
 # net_datasetは {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class ProteinDataset(Dataset):
@@ -53,16 +58,16 @@ class ProteinDataset(Dataset):
 
             # calc mask
             is_ca = atoms == 'CA'
-            is_h = atoms == 'H'
+            is_h = slice_str(atoms, 1) == 'H'
             is_heavy = (~is_ca)&(~is_h)
 
             atom_mask = is_ca.copy()
-            if self.atom_heavy: atom_mask &= is_heavy
-            if self.atom_h: atom_mask &= is_h
+            if self.atom_heavy: atom_mask |= is_heavy
+            if self.atom_h: atom_mask |= is_h
             atoms = atoms[atom_mask]
             coord_mask = is_ca.copy()
-            if self.coord_heavy: coord_mask &= is_heavy
-            if self.coord_h: coord_mask &= is_h
+            if self.coord_heavy: coord_mask |= is_heavy
+            if self.coord_h: coord_mask |= is_h
             coords = coords[coord_mask]
 
             coords = self.coord_transform(coords)
@@ -212,6 +217,7 @@ class PDBFragmentDataset(Dataset):
         with logtime(self.logger, f"[{idx}]"):
             sub_idx = idx - self.offsets[prot_idx]
             sub_idxs = prot['sub_idxss'][sub_idx]
+            # self.logger.debug(f"{sub_idxs=}") sub_idxsが番号順であることを確認
 
             atoms = prot['atoms'][sub_idxs]
             elements = prot['elements'][sub_idxs]

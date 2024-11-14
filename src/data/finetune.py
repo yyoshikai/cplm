@@ -4,7 +4,10 @@ import torch
 from tqdm import tqdm
 import numpy as np
 from torch.utils.data import Dataset
-from openbabel import pybel
+try:
+    from openbabel import pybel
+except ModuleNotFoundError:
+    pybel = None
 from ..lmdb import new_lmdb
 from .data import LMDBDataset, get_random_rotation_matrix
 from ..tokenizer import MoleculeProteinTokenizer
