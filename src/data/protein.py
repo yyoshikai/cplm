@@ -10,8 +10,7 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm as _tqdm
 from time import time
-
-from ..tokenizer import MoleculeProteinTokenizer 
+ 
 from .tokenizer import ProteinAtomTokenizer, FloatTokenizer
 from ..lmdb import new_lmdb, load_lmdb
 from .data import CoordTransform, LMDBDataset, LMDB
@@ -70,7 +69,9 @@ class ProteinDataset(Dataset):
             if self.coord_h: coord_mask |= is_h
             coords = coords[coord_mask]
 
+            self.logger.debug(f"[{idx}]['coordinate'](before transform)={coords}")
             coords = self.coord_transform(coords)
+            self.logger.debug(f"[{idx}]['coordinate']={coords}")
             return ['[POCKET]']+self.atom_tokenizer.tokenize(atoms) \
                 +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords.ravel())+['[END]']
 

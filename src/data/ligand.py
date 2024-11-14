@@ -1,13 +1,9 @@
 from logging import getLogger
-from functools import lru_cache
-from time import time
 import numpy as np
-import torch
 from torch.utils.data import Dataset
 from rdkit import Chem
 from .data import LMDBDataset, CoordTransform
-from ..tokenizer import MoleculeProteinTokenizer
-from .tokenizer import FloatTokenizer, StringTokenizer, VocEncoder
+from .tokenizer import FloatTokenizer, StringTokenizer
 from ..utils import logtime
 
 # Pretrain時, 分子の処理用のデータセット
@@ -26,7 +22,9 @@ class MoleculeDataset(Dataset):
         with logtime(self.logger, f"[{idx}]"):
             smi = data['smi']
             coord = data['coordinate']
+            self.logger.debug(f"[{idx}]['coordinate'](before transform)={coord}")
             coord = self.coord_transform(coord)
+            self.logger.debug(f"[{idx}]['coordinate']={coord}")
             return ['[LIGAND]']+self.smiles_tokenizer.tokenize(smi)+['[XYZ]']+self.coord_tokenizer.tokenize_array(coord.ravel())+['[END]']
 
     def __len__(self):
@@ -58,27 +56,28 @@ class UniMolLigandDataset(Dataset):
     def __getitem__(self, idx):
         mol_idx, conformer_idx = divmod(idx, self.n_conformer)
         data = self.net_dataset[mol_idx]
-        smi = data['smi']
-        coord = data['coordinates'][conformer_idx]
+        with logtime(self.logger, f"[{idx}]"):
+            smi = data['smi']
+            coord = data['coordinates'][conformer_idx]
 
-        mol = Chem.MolFromSmiles(smi)
-        if self.atom_h:
-            mol = Chem.AddHs(mol)
-            smi = Chem.MolToSmiles(mol)
-            atom_idxs = np.array(mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
-            if self.coord_h:
-                coord = coord[atom_idxs]
+            mol = Chem.MolFromSmiles(smi)
+            if self.atom_h:
+                mol = Chem.AddHs(mol)
+                smi = Chem.MolToSmiles(mol)
+                atom_idxs = np.array(mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
+                if self.coord_h:
+                    coord = coord[atom_idxs]
+                else:
+                    atom_idxs = [idx for idx in atom_idxs if mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
+                    coord = coord[atom_idxs]
             else:
-                atom_idxs = [idx for idx in atom_idxs if mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
-                coord = coord[atom_idxs]
-        else:
-            if self.coord_h:
-                coord = coord
-            else:
-                coord = coord[:mol.GetNumAtoms()]
-        # self.logger.debug(f"__getitem__({idx})={{smi:{smi}, coord:{coord.shape}}}")
-        output = {'smi': smi, 'coordinate': coord}
-        return output
+                if self.coord_h:
+                    coord = coord
+                else:
+                    coord = coord[:mol.GetNumAtoms()]
+            # self.logger.debug(f"__getitem__({idx})={{smi:{smi}, coord:{coord.shape}}}")
+            output = {'smi': smi, 'coordinate': coord}
+            return output
     
     def __len__(self):
         return len(self.net_dataset) * self.n_conformer

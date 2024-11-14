@@ -23,7 +23,7 @@ sys.path.append(WORKDIR)
 
 from src.data import *
 from src.data.protein import PDBFragmentDataset, PDBFragment2Dataset
-from src.data.tokenizer import TokenEncodeDataset
+from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import RandomState
 from tools.path import timestamp, cleardir, make_result_dir

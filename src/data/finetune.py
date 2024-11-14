@@ -1,5 +1,4 @@
 import sys, os, logging, pickle, struct
-from functools import partial, lru_cache
 import torch
 from tqdm import tqdm
 import numpy as np
@@ -10,7 +9,6 @@ except ModuleNotFoundError:
     pybel = None
 from ..lmdb import new_lmdb
 from .data import LMDBDataset, get_random_rotation_matrix
-from ..tokenizer import MoleculeProteinTokenizer
 from ..utils import load_gninatypes
 from rdkit import Chem
 
@@ -26,7 +24,7 @@ def randomize_smiles(smi, rstate: np.random.RandomState):
 #       'rec_coord': np.ndarray, 'score': float}
 class FinetuneDataset(Dataset):
     def __init__(self, dataset:Dataset, 
-            tokenizer: MoleculeProteinTokenizer, 
+            tokenizer, 
             seed:int=0):
         self.dataset = dataset
         tokenizer.add_voc('end')
@@ -83,7 +81,6 @@ class CDDataset(Dataset):
         """
         self.net_dataset = LMDBDataset(lmdb_path, True)
 
-    @lru_cache(maxsize=1)
     def __getitem__(self, idx):
         data = self.net_dataset[idx]
         pocket, rec, lig, lig_cond = data['pocket'], data['rec'], data['lig'], data['lig_cond']

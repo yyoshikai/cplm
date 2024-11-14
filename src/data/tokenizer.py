@@ -96,7 +96,6 @@ class FloatTokenizer:
 
     def tokenize(self, x: float):
         x = float(x)
-        self.logger.warning(f"Tokenizing {x}")
         if x < self.vmin:
             self.logger.warning(f"float value out of range: {x}")
             x = self.vmin

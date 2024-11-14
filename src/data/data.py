@@ -1,5 +1,4 @@
 import pickle
-from functools import lru_cache
 from logging import getLogger
 import numpy as np
 import torch
@@ -117,13 +116,6 @@ class CoordTransform:
         self.coord_noise_std = coord_noise_std
     
     def __call__(self, coords: np.ndarray) -> np.ndarray:
-        """
-        複数のcoordがある場合, normalizeは1つめに対して行う。
-        
-        """
-        is_list = isinstance(coords, list)
-        if not is_list:
-            coords = [coords]
         if self.normalize_coord:
             coords = coords - np.mean(coords, axis=0, keepdims=True)
         if self.random_rotate:
