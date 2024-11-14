@@ -69,13 +69,11 @@ class ProteinDataset(Dataset):
             if self.coord_h: coord_mask |= is_h
             coords = coords[coord_mask]
 
-            self.logger.debug(f"[{idx}]['coordinate'](before transform)={coords}")
             coords = self.coord_transform(coords)
-            self.logger.debug(f"[{idx}]['coordinate']={coords}")
             return ['[POCKET]']+self.atom_tokenizer.tokenize(atoms) \
                 +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords.ravel())+['[END]']
 
-    def vocs(self):
+    def vocs(self) -> set[str]:
         return self.atom_tokenizer.vocs()|self.coord_tokenizer.vocs()|{'[POCKET]', '[XYZ]', '[END]'}
 
     def __len__(self):

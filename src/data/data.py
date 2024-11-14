@@ -116,6 +116,8 @@ class CoordTransform:
         self.coord_noise_std = coord_noise_std
     
     def __call__(self, coords: np.ndarray) -> np.ndarray:
+        if coords.size == 0:
+            return coords
         if self.normalize_coord:
             coords = coords - np.mean(coords, axis=0, keepdims=True)
         if self.random_rotate:

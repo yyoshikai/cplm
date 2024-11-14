@@ -22,9 +22,7 @@ class MoleculeDataset(Dataset):
         with logtime(self.logger, f"[{idx}]"):
             smi = data['smi']
             coord = data['coordinate']
-            self.logger.debug(f"[{idx}]['coordinate'](before transform)={coord}")
             coord = self.coord_transform(coord)
-            self.logger.debug(f"[{idx}]['coordinate']={coord}")
             return ['[LIGAND]']+self.smiles_tokenizer.tokenize(smi)+['[XYZ]']+self.coord_tokenizer.tokenize_array(coord.ravel())+['[END]']
 
     def __len__(self):

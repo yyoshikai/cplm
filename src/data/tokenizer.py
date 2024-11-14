@@ -46,7 +46,7 @@ class TokenEncodeDataset(Dataset):
 
 class ProteinAtomTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN'], unk_voc='[UNK]'):
+    def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN', 'BR', 'MG'], unk_voc='[UNK]'):
         self.atom_vocs = sorted(atom_vocs, key=len, reverse=True)
         self.unk_voc = unk_voc
     def tokenize(self, atoms: list[str]):
