@@ -256,7 +256,8 @@ for step in range(args.max_step):
     dist.all_reduce(reduced_accum_token)
 
     if reduced_accum_token >= args.token_per_step:
-        # logger.debug("optimizer stepped")
+        if args.test:
+            logger.info("optimizer stepped")
         optim_start = time()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
         optimizer.step()
@@ -292,7 +293,8 @@ for step in range(args.max_step):
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
             if args.gc:
                 gc.collect()
-        # logger.debug(f"optim_time={optim_end-optim_start:.03f}")
+        if args.test:
+            logger.info(f"optim_time={optim_end-optim_start:.03f}")
         n_accum_token = 0
         accum_loss = 0
     if (step+1) % log_step == 0:

@@ -33,6 +33,7 @@ def load_gninatypes(path, struct_fmt='fffi'):
         data = [struct_unpack(chunk) for chunk in iter(partial(tfile.read, struct_len), b'')]
     return data
 
+"""
 class logtime:
     def __init__(self, logger, prefix):
         pass
@@ -50,4 +51,3 @@ class logtime:
         self.start = time()
     def __exit__(self, exc_type, exc_value, traceback):
         self.logger.debug(f"{self.prefix} {time()-self.start:.4f}") 
-"""

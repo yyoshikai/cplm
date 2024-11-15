@@ -330,20 +330,17 @@ class PDBFragmentDataset(Dataset):
         for key, names in errors.items():
             logger.info(f"  {key}: {len(names)}")
 
-def partial_load(path, idxs: np.ndarray):
+def partial_load(path, start, stop):
     with open(path, 'rb') as f:
         major, minor = np.lib.format.read_magic(f)
         shape, fortran, dtype = np.lib.format.read_array_header_1_0(f) # version compatibility
-        init_pos = f.tell()
         # print(f"{init_pos=}")
         assert not fortran, "Fortran order arrays not supported"
 
         row_size = int(np.prod(shape[1:]))
         values = []
-        for idx in idxs:
-            f.seek(init_pos)
-            v = np.fromfile(f, dtype=dtype, count=row_size, offset=idx*row_size*dtype.itemsize)
-            values.append(v)
+        v = np.fromfile(f, dtype=dtype, count=row_size*(stop-start), offset=start*row_size*dtype.itemsize)
+        values.append(v)
         # print(values)
         values = np.array(values, dtype=dtype).reshape((-1,)+shape[1:])
         return values
@@ -365,11 +362,15 @@ class PDBFragment2Dataset(Dataset):
             sub_idx = idx - self.offsets[prot_idx]
             sub_idxs = self.sub_idxss[f"{prot_idx}_{sub_idx}".encode('ascii')]
             
-            atoms = np.load(f"{self.path}/atoms/{prot_idx}.npy")[sub_idxs]
-            elements = np.load(f"{self.path}/elements/{prot_idx}.npy")[sub_idxs]
+            min_atom_idx = np.min(sub_idxs)
+            sup_atom_idx = np.max(sub_idxs)+1
+
+            atoms = partial_load(f"{self.path}/atoms/{prot_idx}.npy", min_atom_idx, sup_atom_idx)[sub_idxs-min_atom_idx]
+            atoms = partial_load(f"{self.path}/atoms/{prot_idx}.npy", min_atom_idx, sup_atom_idx)[sub_idxs-min_atom_idx]
+            elements = partial_load(f"{self.path}/elements/{prot_idx}.npy", min_atom_idx, sup_atom_idx)[sub_idxs-min_atom_idx]
             elements[atoms == 'CA'] = 'CA'
             atoms = elements
-            coords = np.load(f"{self.path}/coords/{prot_idx}.npy")[sub_idxs]
+            coords = partial_load(f"{self.path}/coords/{prot_idx}.npy", min_atom_idx, sup_atom_idx)[sub_idxs-min_atom_idx]
             return {'atoms': atoms, 'coordinate': coords}
 
     def __len__(self):
