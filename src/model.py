@@ -330,12 +330,13 @@ class Model(TransformerEncoder):
                 q = q * cos_pos + rotate_half_q * sin_pos
                 rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
                 k = k * cos_pos + rotate_half_k * sin_pos
-                attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0, is_causal=True)
+                q = q[:,:,-1:]
+                attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0)
                 
-                attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
-
+                attn_output = attn_output.permute(2, 0, 1, 3).contiguous()[-1:].view(bsz * 1, embed_dim)
+                
                 attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
-                attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+                attn_output = attn_output.view(1, bsz, attn_output.size(1))
                 attn_output = torch.cat([attn_outputs[i_layer], attn_output[-1:]], dim=0)
                 attn_outputs[i_layer] = attn_output
                 x = attn_output
