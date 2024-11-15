@@ -328,6 +328,8 @@ class Model(TransformerEncoder):
                 q = q.view(bsz, num_heads, tgt_len, head_dim)
                 k = k.view(bsz, num_heads, src_len, head_dim)
                 v = v.view(bsz, num_heads, src_len, head_dim)
+                v = torch.cat([vs[i_layer], v[:,:,-1:]], dim=2)
+                vs[i_layer] = v
 
                 sin = sin[:src_len]
                 cos = cos[:src_len]
