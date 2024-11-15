@@ -318,24 +318,24 @@ class Model(TransformerEncoder):
                 src_len, _, _ = query.shape
                 head_dim = embed_dim // num_heads
 
-                proj = F.linear(query, in_proj_weight, in_proj_bias)
+                proj = F.linear(query[-1:], in_proj_weight, in_proj_bias)
                 proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
                 q, k, v = proj[0], proj[1], proj[2]
                 attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
 
-                q = q.view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
+                q = q.view(1, bsz * num_heads, head_dim).transpose(0, 1)
                 k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
                 v = v.view(v.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
 
-                q = q.view(bsz, num_heads, tgt_len, head_dim)
-                k = k.view(bsz, num_heads, src_len, head_dim)
-                v = v.view(bsz, num_heads, src_len, head_dim)
+                q = q.view(bsz, num_heads, 1, head_dim)
+                k = k.view(bsz, num_heads, 1, head_dim)
+                v = v.view(bsz, num_heads, 1, head_dim)
                 v = torch.cat([vs[i_layer], v[:,:,-1:]], dim=2)
                 vs[i_layer] = v
 
                 print(pos)
-                sin_pos = torch.stack([sin, sin], dim=-1).reshape(1, head_dim)[-1:]
-                cos_pos = torch.stack([cos, cos], dim=-1).reshape(1, head_dim)[-1:]
+                sin_pos = torch.stack([sin, sin], dim=-1).reshape(1, head_dim)
+                cos_pos = torch.stack([cos, cos], dim=-1).reshape(1, head_dim)
 
                 q = q[:,:,-1:]
                 k = k[:,:,-1:]
