@@ -267,10 +267,6 @@ class Model(TransformerEncoder):
         is_finished = torch.full((batch_size,), fill_value=False, device=device)
         input = torch.full((1, batch_size), fill_value=start_token, 
             dtype=torch.long, device=device) # [L, B]
-        attn_outputs = [
-            torch.zeros((0, batch_size, 768), device=device, dtype=torch.float)
-            for layer in self.layers
-        ]
         ks = [
             torch.zeros((batch_size, 12, 0, 64), device=device, dtype=torch.float)
             for layer in self.layers
@@ -287,9 +283,6 @@ class Model(TransformerEncoder):
             src = input
 
             x = self.embedding(src)
-            length = x.shape[0]
-            mask = nn.Transformer.generate_square_subsequent_mask(length).to(x.device).to(x.dtype)
-
             position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
                     for pos in range(len(src))])
             
@@ -300,7 +293,6 @@ class Model(TransformerEncoder):
 
             mod: TransformerEncoderLayer
             for i_layer, mod in enumerate(self.layers):
-                src_mask = mask
                 assert mod.norm_first # norm_first=False is not supported
                 xr = x
                 x = mod.norm1(x)
@@ -313,7 +305,6 @@ class Model(TransformerEncoder):
                 out_proj_weight = mod.self_attn.out_proj.weight
                 out_proj_bias = mod.self_attn.out_proj.bias
                 training=mod.self_attn.training
-                attn_mask=src_mask
                 
                 # set up shape vars
                 _, bsz, embed_dim = query.shape
@@ -322,7 +313,6 @@ class Model(TransformerEncoder):
                 proj = F.linear(query[-1:], in_proj_weight, in_proj_bias)
                 proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
                 q, k, v = proj[0], proj[1], proj[2]
-                attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
 
                 q = q.view(1, bsz * num_heads, head_dim).transpose(0, 1)
                 k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
@@ -351,7 +341,6 @@ class Model(TransformerEncoder):
                 
                 attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
                 attn_output = attn_output.view(1, bsz, attn_output.size(1))
-                attn_outputs[i_layer] = torch.cat([attn_outputs[i_layer], attn_output], dim=0)
                 x = attn_output
 
                 x = mod.dropout1(x)
