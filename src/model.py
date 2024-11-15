@@ -289,15 +289,50 @@ class Model(TransformerEncoder):
                 assert mod.norm_first # norm_first=False is not supported
                 xr = x
                 x = mod.norm1(x)
-                # x = mod.self_attn(x, attn_mask=src_mask, sin=sin, cos=cos)
                 
-                x = multi_head_attention_forward(
-                    x, mod.self_attn.num_heads,
-                    mod.self_attn.in_proj_weight, mod.self_attn.in_proj_bias,
-                    mod.self_attn.dropout, mod.self_attn.out_proj.weight, mod.self_attn.out_proj.bias,
-                    sin, cos,
-                    training=mod.self_attn.training,
-                    attn_mask=src_mask)
+                query = x
+                num_heads = mod.self_attn.num_heads
+                in_proj_weight = mod.self_attn.in_proj_weight
+                in_proj_bias = mod.self_attn.in_proj_bias
+                dropout_p = mod.self_attn.dropout
+                out_proj_weight = mod.self_attn.out_proj.weight
+                out_proj_bias = mod.self_attn.out_proj.bias
+                training=mod.self_attn.training
+                attn_mask=src_mask
+                
+                # set up shape vars
+                tgt_len, bsz, embed_dim = query.shape
+                src_len, _, _ = query.shape
+                head_dim = embed_dim // num_heads
+
+                proj = F.linear(query, in_proj_weight, in_proj_bias)
+                proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
+                q, k, v = proj[0], proj[1], proj[2]
+                attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
+
+                q = q.view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
+                k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
+                v = v.view(v.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
+
+                q = q.view(bsz, num_heads, tgt_len, head_dim)
+                k = k.view(bsz, num_heads, src_len, head_dim)
+                v = v.view(bsz, num_heads, src_len, head_dim)
+
+                sin = sin[:src_len]
+                cos = cos[:src_len]
+                sin_pos = torch.stack([sin, sin], dim=-1).reshape(src_len, head_dim)
+                cos_pos = torch.stack([cos, cos], dim=-1).reshape(src_len, head_dim)
+
+                rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
+                q = q * cos_pos + rotate_half_q * sin_pos
+                rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
+                k = k * cos_pos + rotate_half_k * sin_pos
+                attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0, is_causal=True)
+                attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
+
+                attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
+                attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+                x = attn_output
 
                 x = mod.dropout1(x)
                 x = xr + x
