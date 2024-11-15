@@ -279,7 +279,7 @@ class Model(TransformerEncoder):
             torch.zeros((batch_size, 12, 0, 64), device=device, dtype=torch.float)
             for layer in self.layers
         ]
-        for i in range(max_len):
+        for pos in range(max_len):
             
             # output = self(input) # [L, B, D]
             src = input
@@ -293,6 +293,8 @@ class Model(TransformerEncoder):
             
             sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
             cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
+            sin = sin[pos:pos+1]
+            cos = cos[pos:pos+1]
 
             mod: TransformerEncoderLayer
             for i_layer, mod in enumerate(self.layers):
@@ -331,10 +333,9 @@ class Model(TransformerEncoder):
                 v = torch.cat([vs[i_layer], v[:,:,-1:]], dim=2)
                 vs[i_layer] = v
 
-                sin = sin[:src_len]
-                cos = cos[:src_len]
-                sin_pos = torch.stack([sin, sin], dim=-1).reshape(src_len, head_dim)[-1:]
-                cos_pos = torch.stack([cos, cos], dim=-1).reshape(src_len, head_dim)[-1:]
+                print(pos)
+                sin_pos = torch.stack([sin, sin], dim=-1).reshape(1, head_dim)[-1:]
+                cos_pos = torch.stack([cos, cos], dim=-1).reshape(1, head_dim)[-1:]
 
                 q = q[:,:,-1:]
                 k = k[:,:,-1:]
