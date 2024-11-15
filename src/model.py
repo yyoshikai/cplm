@@ -289,7 +289,16 @@ class Model(TransformerEncoder):
                 assert mod.norm_first # norm_first=False is not supported
                 xr = x
                 x = mod.norm1(x)
-                x = mod.self_attn(x, attn_mask=src_mask, sin=sin, cos=cos)
+                # x = mod.self_attn(x, attn_mask=src_mask, sin=sin, cos=cos)
+                
+                x = multi_head_attention_forward(
+                    x, mod.self_attn.num_heads,
+                    mod.self_attn.in_proj_weight, mod.self_attn.in_proj_bias,
+                    mod.self_attn.dropout, mod.self_attn.out_proj.weight, mod.self_attn.out_proj.bias,
+                    sin, cos,
+                    training=mod.self_attn.training,
+                    attn_mask=src_mask)
+
                 x = mod.dropout1(x)
                 x = xr + x
 
