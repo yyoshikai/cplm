@@ -326,18 +326,19 @@ class Model(TransformerEncoder):
                 sin_pos = torch.stack([sin, sin], dim=-1).reshape(src_len, head_dim)
                 cos_pos = torch.stack([cos, cos], dim=-1).reshape(src_len, head_dim)
 
+                print(q.shape)
+                q = q[:,:,-1:]
                 rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
-                q = q * cos_pos + rotate_half_q * sin_pos
+                q = q * cos_pos[-1:] + rotate_half_q * sin_pos[-1:]
                 rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
                 k = k * cos_pos + rotate_half_k * sin_pos
-                q = q[:,:,-1:]
                 attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0)
                 
-                attn_output = attn_output.permute(2, 0, 1, 3).contiguous()[-1:].view(bsz * 1, embed_dim)
+                attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(1*bsz, embed_dim)
                 
                 attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
                 attn_output = attn_output.view(1, bsz, attn_output.size(1))
-                attn_output = torch.cat([attn_outputs[i_layer], attn_output[-1:]], dim=0)
+                attn_output = torch.cat([attn_outputs[i_layer], attn_output], dim=0)
                 attn_outputs[i_layer] = attn_output
                 x = attn_output
 
