@@ -269,7 +269,15 @@ class Model(TransformerEncoder):
             dtype=torch.long, device=device) # [L, B]
         attn_outputs = [
             torch.zeros((0, batch_size, 768), device=device, dtype=torch.float)
-            for i_layer in range(len(self.layers))
+            for layer in self.layers
+        ]
+        ks = [
+            torch.zeros((batch_size, 12, 0, 64), device=device, dtype=torch.float)
+            for layer in self.layers
+        ]
+        vs = [
+            torch.zeros((batch_size, 12, 0, 64), device=device, dtype=torch.float)
+            for layer in self.layers
         ]
         for i in range(max_len):
             
