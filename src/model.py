@@ -279,6 +279,8 @@ class Model(TransformerEncoder):
             torch.zeros((batch_size, 12, 0, 64), device=device, dtype=torch.float)
             for layer in self.layers
         ]
+        outputs = torch.zeros((0, batch_size, 1418), device=device, dtype=torch.float)
+
         for pos in range(max_len):
             
             # output = self(input) # [L, B, D]
@@ -314,8 +316,7 @@ class Model(TransformerEncoder):
                 attn_mask=src_mask
                 
                 # set up shape vars
-                tgt_len, bsz, embed_dim = query.shape
-                src_len, _, _ = query.shape
+                _, bsz, embed_dim = query.shape
                 head_dim = embed_dim // num_heads
 
                 proj = F.linear(query[-1:], in_proj_weight, in_proj_bias)
@@ -369,6 +370,8 @@ class Model(TransformerEncoder):
             
             
             output = self.predictor(x)
+            output = torch.cat([outputs, output[-1:]], dim=0)
+            outputs = output
 
             prob = F.softmax(output[-1], dim=1) # [B, D]
             output = torch.multinomial(prob, num_samples=1) # [B, 1]
