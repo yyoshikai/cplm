@@ -1,5 +1,6 @@
 from typing import Optional, Union, Callable, Tuple
 import math
+from tqdm import tqdm
 from time import time
 import logging
 
@@ -257,7 +258,6 @@ class Model(TransformerEncoder):
         return input.T
 
     def generate2(self, start_voc: str, end_voc: str, max_len: int, batch_size: int) -> torch.Tensor:
-        self.logger.info("generate2 used")
         device = self.predictor.weight.device
         assert start_voc in self.vocs and end_voc in self.vocs
         vocs = np.array(self.vocs)
@@ -268,18 +268,17 @@ class Model(TransformerEncoder):
         input = torch.full((1, batch_size), fill_value=start_token, 
             dtype=torch.long, device=device) # [L, B]
         ks = [
-            torch.zeros((batch_size, 12, 0, 64), device=device, dtype=torch.float)
-            for layer in self.layers
+            torch.zeros((batch_size, layer.self_attn.num_heads, 0, layer.self_attn.head_dim), 
+                device=device, dtype=torch.float) for layer in self.layers
         ]
         vs = [
-            torch.zeros((batch_size, 12, 0, 64), device=device, dtype=torch.float)
-            for layer in self.layers
+            torch.zeros((batch_size, layer.self_attn.num_heads, 0, layer.self_attn.head_dim), 
+                device=device, dtype=torch.float) for layer in self.layers
         ]
-        outputs = torch.zeros((0, batch_size, 1418), device=device, dtype=torch.float)
-
-        for pos in range(max_len):
+        outputs = [input.squeeze(0)]
+        for pos in tqdm(range(max_len)):
             
-            src = input[-1:]
+            src = input
 
             x = self.embedding(src)
             position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
@@ -308,7 +307,7 @@ class Model(TransformerEncoder):
                 _, bsz, embed_dim = x.shape
                 head_dim = embed_dim // num_heads
 
-                proj = F.linear(x[-1:], in_proj_weight, in_proj_bias)
+                proj = F.linear(x, in_proj_weight, in_proj_bias)
                 proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
                 q, k, v = proj[0], proj[1], proj[2]
 
@@ -342,27 +341,20 @@ class Model(TransformerEncoder):
                 x = attn_output
 
                 x = mod.dropout1(x)
-                x = xr[-1:] + x
-
-                xr = x
-                x = mod.norm2(x)
-                x = mod.linear2(mod.dropout(mod.activation(mod.linear1(x))))
-                x = mod.dropout2(x)
                 x = xr + x
+
+                x = x + mod.dropout2(mod.linear2(mod.dropout(mod.activation(mod.linear1(mod.norm2(x))))))
 
             if self.norm is not None:
                 x = self.norm(x)
-            
-            
-            
-            output = self.predictor(x)
-            output = torch.cat([outputs, output[-1:]], dim=0)
-            outputs = output
+            x = self.predictor(x)
 
-            prob = F.softmax(output[-1], dim=1) # [B, D]
+            prob = F.softmax(x[0], dim=1) # [B, D]
             output = torch.multinomial(prob, num_samples=1) # [B, 1]
-            output = output.view(1, -1) # [1, B]
-            is_finished = torch.logical_or(is_finished, output[0] == end_token)
-            input = torch.cat([input, output], dim=0) # [L, B]
+            output = output.view(-1) # [B]
+            outputs.append(output)
+            is_finished = torch.logical_or(is_finished, output == end_token)
+            input = output.unsqueeze(0)
             if torch.all(is_finished): break
-        return input.T
+        outputs = torch.stack(outputs, dim=1)
+        return outputs
