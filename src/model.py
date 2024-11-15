@@ -279,12 +279,11 @@ class Model(TransformerEncoder):
 
         for pos in range(max_len):
             
-            # output = self(input) # [L, B, D]
-            src = input
+            src = input[-1:]
 
             x = self.embedding(src)
             position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
-                    for pos in range(len(src))])
+                    for pos in range(pos+1)])
             
             sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
             cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
@@ -297,7 +296,6 @@ class Model(TransformerEncoder):
                 xr = x
                 x = mod.norm1(x)
                 
-                query = x
                 num_heads = mod.self_attn.num_heads
                 in_proj_weight = mod.self_attn.in_proj_weight
                 in_proj_bias = mod.self_attn.in_proj_bias
@@ -307,10 +305,10 @@ class Model(TransformerEncoder):
                 training=mod.self_attn.training
                 
                 # set up shape vars
-                _, bsz, embed_dim = query.shape
+                _, bsz, embed_dim = x.shape
                 head_dim = embed_dim // num_heads
 
-                proj = F.linear(query[-1:], in_proj_weight, in_proj_bias)
+                proj = F.linear(x[-1:], in_proj_weight, in_proj_bias)
                 proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
                 q, k, v = proj[0], proj[1], proj[2]
 
