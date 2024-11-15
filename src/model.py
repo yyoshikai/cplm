@@ -258,6 +258,10 @@ class Model(TransformerEncoder):
         return input.T
 
     def generate2(self, start_voc: str, end_voc: str, max_len: int, batch_size: int) -> torch.Tensor:
+        """
+        Use kv-cache for generation
+        """
+        
         device = self.predictor.weight.device
         assert start_voc in self.vocs and end_voc in self.vocs
         vocs = np.array(self.vocs)
