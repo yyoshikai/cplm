@@ -330,15 +330,12 @@ class Model(TransformerEncoder):
                 q = q.view(bsz, num_heads, 1, head_dim)
                 k = k.view(bsz, num_heads, 1, head_dim)
                 v = v.view(bsz, num_heads, 1, head_dim)
-                v = torch.cat([vs[i_layer], v[:,:,-1:]], dim=2)
+                v = torch.cat([vs[i_layer], v], dim=2)
                 vs[i_layer] = v
 
-                print(pos)
                 sin_pos = torch.stack([sin, sin], dim=-1).reshape(1, head_dim)
                 cos_pos = torch.stack([cos, cos], dim=-1).reshape(1, head_dim)
 
-                q = q[:,:,-1:]
-                k = k[:,:,-1:]
                 rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
                 q = q * cos_pos + rotate_half_q * sin_pos
                 rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
