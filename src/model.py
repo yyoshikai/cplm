@@ -327,7 +327,43 @@ class Model(TransformerEncoder):
                 q = q * cos_pos + rotate_half_q * sin_pos
                 rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
                 k = k * cos_pos + rotate_half_k * sin_pos
+                def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
+                        is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
+                    L, S = query.size(-2), key.size(-2)
+                    query = q
+                    key = k
+                    value = v
+                    attn_mask = None
+                    dropout_p = dropout_p if training else 0.0
+                    is_causal = True
+                    scale = None
+                    enable_gqa = False
+
+                    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+                    attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+                    if is_causal:
+                        assert attn_mask is None
+                        temp_mask = torch.ones(L, S, dtype=torch.bool, device=query.device).tril(diagonal=0)
+                        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+                        attn_bias.to(query.dtype)
+
+                    if attn_mask is not None:
+                        if attn_mask.dtype == torch.bool:
+                            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+                        else:
+                            attn_bias += attn_mask
+
+                    if enable_gqa:
+                        key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
+                        value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
+
+                    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+                    attn_weight += attn_bias
+                    attn_weight = torch.softmax(attn_weight, dim=-1)
+                    attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+                    return attn_weight @ value
                 attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0, is_causal=True)
+                
                 attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
 
                 attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
