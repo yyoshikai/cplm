@@ -232,3 +232,84 @@ class Model(TransformerEncoder):
         x = super().forward(x, mask, sin, cos)
         return self.predictor(x)
     
+    def generate(self, start_voc: str, end_voc: str, max_len: int, batch_size: int) -> torch.Tensor:
+        self.logger.info("generate used")
+        device = self.predictor.weight.device
+        assert start_voc in self.vocs and end_voc in self.vocs
+        vocs = np.array(self.vocs)
+        start_token = np.where(vocs == start_voc)[0][0]
+        end_token = np.where(vocs == end_voc)[0][0]
+
+        is_finished = torch.full((batch_size,), fill_value=False, device=device)
+        input = torch.full((1, batch_size), fill_value=start_token, 
+            dtype=torch.long, device=device) # [L, B]
+
+        for i in range(max_len):
+            
+            output = self(input) # [L, B, D]
+
+            prob = F.softmax(output[-1], dim=1) # [B, D]
+            output = torch.multinomial(prob, num_samples=1) # [B, 1]
+            output = output.view(1, -1) # [1, B]
+            is_finished = torch.logical_or(is_finished, output[0] == end_token)
+            input = torch.cat([input, output], dim=0) # [L, B]
+            if torch.all(is_finished): break
+        return input.T
+
+    def generate2(self, start_voc: str, end_voc: str, max_len: int, batch_size: int) -> torch.Tensor:
+        self.logger.info("generate2 used")
+        device = self.predictor.weight.device
+        assert start_voc in self.vocs and end_voc in self.vocs
+        vocs = np.array(self.vocs)
+        start_token = np.where(vocs == start_voc)[0][0]
+        end_token = np.where(vocs == end_voc)[0][0]
+
+        is_finished = torch.full((batch_size,), fill_value=False, device=device)
+        input = torch.full((1, batch_size), fill_value=start_token, 
+            dtype=torch.long, device=device) # [L, B]
+
+        for i in range(max_len):
+            
+            # output = self(input) # [L, B, D]
+            src = input
+
+            x = self.embedding(src)
+            length = x.shape[0]
+            mask = nn.Transformer.generate_square_subsequent_mask(length).to(x.device).to(x.dtype)
+
+            position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
+                    for pos in range(len(src))])
+            
+            sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
+            cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
+
+            mod: TransformerEncoderLayer
+            for mod in self.layers:
+                src_mask = mask
+                assert mod.norm_first # norm_first=False is not supported
+                xr = x
+                x = mod.norm1(x)
+                x = mod.self_attn(x, attn_mask=src_mask, sin=sin, cos=cos)
+                x = mod.dropout1(x)
+                x = xr + x
+
+                xr = x
+                x = mod.norm2(x)
+                x = mod.linear2(mod.dropout(mod.activation(mod.linear1(x))))
+                x = mod.dropout2(x)
+                x = xr + x
+
+            if self.norm is not None:
+                x = self.norm(x)
+            
+            
+            
+            output = self.predictor(x)
+
+            prob = F.softmax(output[-1], dim=1) # [B, D]
+            output = torch.multinomial(prob, num_samples=1) # [B, 1]
+            output = output.view(1, -1) # [1, B]
+            is_finished = torch.logical_or(is_finished, output[0] == end_token)
+            input = torch.cat([input, output], dim=0) # [L, B]
+            if torch.all(is_finished): break
+        return input.T

@@ -1,5 +1,4 @@
-import sys, os
-import argparse, logging
+import sys, os, argparse
 import math, itertools, pickle
 from addict import Dict
 from tqdm import tqdm
@@ -12,7 +11,7 @@ import torch.nn.functional as F
 
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
-from tools.logger import add_stream_handler, add_file_handler
+from tools.logger import get_logger, add_stream_handler, add_file_handler
 from src.model import Model
 from src.data.tokenizer import VocEncoder
 
@@ -47,9 +46,10 @@ token_per_batch = args.token_per_batch if args.token_per_batch is not None \
 
 # environment
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-logger = logging.getLogger()
+logger = get_logger()
 add_stream_handler(logger)
 add_file_handler(logger, f"{rdir}/log.log")
+
 
 # state
 state = torch.load(f"{train_dir}/models/{step}.pth", weights_only=True)
@@ -77,20 +77,9 @@ nbatch = math.ceil(float(args.n)/float(batch_size))
 outputs = []
 for ibatch in range(nbatch):
     bsz0 = min(batch_size, args.n-batch_size*ibatch)
-    is_finished = torch.full((bsz0,), fill_value=False, device=device)
     with torch.no_grad():
-        input = torch.full((1, bsz0), fill_value=start_token, 
-            dtype=torch.long, device=device) # [L, B]
-
-        for i in tqdm(range(max_len)):
-            output = model(input) # [L, B, D]
-            prob = F.softmax(output[-1], dim=1) # [B, D]
-            output = torch.multinomial(prob, num_samples=1) # [B, 1]
-            output = output.view(1, -1) # [1, B]
-            is_finished = torch.logical_or(is_finished, output[0] == end_token)
-            input = torch.cat([input, output], dim=0) # [L, B]
-            if torch.all(is_finished): break
-        outputs += input.T.cpu().numpy().tolist()
+        output = model.generate2(args.start_voc, args.end_voc, args.max_len, bsz0)
+        outputs += output.cpu().numpy().tolist()
 
 with open(f"{rdir}/tokens.pkl", 'wb') as f:
     pickle.dump(outputs, f)
