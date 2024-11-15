@@ -333,15 +333,15 @@ class Model(TransformerEncoder):
 
                 sin = sin[:src_len]
                 cos = cos[:src_len]
-                sin_pos = torch.stack([sin, sin], dim=-1).reshape(src_len, head_dim)
-                cos_pos = torch.stack([cos, cos], dim=-1).reshape(src_len, head_dim)
+                sin_pos = torch.stack([sin, sin], dim=-1).reshape(src_len, head_dim)[-1:]
+                cos_pos = torch.stack([cos, cos], dim=-1).reshape(src_len, head_dim)[-1:]
 
                 q = q[:,:,-1:]
                 k = k[:,:,-1:]
                 rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
-                q = q * cos_pos[-1:] + rotate_half_q * sin_pos[-1:]
+                q = q * cos_pos + rotate_half_q * sin_pos
                 rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
-                k = k * cos_pos[-1:] + rotate_half_k * sin_pos[-1:]
+                k = k * cos_pos + rotate_half_k * sin_pos
 
                 k = torch.cat([ks[i_layer], k], dim=2)
                 ks[i_layer] = k
