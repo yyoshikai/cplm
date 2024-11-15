@@ -287,7 +287,7 @@ class Model(TransformerEncoder):
             cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
 
             mod: TransformerEncoderLayer
-            for mod in self.layers:
+            for i_layer, mod in enumerate(self.layers):
                 src_mask = mask
                 assert mod.norm_first # norm_first=False is not supported
                 xr = x
@@ -336,7 +336,8 @@ class Model(TransformerEncoder):
 
                 attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
                 attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
-                print(attn_output.shape)
+                attn_output = torch.cat([attn_outputs[i_layer], attn_output[-1:]], dim=0)
+                attn_outputs[i_layer] = attn_output
                 x = attn_output
 
                 x = mod.dropout1(x)
