@@ -334,12 +334,15 @@ class Model(TransformerEncoder):
                 sin_pos = torch.stack([sin, sin], dim=-1).reshape(src_len, head_dim)
                 cos_pos = torch.stack([cos, cos], dim=-1).reshape(src_len, head_dim)
 
-                print(q.shape)
                 q = q[:,:,-1:]
                 rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
                 q = q * cos_pos[-1:] + rotate_half_q * sin_pos[-1:]
                 rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
                 k = k * cos_pos + rotate_half_k * sin_pos
+
+                k = torch.cat([ks[i_layer], k[:,:,-1:]], dim=2)
+                ks[i_layer] = k
+
                 attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0)
                 
                 attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(1*bsz, embed_dim)
