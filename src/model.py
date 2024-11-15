@@ -351,12 +351,11 @@ class Model(TransformerEncoder):
                 
                 attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
                 attn_output = attn_output.view(1, bsz, attn_output.size(1))
-                attn_output = torch.cat([attn_outputs[i_layer], attn_output], dim=0)
-                attn_outputs[i_layer] = attn_output
+                attn_outputs[i_layer] = torch.cat([attn_outputs[i_layer], attn_output], dim=0)
                 x = attn_output
 
                 x = mod.dropout1(x)
-                x = xr + x
+                x = xr[-1:] + x
 
                 xr = x
                 x = mod.norm2(x)
