@@ -2,14 +2,9 @@
 import sys, os
 import argparse
 from time import time
-import random
-import math
-import gc
-import shutil
-import logging, yaml
-from logging.config import dictConfig
+import math, gc, logging
 
-import psutil
+import psutil, yaml
 import numpy as np
 import pandas as pd
 import torch

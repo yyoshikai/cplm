@@ -5,7 +5,6 @@ from time import time
 import math
 import gc
 import logging, yaml
-from logging.config import dictConfig
 
 import psutil
 from addict import Dict
@@ -19,8 +18,9 @@ from torch.nn.utils.rnn import pad_sequence
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data import CoordTransform, SliceDataset, LMDBDataset, CDDataset, FinetuneDataset
-from src.tokenizer import MoleculeProteinTokenizer
+from src.data import SliceDataset, CDDataset, FinetuneDataset
+from src.data.tokenizer import StringTokenizer, FloatTokenizer, ProteinAtomTokenizer,\
+    VocEncoder, TokenEncodeDataset
 from src.model import Model
 from src.utils import RandomState
 from tools.path import timestamp, cleardir, make_result_dir
@@ -110,24 +110,26 @@ add_stream_handler(logger, logging.DEBUG if args.test else logging.INFO, fmt=fmt
 add_file_handler(logger, f"{result_dir}/log.log", logging.DEBUG, fmt=fmt, mode='w')
 logger.setLevel(logging.NOTSET if is_main else logging.WARNING)
 log_step = 1 if args.test else 1000
-
 logger.info(f"num_workers={args.num_workers}")
 
 # data
-tokenizer = MoleculeProteinTokenizer(coord_min=-pretrain_config.coord_range, coord_sup=pretrain_config.coord_range)
-train_data = CDDataset(f"{WORKDIR}/cplm/preprocess/results/docking_types/{args.data_type}.lmdb")
-train_data = FinetuneDataset(train_data, tokenizer)
-train_data = SliceDataset(train_data, size, rank)
+smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
+coord_tokenizer = FloatTokenizer(-pretrain_config.coord_range, pretrain_config.coord_range)
+protein_atom_tokenizer = ProteinAtomTokenizer()
 
+train_data = CDDataset(f"{WORKDIR}/cplm/preprocess/results/docking_types/{args.data_type}.lmdb")
+train_data = FinetuneDataset(train_data, protein_atom_tokenizer, smiles_tokenizer, coord_tokenizer)
+voc_encoder = VocEncoder(train_data.vocs())
+train_data = TokenEncodeDataset(train_data, voc_encoder)
+
+train_data = SliceDataset(train_data, size, rank)
 train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
 train_iter = train_loader.__iter__()
 next_item = None
 n_accum_token = 0
 
-logger.info(f"special tokens: {tokenizer.added_tok2voc}")
 # model
-model = Model(8, 768, 12, 4, 0.1, 'gelu', True, 
-        tokenizer.voc_size, tokenizer.pad_token)
+model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)
@@ -135,7 +137,7 @@ model = DistributedDataParallel(model)
 ## load state dict
 model.load_state_dict(torch.load(f"{pretrain_dir}/models/{args.pretrain_step}.pth", weights_only=True))
 
-criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=tokenizer.pad_token)
+criterion = nn.CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
 optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
 optimizer.zero_grad()
 
@@ -190,15 +192,15 @@ for step in range(args.max_step):
             else:
                 break
     batch = pad_sequence(batch, batch_first=batch_first,
-            padding_value=tokenizer.pad_token).to(torch.long)
+            padding_value=voc_encoder.pad_token).to(torch.long)
     batch = batch.to(device)
     batch_sizes.append(batch.shape[1])
     max_lens.append(batch.shape[0])
     # make weight
     weight = torch.zeros_like(batch, dtype=torch.float)
-    smi_count = torch.cumsum(batch == tokenizer.mol_start_token, dim=0)
+    smi_count = torch.cumsum(batch == voc_encoder.voc2i['[LIGAND]'], dim=0)
     weight[smi_count >= 1] = 1
-    coord_count = torch.cumsum(batch == tokenizer.coord_start_token, dim=0)
+    coord_count = torch.cumsum(batch == voc_encoder.voc2i['[XYZ]'], dim=0)
     weight[coord_count >= 2] = 5
 
     data_end = time()
@@ -206,7 +208,7 @@ for step in range(args.max_step):
 
     with torch.autocast('cuda', dtype=torch.bfloat16):
         pred = model(batch[:-1])
-        loss = criterion(pred.reshape(-1, tokenizer.voc_size), batch[1:].ravel(), weight=weight[1:].ravel())
+        loss = torch.sum(criterion(pred.reshape(-1, voc_encoder.voc_size), batch[1:].ravel())*weight[1:].ravel())
         loss.backward()
     accum_loss += loss.item()
     loss_end = time()

@@ -1,6 +1,7 @@
 import sys, os, logging, pickle, struct
 import torch
 from tqdm import tqdm
+from logging import getLogger
 import numpy as np
 from torch.utils.data import Dataset
 try:
@@ -11,9 +12,12 @@ from ..lmdb import new_lmdb
 from .data import LMDBDataset, get_random_rotation_matrix
 from ..utils import load_gninatypes
 from rdkit import Chem
+from .tokenizer import ProteinAtomTokenizer, StringTokenizer, FloatTokenizer
 
 def randomize_smiles(smi, rstate: np.random.RandomState):
     mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        raise ValueError(f'Invalid SMILES: {smi}')
     nums = np.arange(mol.GetNumAtoms())
     rstate.shuffle(nums)
     mol = Chem.RenumberAtoms(mol, nums.tolist())
@@ -23,46 +27,57 @@ def randomize_smiles(smi, rstate: np.random.RandomState):
 # dataset: {'lig_smi': str, 'lig_coord': np.ndarray, 'rec_atoms': list[str],
 #       'rec_coord': np.ndarray, 'score': float}
 class FinetuneDataset(Dataset):
+    logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, dataset:Dataset, 
-            tokenizer, 
+            protein_atom_tokenizer: ProteinAtomTokenizer,
+            smiles_tokenizer: StringTokenizer,
+            coord_tokenizer: FloatTokenizer,
             seed:int=0):
         self.dataset = dataset
-        tokenizer.add_voc('end')
-        tokenizer.add_voc('score')
-        self.tokenizer = tokenizer
+        self.protein_atom_tokenizer = protein_atom_tokenizer
+        self.smiles_tokenizer = smiles_tokenizer
+        self.coord_tokenizer = coord_tokenizer
         self.rstate = np.random.RandomState(seed)
         
     def __getitem__(self, idx):
         data = self.dataset[idx]
+        try:
+            # randomize SMILES
+            try:
+                lig_smi_ran = randomize_smiles(data['lig_smi'], self.rstate)
+            except Exception as e:
+                self.logger.warning(f"Error in randomizing {data['lig_smi']}; Original SMILS is used.")
+                lig_smi_ran = data['lig_smi']
+            # random rotations
+            lig_coord = data['lig_coord']
+            rec_coord = data['rec_coord']
+            rotation_matrix = get_random_rotation_matrix(self.rstate)
+            lig_coord = np.matmul(lig_coord, rotation_matrix)
+            rec_coord = np.matmul(rec_coord, rotation_matrix)
 
-        # randomize SMILES
-        lig_smi_ran = randomize_smiles(data['lig_smi'])
+            # adjust ligand to O
+            mean = np.mean(lig_coord, axis=0)
+            lig_coord -= mean
+            rec_coord -= mean
 
-        # random rotations
-        lig_coord = data['lig_coord']
-        rec_coord = data['rec_coord']
-        rotation_matrix = get_random_rotation_matrix(self.rstate)
-        lig_coord = np.matmul(lig_coord, rotation_matrix)
-        rec_coord = np.matmul(rec_coord, rotation_matrix)
-
-        # adjust ligand to O
-        mean = np.mean(lig_coord, axis=0)
-        lig_coord -= mean
-        rec_coord -= mean
-
-        rec_atoms = self.tokenizer.tokenize_atoms(data['rec_atoms'])
-        rec_coord = self.tokenizer.tokenize_coord(rec_coord)
-        score = [self.tokenizer.added_voc2tok['score']]+\
-            self.tokenizer.tokenize_float(data['score'])
-        lig_smi = self.tokenizer.tokenize_smi(lig_smi_ran)
-        lig_coord = self.tokenizer.tokenize_coord(lig_coord)
-
-        return rec_atoms+rec_coord+score+lig_smi+lig_coord
+            return ['[POCKET]']+self.protein_atom_tokenizer.tokenize(data['rec_atoms'])+\
+                ['[XYZ]']+self.coord_tokenizer.tokenize_array(rec_coord.ravel())+\
+                ['[SCORE]']+self.coord_tokenizer.tokenize(data['score'])+\
+                ['[LIGAND]']+self.smiles_tokenizer.tokenize(lig_smi_ran)+\
+                ['[XYZ]']+self.coord_tokenizer.tokenize_array(lig_coord.ravel())+\
+                ['[END]']
+        except Exception as e:
+            self.logger.error(f"Error in {idx}")
+            raise e
 
     def __len__(self):
-        return len(self.net_dataset)
+        return len(self.dataset)
 
-
+    def vocs(self):
+        return self.protein_atom_tokenizer.vocs() |\
+            self.smiles_tokenizer.vocs() |\
+            self.coord_tokenizer.vocs() |\
+            {'[POCKET]', '[XYZ]', '[SCORE]', '[LIGAND]', '[END]'}
 
 cddir = "/workspace/cheminfodata/crossdocked/CrossDocked2020"
 class CDDataset(Dataset):
