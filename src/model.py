@@ -154,18 +154,10 @@ class TransformerEncoder(nn.Module):
             output = self.norm(output)
 
         return output
-    
-def expand_param(param: torch.Tensor, dim: int, size: int):
-    mean = torch.mean(param, dim=dim, keepdim=True)
-    std = torch.std(param, dim=dim, keepdim=True)
-    added_shape = list(param.shape)
-    added_shape[dim] = size - added_shape[dim]
-    added_param = torch.randn(*added_shape, device=param.device, dtype=param.dtype)*std+mean
-    param = torch.cat([param, added_param], dim=dim)
-    return param
 
-class Model(TransformerEncoder):
+class Model(nn.Module):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
+    __constants__ = ['norm']
     def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, norm: bool, 
                 vocs: list, padding_idx: int):
         layer = TransformerEncoderLayer(
@@ -178,7 +170,15 @@ class Model(TransformerEncoder):
         else:
             norm = None
         num_embeddings = len(vocs)
-        super().__init__(layer, num_layers=num_layers, norm=norm)
+        
+        super().__init__()
+        torch._C._log_api_usage_once(f"torch.nn.modules.{self.__class__.__name__}")
+        self.layers = _get_clones(layer, num_layers)
+        self.num_layers = num_layers
+        self.norm = norm
+
+
+
         self.embedding = nn.Embedding(num_embeddings, d_model, padding_idx)
         self.predictor = nn.Linear(d_model, num_embeddings)
         self.head_dim = d_model // nhead
@@ -221,16 +221,19 @@ class Model(TransformerEncoder):
         length = x.shape[0]
         mask = nn.Transformer.generate_square_subsequent_mask(length).to(x.device).to(x.dtype)
 
-        # rotate
-        # rstart = time()
         position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
                 for pos in range(len(src))])
         sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
         cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
-        # rend = time()
-        # print(rstart - rend)
 
-        x = super().forward(x, mask, sin, cos)
+        # x = super().forward(x, mask, sin, cos)
+        output = x
+        for mod in self.layers:
+            output = mod(output, src_mask=mask, sin=sin, cos=cos)
+        if self.norm is not None:
+            output = self.norm(output)
+        x = output
+
         return self.predictor(x)
     
     def generate(self, start_voc: str, end_voc: str, max_len: int, batch_size: int) -> torch.Tensor:
@@ -261,7 +264,7 @@ class Model(TransformerEncoder):
         """
         Use kv-cache for generation
         """
-        
+        self.logger.log("generate2 used.")
         device = self.predictor.weight.device
         assert start_voc in self.vocs and end_voc in self.vocs
         vocs = np.array(self.vocs)
@@ -271,14 +274,12 @@ class Model(TransformerEncoder):
         is_finished = torch.full((batch_size,), fill_value=False, device=device)
         input = torch.full((1, batch_size), fill_value=start_token, 
             dtype=torch.long, device=device) # [L, B]
-        ks = [
-            torch.zeros((batch_size, layer.self_attn.num_heads, 0, layer.self_attn.head_dim), 
-                device=device, dtype=torch.float) for layer in self.layers
-        ]
-        vs = [
-            torch.zeros((batch_size, layer.self_attn.num_heads, 0, layer.self_attn.head_dim), 
-                device=device, dtype=torch.float) for layer in self.layers
-        ]
+        cache = {
+            'k': [ torch.zeros((batch_size, layer.self_attn.num_heads, 0, layer.self_attn.head_dim), 
+                    device=device, dtype=torch.float) for layer in self.layers],
+            'v': [ torch.zeros((batch_size, layer.self_attn.num_heads, 0, layer.self_attn.head_dim), 
+                    device=device, dtype=torch.float) for layer in self.layers],
+        }
         outputs = [input.squeeze(0)]
         for pos in tqdm(range(max_len)):
             
@@ -322,8 +323,8 @@ class Model(TransformerEncoder):
                 q = q.view(bsz, num_heads, 1, head_dim)
                 k = k.view(bsz, num_heads, 1, head_dim)
                 v = v.view(bsz, num_heads, 1, head_dim)
-                v = torch.cat([vs[i_layer], v], dim=2)
-                vs[i_layer] = v
+                v = torch.cat([cache['v'][i_layer], v], dim=2)
+                cache['v'][i_layer] = v
 
                 sin_pos = torch.stack([sin, sin], dim=-1).reshape(1, head_dim)
                 cos_pos = torch.stack([cos, cos], dim=-1).reshape(1, head_dim)
@@ -333,8 +334,8 @@ class Model(TransformerEncoder):
                 rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
                 k = k * cos_pos + rotate_half_k * sin_pos
 
-                k = torch.cat([ks[i_layer], k], dim=2)
-                ks[i_layer] = k
+                k = torch.cat([cache['k'][i_layer], k], dim=2)
+                cache['k'][i_layer] = k
 
                 attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0)
                 
