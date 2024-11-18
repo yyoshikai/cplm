@@ -23,8 +23,10 @@ from src.data.tokenizer import StringTokenizer, FloatTokenizer, ProteinAtomToken
     VocEncoder, TokenEncodeDataset
 from src.model import Model
 from src.utils import RandomState
+import src.utils
 from tools.path import timestamp, cleardir, make_result_dir
 from tools.logger import add_file_handler, add_stream_handler
+from tools.rdkit import set_rdkit_logger
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -55,19 +57,21 @@ parser.add_argument("--num-workers", type=int, default=0)
 parser.add_argument("--pin-memory", action='store_true')
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
 parser.add_argument("--gc", action='store_true')
+parser.add_argument("--logtime", action='store_true')
 
 args = parser.parse_args()
 
-
 # environment
 if args.test: args.studyname+='_test'
-result_dir = f"training/finetune/{timestamp()}_{args.studyname}"
+result_dir = f"finetune/results/{timestamp()}_{args.studyname}"
 pretrain_dir = f"training/results/{args.pretrain_name}"
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 100
 main_rank = 0
 batch_first = False
-
+if args.logtime:
+    src.utils.LOGTIME = True
+    
 ## DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
 rank = dist.get_rank()
@@ -104,11 +108,12 @@ if args.sdp_kernel is not None:
     torch.backends.cuda.enable_mem_efficient_sdp(args.sdp_kernel == 'EFFICIENT')
 
 ## logger
-fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{levelname}] {message}"
+fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
 logger = logging.getLogger()
 add_stream_handler(logger, logging.DEBUG if args.test else logging.INFO, fmt=fmt)
 add_file_handler(logger, f"{result_dir}/log.log", logging.DEBUG, fmt=fmt, mode='w')
 logger.setLevel(logging.NOTSET if is_main else logging.WARNING)
+set_rdkit_logger()
 log_step = 1 if args.test else 1000
 logger.info(f"num_workers={args.num_workers}")
 

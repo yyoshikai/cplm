@@ -130,6 +130,7 @@ dmypy.json
 
 /experiments
 /training
+/finetune
 /.vscode
 /preprocess/results
 /preprocess/pjs
@@ -137,6 +138,6 @@ dmypy.json
 todo.md
 /generate
 /README2.md
-
+/graph
 
 

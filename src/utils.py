@@ -43,11 +43,16 @@ class logtime:
         pass
 
 """
+
+LOGTIME = False
+
 class logtime:
     def __init__(self, logger: logging.Logger, prefix: str=''):
         self.logger = logger
         self.prefix = prefix
     def __enter__(self):
-        self.start = time()
+        if LOGTIME:
+            self.start = time()
     def __exit__(self, exc_type, exc_value, traceback):
-        self.logger.debug(f"{self.prefix} {time()-self.start:.4f}") 
+        if LOGTIME:
+            self.logger.debug(f"{self.prefix} {time()-self.start:.4f}") 

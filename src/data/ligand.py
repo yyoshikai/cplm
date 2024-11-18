@@ -1,5 +1,6 @@
 from logging import getLogger
 import numpy as np
+from contextlib import nullcontext
 from torch.utils.data import Dataset
 from rdkit import Chem
 from .data import LMDBDataset, CoordTransform
