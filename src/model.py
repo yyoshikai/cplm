@@ -278,30 +278,6 @@ class Model(nn.Module):
         return self.predictor(x)
     
     def generate(self, start_voc: str, end_voc: str, max_len: int, batch_size: int) -> torch.Tensor:
-        self.logger.info("generate used")
-        device = self.predictor.weight.device
-        assert start_voc in self.vocs and end_voc in self.vocs
-        vocs = np.array(self.vocs)
-        start_token = np.where(vocs == start_voc)[0][0]
-        end_token = np.where(vocs == end_voc)[0][0]
-
-        is_finished = torch.full((batch_size,), fill_value=False, device=device)
-        input = torch.full((1, batch_size), fill_value=start_token, 
-            dtype=torch.long, device=device) # [L, B]
-
-        for i in range(max_len):
-            
-            output = self(input) # [L, B, D]
-
-            prob = F.softmax(output[-1], dim=1) # [B, D]
-            output = torch.multinomial(prob, num_samples=1) # [B, 1]
-            output = output.view(1, -1) # [1, B]
-            is_finished = torch.logical_or(is_finished, output[0] == end_token)
-            input = torch.cat([input, output], dim=0) # [L, B]
-            if torch.all(is_finished): break
-        return input.T
-
-    def generate2(self, start_voc: str, end_voc: str, max_len: int, batch_size: int) -> torch.Tensor:
         """
         Use kv-cache for generation
         """
