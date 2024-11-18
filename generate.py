@@ -78,7 +78,7 @@ outputs = []
 for ibatch in range(nbatch):
     bsz0 = min(batch_size, args.n-batch_size*ibatch)
     with torch.no_grad():
-        output = model.generate(args.start_voc, args.end_voc, args.max_len, bsz0)
+        output = model.generate2(args.start_voc, args.end_voc, args.max_len, bsz0)
         outputs += output.cpu().numpy().tolist()
 
 with open(f"{rdir}/tokens.pkl", 'wb') as f:

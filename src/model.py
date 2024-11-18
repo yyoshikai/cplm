@@ -1,7 +1,7 @@
 from typing import Optional, Union, Callable, Tuple
 import math
 from tqdm import tqdm
-from time import time
+import copy
 import logging
 
 import numpy as np
@@ -134,37 +134,75 @@ class TransformerEncoderLayer(nn.Module):
     def _ff_block(self, x: Tensor) -> Tensor:
         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         return self.dropout2(x)
+    
+    def generate_init_cache(self, batch_size) -> torch.Tensor:
+        return {
+            'k': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
+                    device=self.linear2.weight.device, dtype=self.linear2.weight.dtype),
+            'v': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
+                    device=self.linear2.weight.device, dtype=self.linear2.weight.dtype),
+        }
+    def forward_one(self, x, cache, sin, cos):
+        assert self.norm_first # norm_first=False is not supported
+        xr = x
+        x = self.norm1(x)
+        
+        num_heads = self.self_attn.num_heads
+        in_proj_weight = self.self_attn.in_proj_weight
+        in_proj_bias = self.self_attn.in_proj_bias
+        dropout_p = self.self_attn.dropout
+        out_proj_weight = self.self_attn.out_proj.weight
+        out_proj_bias = self.self_attn.out_proj.bias
+        training=self.self_attn.training
+        
+        # set up shape vars
+        _, bsz, embed_dim = x.shape
+        head_dim = embed_dim // num_heads
 
-class TransformerEncoder(nn.Module):
-    __constants__ = ['norm']
-    logger = logging.getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, encoder_layer, num_layers, norm=None):
-        super().__init__()
-        torch._C._log_api_usage_once(f"torch.nn.modules.{self.__class__.__name__}")
-        self.layers = _get_clones(encoder_layer, num_layers)
-        self.num_layers = num_layers
-        self.norm = norm
+        proj = F.linear(x, in_proj_weight, in_proj_bias)
+        proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
+        q, k, v = proj[0], proj[1], proj[2]
 
-    def forward(self, src: Tensor, mask: Tensor, sin, cos) -> Tensor:
+        q = q.view(1, bsz * num_heads, head_dim).transpose(0, 1)
+        k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
+        v = v.view(v.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
 
-        output = src
-        for mod in self.layers:
-            output = mod(output, src_mask=mask, sin=sin, cos=cos)
-        if self.norm is not None:
-            output = self.norm(output)
+        q = q.view(bsz, num_heads, 1, head_dim)
+        k = k.view(bsz, num_heads, 1, head_dim)
+        v = v.view(bsz, num_heads, 1, head_dim)
+        v = torch.cat([cache['v'], v], dim=2)
+        cache['v'] = v
 
-        return output
+        sin_pos = torch.stack([sin, sin], dim=-1).reshape(1, head_dim)
+        cos_pos = torch.stack([cos, cos], dim=-1).reshape(1, head_dim)
+
+        rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
+        q = q * cos_pos + rotate_half_q * sin_pos
+        rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
+        k = k * cos_pos + rotate_half_k * sin_pos
+
+        k = torch.cat([cache['k'], k], dim=2)
+        cache['k'] = k
+
+        attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0)
+        
+        attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(1*bsz, embed_dim)
+        
+        attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
+        attn_output = attn_output.view(1, bsz, attn_output.size(1))
+        x = attn_output
+
+        x = self.dropout1(x)
+        x = xr + x
+
+        x = x + self.dropout2(self.linear2(self.dropout(self.activation(self.linear1(self.norm2(x))))))
+        return x, cache
 
 class Model(nn.Module):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
     __constants__ = ['norm']
     def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, norm: bool, 
                 vocs: list, padding_idx: int):
-        layer = TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=d_model*d_ff_factor,
-            dropout=dropout, activation=activation,
-            norm_first=True
-        )
         if norm:
             norm = nn.LayerNorm(d_model ,elementwise_affine=False)
         else:
@@ -173,11 +211,14 @@ class Model(nn.Module):
         
         super().__init__()
         torch._C._log_api_usage_once(f"torch.nn.modules.{self.__class__.__name__}")
-        self.layers = _get_clones(layer, num_layers)
+        self.layers = nn.ModuleList([
+            TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=d_model*d_ff_factor,
+            dropout=dropout, activation=activation,
+            norm_first=True) for i in range(num_layers)])
+
         self.num_layers = num_layers
         self.norm = norm
-
-
 
         self.embedding = nn.Embedding(num_embeddings, d_model, padding_idx)
         self.predictor = nn.Linear(d_model, num_embeddings)
@@ -228,8 +269,8 @@ class Model(nn.Module):
 
         # x = super().forward(x, mask, sin, cos)
         output = x
-        for mod in self.layers:
-            output = mod(output, src_mask=mask, sin=sin, cos=cos)
+        for layer in self.layers:
+            output = layer(output, src_mask=mask, sin=sin, cos=cos)
         if self.norm is not None:
             output = self.norm(output)
         x = output
@@ -264,7 +305,7 @@ class Model(nn.Module):
         """
         Use kv-cache for generation
         """
-        self.logger.log("generate2 used.")
+        self.logger.info("generate2 used.")
         device = self.predictor.weight.device
         assert start_voc in self.vocs and end_voc in self.vocs
         vocs = np.array(self.vocs)
@@ -274,81 +315,22 @@ class Model(nn.Module):
         is_finished = torch.full((batch_size,), fill_value=False, device=device)
         input = torch.full((1, batch_size), fill_value=start_token, 
             dtype=torch.long, device=device) # [L, B]
-        cache = {
-            'k': [ torch.zeros((batch_size, layer.self_attn.num_heads, 0, layer.self_attn.head_dim), 
-                    device=device, dtype=torch.float) for layer in self.layers],
-            'v': [ torch.zeros((batch_size, layer.self_attn.num_heads, 0, layer.self_attn.head_dim), 
-                    device=device, dtype=torch.float) for layer in self.layers],
-        }
+        cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
         outputs = [input.squeeze(0)]
         for pos in tqdm(range(max_len)):
-            
-            src = input
 
-            x = self.embedding(src)
+            x = self.embedding(input)
+
             position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
-                    for pos in range(pos+1)])
-            
+                    for pos in range(pos+1)])            
             sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
             cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
             sin = sin[pos:pos+1]
             cos = cos[pos:pos+1]
 
-            mod: TransformerEncoderLayer
-            for i_layer, mod in enumerate(self.layers):
-                assert mod.norm_first # norm_first=False is not supported
-                xr = x
-                x = mod.norm1(x)
-                
-                num_heads = mod.self_attn.num_heads
-                in_proj_weight = mod.self_attn.in_proj_weight
-                in_proj_bias = mod.self_attn.in_proj_bias
-                dropout_p = mod.self_attn.dropout
-                out_proj_weight = mod.self_attn.out_proj.weight
-                out_proj_bias = mod.self_attn.out_proj.bias
-                training=mod.self_attn.training
-                
-                # set up shape vars
-                _, bsz, embed_dim = x.shape
-                head_dim = embed_dim // num_heads
-
-                proj = F.linear(x, in_proj_weight, in_proj_bias)
-                proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
-                q, k, v = proj[0], proj[1], proj[2]
-
-                q = q.view(1, bsz * num_heads, head_dim).transpose(0, 1)
-                k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
-                v = v.view(v.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
-
-                q = q.view(bsz, num_heads, 1, head_dim)
-                k = k.view(bsz, num_heads, 1, head_dim)
-                v = v.view(bsz, num_heads, 1, head_dim)
-                v = torch.cat([cache['v'][i_layer], v], dim=2)
-                cache['v'][i_layer] = v
-
-                sin_pos = torch.stack([sin, sin], dim=-1).reshape(1, head_dim)
-                cos_pos = torch.stack([cos, cos], dim=-1).reshape(1, head_dim)
-
-                rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
-                q = q * cos_pos + rotate_half_q * sin_pos
-                rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
-                k = k * cos_pos + rotate_half_k * sin_pos
-
-                k = torch.cat([cache['k'][i_layer], k], dim=2)
-                cache['k'][i_layer] = k
-
-                attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0)
-                
-                attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(1*bsz, embed_dim)
-                
-                attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
-                attn_output = attn_output.view(1, bsz, attn_output.size(1))
-                x = attn_output
-
-                x = mod.dropout1(x)
-                x = xr + x
-
-                x = x + mod.dropout2(mod.linear2(mod.dropout(mod.activation(mod.linear1(mod.norm2(x))))))
+            layer: TransformerEncoderLayer
+            for i_layer, layer in enumerate(self.layers):
+                x, cache[i_layer] = layer.forward_one(x, cache[i_layer], sin, cos)
 
             if self.norm is not None:
                 x = self.norm(x)
