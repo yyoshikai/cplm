@@ -44,7 +44,7 @@ class logtime:
 
 """
 
-LOGTIME = False
+LOGTIME = True
 
 class logtime:
     def __init__(self, logger: logging.Logger, prefix: str=''):

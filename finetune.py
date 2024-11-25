@@ -69,8 +69,7 @@ if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 100
 main_rank = 0
 batch_first = False
-if args.logtime:
-    src.utils.LOGTIME = True
+src.utils.LOGTIME = args.logtime
     
 ## DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
@@ -140,7 +139,9 @@ model.to(device)
 model = DistributedDataParallel(model)
 
 ## load state dict
-model.load_state_dict(torch.load(f"{pretrain_dir}/models/{args.pretrain_step}.pth", weights_only=True))
+state_dict = torch.load(f"{pretrain_dir}/models/{args.pretrain_step}.pth", 
+    map_location={f'cuda:{main_rank}': f'cuda:{rank}'}, weights_only=True)
+model.load_state_dict(state_dict)
 
 criterion = nn.CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
 optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)

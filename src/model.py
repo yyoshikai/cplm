@@ -277,20 +277,21 @@ class Model(nn.Module):
 
         return self.predictor(x)
     
-    def generate(self, start_voc: str, end_voc: str, max_len: int, batch_size: int) -> torch.Tensor:
+    def generate(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int) -> torch.Tensor:
         """
         Use kv-cache for generation
+
+        context: torch.Tensor(long)[L, B]
         """
         self.logger.info("generate2 used.")
         device = self.predictor.weight.device
-        assert start_voc in self.vocs and end_voc in self.vocs
         vocs = np.array(self.vocs)
-        start_token = np.where(vocs == start_voc)[0][0]
         end_token = np.where(vocs == end_voc)[0][0]
+        context_len, batch_size = context.shape
+        assert context_len >= 1
 
         is_finished = torch.full((batch_size,), fill_value=False, device=device)
-        input = torch.full((1, batch_size), fill_value=start_token, 
-            dtype=torch.long, device=device) # [L, B]
+        input = context[:1] # [L, B]
         cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
         outputs = [input.squeeze(0)]
         for pos in tqdm(range(max_len)):
@@ -315,7 +316,11 @@ class Model(nn.Module):
             prob = F.softmax(x[0], dim=1) # [B, D]
             output = torch.multinomial(prob, num_samples=1) # [B, 1]
             output = output.view(-1) # [B]
+            if pos < context_len-1:
+                pos_context = context[pos+1]
+                output[pos_context != pad_token] = pos_context[pos_context != pad_token]
             outputs.append(output)
+                
             is_finished = torch.logical_or(is_finished, output == end_token)
             input = output.unsqueeze(0)
             if torch.all(is_finished): break

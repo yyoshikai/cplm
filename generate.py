@@ -1,12 +1,7 @@
 import sys, os, argparse
 import math, itertools, pickle
-from addict import Dict
-from tqdm import tqdm
 import yaml
-import numpy as np
-import pandas as pd
 import torch
-import torch.nn.functional as F
 
 
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
@@ -61,7 +56,6 @@ assert args.start_voc in vocs, f"{args.start_voc=} not in vocs"
 assert args.end_voc in vocs, f"{args.end_voc=} not in vocs"
 voc_encoder = VocEncoder(vocs[1:])
 assert vocs == voc_encoder.i2voc
-start_token = voc_encoder.voc2i[args.start_voc]
 end_token = voc_encoder.voc2i[args.end_voc]
 
 # model
@@ -77,8 +71,10 @@ nbatch = math.ceil(float(args.n)/float(batch_size))
 outputs = []
 for ibatch in range(nbatch):
     bsz0 = min(batch_size, args.n-batch_size*ibatch)
+    context = torch.full((1, bsz0), dtype=torch.long, device=device, 
+        fill_value=voc_encoder.voc2i[args.start_voc])
     with torch.no_grad():
-        output = model.generate(args.start_voc, args.end_voc, args.max_len, bsz0)
+        output = model.generate(context, args.end_voc, args.max_len, voc_encoder.pad_token)
         outputs += output.cpu().numpy().tolist()
 
 with open(f"{rdir}/tokens.pkl", 'wb') as f:
