@@ -46,6 +46,10 @@ class logtime:
 
 LOGTIME = True
 
+def set_logtime(logtime: bool):
+    global LOGTIME
+    LOGTIME = logtime
+
 class logtime:
     def __init__(self, logger: logging.Logger, prefix: str=''):
         self.logger = logger

@@ -20,7 +20,7 @@ from src.data import *
 from src.data.protein import PDBFragmentDataset, PDBFragment2Dataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
-from src.utils import RandomState
+from src.utils import RandomState, set_logtime
 from tools.path import timestamp, cleardir, make_result_dir
 from tools.logger import add_file_handler, add_stream_handler
 from tools.rdkit import set_rdkit_logger
@@ -69,8 +69,7 @@ if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
 main_rank = 0
 batch_first = False
-if args.logtime:
-    LOGTIME = True
+set_logtime(args.logtime)
 
 ## DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
@@ -225,14 +224,19 @@ for step in range(args.max_step):
                 continue
             else:
                 break
-    # log tokens
-    # for i in range(len(batch)):
-    #     vocs = voc_encoder.decode(batch[i])
-    #     logger.debug(f"{i}:{','.join(vocs)}") 
 
     batch = pad_sequence(batch, batch_first=batch_first,
             padding_value=voc_encoder.pad_token).to(torch.long)
     
+    # log tokens in initial few steps
+    if step < 10:
+        rstate = np.random.RandomState(args.seed+step)
+        idxs = np.arange(batch.shape[1])
+        if len(idxs) > 10: 
+            idxs = np.sort(rstate.choice(batch.shape[1], size=10, replace=False))
+        logger.debug(f"batch of step {step}:")
+        for idx in idxs:
+            logger.debug(f"  [{idx:3}]={','.join(voc_encoder.decode(batch[:,idx].tolist()))}")
 
     batch = batch.to(device)
     batch_sizes.append(batch.shape[1])

@@ -16,16 +16,6 @@ from ..utils.logger import add_file_handler, get_logger
 from ..utils.rdkit import set_rdkit_logger
 from .protein import slice_str
 
-def randomize_smiles(smi, rstate: np.random.RandomState):
-    mol = Chem.MolFromSmiles(smi)
-    if mol is None:
-        raise ValueError(f'Invalid SMILES: {smi}')
-    nums = np.arange(mol.GetNumAtoms())
-    rstate.shuffle(nums)
-    mol = Chem.RenumberAtoms(mol, nums.tolist())
-    ran = Chem.MolToSmiles(mol, canonical=False, isomericSmiles=True)
-    return ran
-
 class FinetuneDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
     def __init__(self, save_dir: str, protein_atom_tokenizer: ProteinAtomTokenizer,
@@ -65,6 +55,7 @@ class FinetuneDataset(Dataset):
             lig_mol: Chem.Mol
             lig_mol, score, = (data[key] for key in ['lig_mol', 'score'])
             score = float(score)
+            
             ## randomize
             nums = np.arange(lig_mol.GetNumAtoms())
             self.rstate.shuffle(nums)
@@ -126,7 +117,7 @@ class FinetuneDataset(Dataset):
 
             ## ligand
             if self.out_ligand:
-                ['[LIGAND]']+self.smiles_tokenizer.tokenize(lig_smi)+\
+                output += ['[LIGAND]']+self.smiles_tokenizer.tokenize(lig_smi)+\
                 ['[XYZ]']+self.coord_tokenizer.tokenize_array(lig_coord.ravel())
             output += ['[END]']
 
