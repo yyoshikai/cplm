@@ -12,21 +12,21 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel
 from torch.nn.utils.rnn import pad_sequence
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data import SliceDataset, CDDataset, FinetuneDataset
+from src.data import SliceDataset, FinetuneDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, ProteinAtomTokenizer,\
     VocEncoder, TokenEncodeDataset
 from src.model import Model
 from src.utils import RandomState
 import src.utils
-from tools.path import timestamp, cleardir, make_result_dir
-from tools.logger import add_file_handler, add_stream_handler
-from tools.rdkit import set_rdkit_logger
+from src.utils.path import timestamp, cleardir
+from src.utils.logger import add_file_handler, add_stream_handler
+from src.utils.rdkit import set_rdkit_logger
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -47,7 +47,7 @@ parser.add_argument("--clip_grad_norm", type=int, default=1.0)
 parser.add_argument("--coord-noise-std", type=float, default=50.0)
 
 ## data
-parser.add_argument("--data-type", required=True)
+parser.add_argument("--finetune-save-dir", required=True)
 
 ## environments
 parser.add_argument("--token-per-batch", type=int, default=25000)
@@ -121,8 +121,8 @@ smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().spl
 coord_tokenizer = FloatTokenizer(-pretrain_config.coord_range, pretrain_config.coord_range)
 protein_atom_tokenizer = ProteinAtomTokenizer()
 
-train_data = CDDataset(f"{WORKDIR}/cplm/preprocess/results/docking_types/{args.data_type}.lmdb")
-train_data = FinetuneDataset(train_data, protein_atom_tokenizer, smiles_tokenizer, coord_tokenizer)
+train_data = FinetuneDataset(args.finetune_save_dir, 
+    protein_atom_tokenizer, smiles_tokenizer, coord_tokenizer, args.seed, mol_atom_h=True, mol_coord_h=True)
 voc_encoder = VocEncoder(train_data.vocs())
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 

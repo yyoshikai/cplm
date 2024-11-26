@@ -19,7 +19,7 @@ try:
     from Bio.PDB import FastMMCIFParser, PPBuilder
 except ModuleNotFoundError:
     FastMMCIFParser = PPBuilder = None
-from tools.logger import get_logger, add_file_handler
+from ..utils.logger import get_logger, add_file_handler
 
 # https://stackoverflow.com/questions/39042214/how-can-i-slice-each-element-of-a-numpy-array-of-strings
 def slice_str(x: np.ndarray, end: int):

@@ -12,10 +12,12 @@ done
 python process_docking_types.py --input it2_tt_v1.3_10p20n_test0 2>preprocess/results/docking_types/it2_tt_v1.3_10p20n_test0.stderr
 python process_docking_types.py --input it2_tt_v1.3_10p20n_test1 2>preprocess/results/docking_types/it2_tt_v1.3_10p20n_test1.stderr
 notice
-
-hist
-
 # 241119
 python process_docking_types.py --input it2_tt_v1.3_0_train0 2>preprocess/results/docking_types/it2_tt_v1.3_0_train0.stderr
 python process_docking_types.py --input it2_tt_v1.3_0_test0 2>preprocess/results/docking_types/it2_tt_v1.3_0_test0.stderr
 notice
+hist
+
+# 241126 modified FinetuneDataset
+python process_finetune_dataset.py --radius 4 --test --output debug
+

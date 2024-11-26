@@ -1,21 +1,20 @@
-import sys, os, logging, pickle, struct, bisect
-from glob import glob
-import torch
+import sys, os, pickle, io, psutil, logging
 from tqdm import tqdm
 from logging import getLogger
 import numpy as np
 import pandas as pd
-import concurrent.futures as cf
+from collections import defaultdict
 from torch.utils.data import Dataset
-try:
-    from openbabel import pybel
-except ModuleNotFoundError:
-    pybel = None
+from prody import parsePDB, parsePDBStream, confProDy, Contacts
 from ..lmdb import new_lmdb
 from .data import LMDBDataset, get_random_rotation_matrix
-from ..utils import load_gninatypes, logtime
+from ..utils import logtime
 from rdkit import Chem
 from .tokenizer import ProteinAtomTokenizer, StringTokenizer, FloatTokenizer
+confProDy(verbosity='none')
+from ..utils.logger import add_file_handler, get_logger
+from ..utils.rdkit import set_rdkit_logger
+from .protein import slice_str
 
 def randomize_smiles(smi, rstate: np.random.RandomState):
     mol = Chem.MolFromSmiles(smi)
@@ -27,18 +26,22 @@ def randomize_smiles(smi, rstate: np.random.RandomState):
     ran = Chem.MolToSmiles(mol, canonical=False, isomericSmiles=True)
     return ran
 
-# dataset: {'lig_smi': str, 'lig_coord': np.ndarray, 'rec_atoms': list[str],
-#       'rec_coord': np.ndarray, 'score': float}
 class FinetuneDataset(Dataset):
-    logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, dataset:Dataset, 
-            protein_atom_tokenizer: ProteinAtomTokenizer,
-            smiles_tokenizer: StringTokenizer,
-            coord_tokenizer: FloatTokenizer,
-            seed:int=0, 
-            out_ligand: bool=True, 
-            coord_center: str='ligand'):
-        self.dataset = dataset
+    logger = get_logger(f"{__module__}.{__qualname__}")
+    def __init__(self, save_dir: str, protein_atom_tokenizer: ProteinAtomTokenizer,
+            smiles_tokenizer: StringTokenizer, coord_tokenizer: FloatTokenizer,
+            seed:int=0, out_ligand: bool=True, coord_center: str='ligand', 
+            pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
+            pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
+            mol_atom_h: bool=False, mol_coord_h: bool=True):
+        """
+        train.py: 
+            mol: atom_h=True, coord_h=True, 
+            pocket: atom_heavy: bool = True, atom_h: bool = False,
+                coord_heavy: bool=False, coord_h: bool = False
+        BindGPTも↑と同じ。
+        """
+        self.lmdb_dataset = LMDBDataset(f"{save_dir}/main.lmdb", key_is_indexed=True)
         self.protein_atom_tokenizer = protein_atom_tokenizer
         self.smiles_tokenizer = smiles_tokenizer
         self.coord_tokenizer = coord_tokenizer
@@ -46,204 +49,182 @@ class FinetuneDataset(Dataset):
         self.out_ligand = out_ligand
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
-        
-    def __getitem__(self, idx):
-        data = self.dataset[idx]
-        with logtime(self.logger, f'[{idx}]'):
-            output = []
-
-            # normalize coords
-            lig_coord = data['lig_coord']
-            rec_coord = data['rec_coord']
-
-            ## random rotation
-            rotation_matrix = get_random_rotation_matrix(self.rstate)
-            lig_coord = np.matmul(lig_coord, rotation_matrix)
-            rec_coord = np.matmul(rec_coord, rotation_matrix)
-
-            ## set center
-            if self.coord_center == 'ligand':
-                center = np.mean(lig_coord, axis=0)
-            elif self.coord_center == 'pocket':
-                center = np.mean(rec_coord, axis=0)
-            else:
-                center = np.zeros(3, dtype=float)
-            lig_coord -= center
-            rec_coord -= center
-
-            # pocket
-            output += ['[POCKET]']+self.protein_atom_tokenizer.tokenize(data['rec_atoms'])+\
-                ['[XYZ]']+self.coord_tokenizer.tokenize_array(rec_coord.ravel())
-
-            # score
-            output += ['[SCORE]']+self.coord_tokenizer.tokenize(data['score'])
-
-            # ligand
-            if self.out_ligand:
-                # randomize SMILES
-                try:
-                    lig_smi_ran = randomize_smiles(data['lig_smi'], self.rstate)
-                except Exception as e:
-                    self.logger.warning(f"Error in randomizing {data['lig_smi']}; Original SMILS is used.")
-                    lig_smi_ran = data['lig_smi']
-
-                
-                ['[LIGAND]']+self.smiles_tokenizer.tokenize(lig_smi_ran)+\
-                ['[XYZ]']+self.coord_tokenizer.tokenize_array(lig_coord.ravel())+\
-                ['[END]']
-
-            return output
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def vocs(self):
-        return self.protein_atom_tokenizer.vocs() |\
-            self.smiles_tokenizer.vocs() |\
-            self.coord_tokenizer.vocs() |\
-            {'[POCKET]', '[XYZ]', '[SCORE]', '[LIGAND]', '[END]'}
-
-def process_line(line):
-    label, pk, rmsd, rec_file, lig_file, score = line[:-1].split()
-    score = float(score[1:])
-    rec_pocket, rec = rec_file.split('/')
-
-    lig_pocket, lig = lig_file.split('/')
-    lig_rec, lig = lig.split('_rec_')
-    lig, lig_cond = lig.split('_lig_')
-
-    assert rec == lig_rec+'_rec_0.gninatypes', f"rec={rec}, lig_rec={lig_rec}"
-    rec = lig_rec
-    assert lig_pocket == rec_pocket, f"lig_pocket={lig_pocket}, rec_pocket={rec_pocket}"
-    pocket = lig_pocket
-    assert lig_cond[-11:] == '.gninatypes', lig_cond
-    lig_cond = lig_cond[:-11]
-    lig_mol = next(pybel.readfile('pdb', f"{cddir}/{pocket}/{lig}_lig.pdb"))
-    lig_smi = lig_mol.write().split('\t')[0]
-    data = {
-        'label': label,
-        'pk': pk,
-        'rmsd': rmsd,
-        'pocket': pocket,
-        'lig': lig,
-        'lig_smi': lig_smi,
-        'rec': rec,
-        'lig_cond': lig_cond,
-        'score': score
-    }
-    data = pickle.dumps(data)
-    return data
-
-cddir = "/workspace/cheminfodata/crossdocked/CrossDocked2020"
-class CDDataset(Dataset):
-    logger = logging.getLogger(__qualname__)
-    def __init__(self, lmdb_path):
-        """
-        CrossDockedの何らかのデータから取り出す。
-        タンパク質は全てのタンパク質にする。
-        """
-        self.net_dataset = LMDBDataset(lmdb_path, True)
-
-    def __getitem__(self, idx):
-        data = self.net_dataset[idx]
-        pocket, rec, lig, lig_cond, lig_smi = data['pocket'], data['rec'], \
-            data['lig'], data['lig_cond'], data['lig_smi']
-
-        # ligand coordinate
-        lig_coord = load_gninatypes(f"{cddir}/{pocket}/{rec}_rec_{lig}_lig_{lig_cond}.gninatypes")
-        lig_coord = np.array(lig_coord)[:, :3]
-        
-
-        # ポケットの原子と座標
-        rec_atoms = []
-        rec_coord = []
-        with open(f"{cddir}/{pocket}/{rec}_rec.pdb") as f:
-            for line in f:
-                if line[:6] == 'ATOM  ':
-                    atom = line[13:16]
-                    if atom[:2] == 'CA':
-                        rec_atoms.append('CA')
-                        x = float(line[30:38])
-                        y = float(line[38:46])
-                        z = float(line[46:54])
-                        rec_coord.append((x, y, z))
-                    elif atom[0] in ['C', 'N', 'O', 'S']:
-                        rec_atoms.append(atom[0])
-        rec_coord = np.array(rec_coord)
-        
-        return {'lig_smi': lig_smi, 'lig_coord': lig_coord,
-            'rec_atoms': rec_atoms, 'rec_coord': rec_coord, 
-            'score': data['score']}
-
-    def __len__(self):
-        return len(self.net_dataset)
-    
-
-    @classmethod
-    def process_types(cls, input, output):
-        """
-        cross dockedのtypesファイルをlmdbに変換する。
-        ※テキストファイルで読み込むと並列が重いため。
-        """
-        os.makedirs(os.path.dirname(output), exist_ok=True)
-
-        lmdb_path = f"{output}.lmdb"
-        env, txn = new_lmdb(lmdb_path)
-
-        idx = 0
-        with logtime(cls.logger, 'process time='):
-            with open(input) as f:
-                for idx, line in enumerate(tqdm(f, file=sys.stdout)):
-                    data = process_line(line)
-                    txn.put(str(idx).encode('ascii'), data)
-        txn.commit()
-        env.close()
-
-class CDBindGPTDataset(Dataset):
-    logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, save_dir, 
-            pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
-            pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
-            mol_atom_h: bool=False, mol_coord_h: bool=True):
-        """
-        BindGPTに従い, 'docked'と'minimized'データのみ利用する。
-        """
-        self.df = pd.read_csv(f"{save_dir}/files.tsv", sep='\t', index_col=0)
-        self.offsets = [0]+np.cumsum(self.df['n']).tolist()
         self.pocket_atom_heavy = pocket_atom_heavy
         self.pocket_atom_h = pocket_atom_h
         self.pocket_coord_heavy = pocket_coord_heavy
         self.pocket_coord_h = pocket_coord_h
         self.mol_atom_h = mol_atom_h
         self.mol_coord_h = mol_coord_h
+        assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
+        data = self.lmdb_dataset[idx]
         with logtime(self.logger, f"[{idx}]"):
-            file_idx = bisect.bisect_right(self.offsets, idx) - 1
-            mol_idx = idx - self.offsets[file_idx]
-            assert 0 <= file_idx < len(self.df), f"index {idx} is out of bounds"
-            file = self.df.index[file_idx]
-            mol = list(Chem.SDMolSupplier(file))[mol_idx]
+            
+            # ligand
+            lig_mol: Chem.Mol
+            lig_mol, score, = (data[key] for key in ['lig_mol', 'score'])
+            score = float(score)
+            ## randomize
+            nums = np.arange(lig_mol.GetNumAtoms())
+            self.rstate.shuffle(nums)
+            lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
+            
+            ## remove hydrogen
+            if not self.mol_atom_h:
+                lig_mol = Chem.RemoveHs(lig_mol)
+
+            lig_smi = Chem.MolToSmiles(lig_mol, canonical=False)
+            conf_pos = lig_mol.GetConformer().GetPositions()
+            atom_idxs = np.array(lig_mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
+            if self.mol_atom_h and not self.mol_coord_h:
+                atom_idxs = [idx for idx in atom_idxs if lig_mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
+                lig_coord = conf_pos[atom_idxs]
+            else:
+                lig_coord = conf_pos[atom_idxs]
+
+            # pocket
+            pocket_atoms, pocket_coord = data['pocket_atoms'], data['pocket_coordinate']
+
+            ## calc mask
+            is_ca = pocket_atoms == 'CA'
+            is_h = slice_str(pocket_atoms, 1) == 'H'
+            is_heavy = (~is_ca)&(~is_h)
+            atom_mask = is_ca.copy()
+            if self.pocket_atom_heavy: atom_mask |= is_heavy
+            if self.pocket_atom_h: atom_mask |= is_h
+            pocket_atoms = pocket_atoms[atom_mask]
+            coord_mask = is_ca.copy()
+            if self.pocket_coord_heavy: coord_mask |= is_heavy
+            if self.pocket_coord_h: coord_mask |= is_h
+            pocket_coord = pocket_coord[coord_mask]
+
+            # normalize coords
+            ## random rotation
+            rotation_matrix = get_random_rotation_matrix(self.rstate)
+            lig_coord = np.matmul(lig_coord, rotation_matrix)
+            pocket_coord = np.matmul(pocket_coord, rotation_matrix)
+            
+            ## set center
+            if self.coord_center == 'ligand':
+                center = np.mean(lig_coord, axis=0)
+            elif self.coord_center == 'pocket':
+                center = np.mean(pocket_coord, axis=0)
+            else:
+                center = np.zeros(3, dtype=float)
+            lig_coord -= center
+            pocket_coord -= center
+
+            # output
+            output = []
+            ## pocket
+            output += ['[POCKET]']+self.protein_atom_tokenizer.tokenize(pocket_atoms)+\
+                ['[XYZ]']+self.coord_tokenizer.tokenize_array(pocket_coord.ravel())
+
+            ## score
+            output += ['[SCORE]']+self.coord_tokenizer.tokenize(score)
+
+            ## ligand
+            if self.out_ligand:
+                ['[LIGAND]']+self.smiles_tokenizer.tokenize(lig_smi)+\
+                ['[XYZ]']+self.coord_tokenizer.tokenize_array(lig_coord.ravel())
+            output += ['[END]']
+
+            return output
 
     def __len__(self):
-        return self.offsets[-1]
-
+        return len(self.lmdb_dataset)
+    
+    def vocs(self):
+        return self.protein_atom_tokenizer.vocs()|\
+            self.coord_tokenizer.vocs()|\
+            self.smiles_tokenizer.vocs()|{'[POCKET]', '[XYZ]', '[END]', '[SCORE]', '[LIGAND]'}
 
     @classmethod
-    def preprocess(self, save_dir):
-        files = glob(f"{cddir}/*/*_lig_tt_min.sdf")\
-            +glob(f"{cddir}/*/*_lig_tt_docked.sdf")
-        files = sorted(files)
+    def preprocess(cls, cddir, save_dir, radius, test=False):
+        os.makedirs(save_dir, exist_ok=True)
+        add_file_handler(getLogger(), f"{save_dir}/root.log", level=logging.INFO)
+        add_file_handler(cls.logger, f"{save_dir}/process.log")
+        set_rdkit_logger()
+        cls.logger.info(f"{radius=}")
 
-        ns = []
-        for file in files:
-            mols = len(Chem.SDMolSupplier(file))
-            ns.append(len(mols))
-        
-        df = pd.DataFrame({'file':files, 'n_mol': ns})
-        df.to_csv(f"{save_dir}/files.tsv", index=False, sep='\t')
+        env, txn = new_lmdb(f"{save_dir}/main.lmdb")
+        n_invalid = 0
+        n_far = 0
+        idx = 0
+        cls.logger.info("Processing...")
+        lig_idx = None
+        if test:
+            protein2n = defaultdict(int)
+        with open("/workspace/cheminfodata/crossdocked/projects/survey/files/dirs.txt") as fd:
+            dnames = sorted(fd.read().splitlines())
+            if test: dnames = dnames[:20]
+            for dname in (pbar:=tqdm(dnames)):
+                with open(f"/workspace/cheminfodata/crossdocked/projects/survey/files/{dname}.txt") as ff:
+                    for basename in sorted(ff.read().splitlines()):
+                        if not basename.endswith(('lig_tt_docked.sdf', 'lig_tt_min.sdf')): continue
 
+                        protein_name = basename.split('_rec_')[0]
+                        protein_agroup = parsePDB(f"{cddir}/{dname}/{protein_name}_rec.pdb")
+                        protein_contact = Contacts(protein_agroup)
 
-        
+                        # for debug
+                        if test:
+                            if protein2n[protein_name] >= 10:
+                                continue
 
+                        lig_sup = Chem.SDMolSupplier(f"{cddir}/{dname}/{basename}", removeHs=False)
+                        for lig_idx, lig_mol in enumerate(lig_sup):
+                            if lig_mol is None:
+                                n_invalid+=1
+                                continue
+                            try:
+                                # 水素付加
+                                lig_mol = Chem.AddHs(lig_mol, addCoords=True)
 
+                                # ポケットをProDyで抽出
+                                lig_pdb = Chem.MolToPDBBlock(lig_mol)
+                                lig_agroup = parsePDBStream(io.StringIO(lig_pdb))
+                                pocket = protein_contact.select(radius, lig_agroup)
+                                if pocket is None:
+                                    cls.logger.warning(f"Far away ligand: {dname=}, {basename=}, {lig_idx=}")
+                                    n_far += 1
+                                    continue
+
+                                # データ作成
+                                pocket_atoms = pocket.getData('name')
+                                pocket_coord = pocket.getCoords()
+                                data = {
+                                    'lig_mol': lig_mol,  
+                                    'score': lig_mol.GetProp('minimizedAffinity'),
+                                    'pocket_atoms': pocket_atoms,
+                                    'pocket_coordinate': pocket_coord
+                                }
+                                txn.put(str(idx).encode('ascii'), pickle.dumps(data))
+                                idx += 1
+
+                                if idx % 100 == 0:
+                                    mem = psutil.virtual_memory()
+                                    pbar.set_postfix_str(f"memory={mem.used/(2**30):.03f}/{mem.total/(2**30):.03f}")
+                                
+                                if test:
+                                    protein2n[protein_name] += 1
+                                    if protein2n[protein_name] >= 10:
+                                        break
+
+                            except Exception as e:
+                                cls.logger.error(f"Error at {dname, basename, lig_idx}: {e}")
+                                cls.logger.error(f"{lig_mol=}")
+                                cls.logger.error(f"{lig_pdb=}")
+                                cls.logger.error(f"{lig_agroup=}")
+                                cls.logger.error(f"{pocket=}")
+                                cls.logger.error(f"{protein_agroup=}")
+                                cls.logger.error(f"{protein_contact=}")
+                                raise e
+
+                        lig_idx = None
+        txn.commit()
+        env.close()
+        cls.logger.info(f"# of data: {idx}")
+        cls.logger.info(f"# of invalid mols: {n_invalid}")
+        cls.logger.info(f"# of far away ligand: {n_far}")
