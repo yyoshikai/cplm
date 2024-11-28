@@ -12,7 +12,7 @@ from tqdm import tqdm as _tqdm
 from time import time
  
 from .tokenizer import ProteinAtomTokenizer, FloatTokenizer
-from ..lmdb import new_lmdb, load_lmdb
+from ..utils.lmdb import new_lmdb, load_lmdb
 from .data import CoordTransform, LMDBDataset, LMDB
 from ..utils import logtime
 try:

@@ -6,7 +6,7 @@ import pandas as pd
 from collections import defaultdict
 from torch.utils.data import Dataset
 from prody import parsePDB, parsePDBStream, confProDy, Contacts
-from ..lmdb import new_lmdb
+from ..utils.lmdb import new_lmdb
 from .data import LMDBDataset, get_random_rotation_matrix
 from ..utils import logtime
 from rdkit import Chem

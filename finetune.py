@@ -45,6 +45,7 @@ parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--weight-decay", type=float, default=0.01)
 parser.add_argument("--clip_grad_norm", type=int, default=1.0)
 parser.add_argument("--coord-noise-std", type=float, default=50.0)
+parser.add_argument("--coord-range", type=float, help='Defaults to value in training')
 
 ## data
 parser.add_argument("--finetune-save-dir", required=True)
@@ -91,6 +92,8 @@ if is_main:
 
 ## load config
 pretrain_config = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
+if args.coord_range is None:
+    args.coord_range = pretrain_config.coord_range
 
 ## seed
 rstate = RandomState(args.seed)
@@ -109,7 +112,7 @@ if args.sdp_kernel is not None:
 ## logger
 fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
 logger = logging.getLogger()
-add_stream_handler(logger, logging.DEBUG if args.test else logging.INFO, fmt=fmt)
+add_stream_handler(logger, logging.INFO, fmt=fmt)
 add_file_handler(logger, f"{result_dir}/log.log", logging.DEBUG, fmt=fmt, mode='w')
 logger.setLevel(logging.NOTSET if is_main else logging.WARNING)
 set_rdkit_logger()
@@ -118,7 +121,7 @@ logger.info(f"num_workers={args.num_workers}")
 
 # data
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
-coord_tokenizer = FloatTokenizer(-pretrain_config.coord_range, pretrain_config.coord_range)
+coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
 protein_atom_tokenizer = ProteinAtomTokenizer()
 
 train_data = FinetuneDataset(args.finetune_save_dir, 
@@ -236,7 +239,6 @@ for step in range(args.max_step):
     dist.all_reduce(reduced_accum_token)
 
     if reduced_accum_token >= args.token_per_step:
-        logger.debug("optimizer stepped")
         optim_start = time()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
         optimizer.step()
@@ -272,7 +274,6 @@ for step in range(args.max_step):
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
             if args.gc:
                 gc.collect()
-        logger.debug(f"optim_time={optim_end-optim_start:.03f}")
         n_accum_token = 0
         accum_loss = 0
     if (step+1) % log_step == 0:

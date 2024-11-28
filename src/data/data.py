@@ -89,12 +89,12 @@ class SliceDataset(Dataset):
     def __init__(self, net_dataset, step, start):
         self.net_dataset = net_dataset
         net_size = len(self.net_dataset)
-        self.size = net_size // step + (1 if net_size % step > start else 0)
+        self.size = net_size // step + (1 if (net_size % step) > start else 0)
         self.step = step
         self.start = start
     
     def __getitem__(self, idx):
-        return self.net_dataset[idx//self.step+self.start]
+        return self.net_dataset[idx*self.step+self.start]
 
     def __len__(self):
         return self.size

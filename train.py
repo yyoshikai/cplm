@@ -42,12 +42,19 @@ parser.add_argument("--coord-noise-std", type=float, default=50.0)
 parser.add_argument("--coord-range", type=int, default=200)
 
 ## data
+# bool系は何も指定しない場合BindGPTの設定になるようにしている
 parser.add_argument("--mol-repeat", type=int, default=1)
 parser.add_argument("--mol-data", default=f"{WORKDIR}/cheminfodata/unimol/ligands/train.lmdb")
+parser.add_argument("--no-lig-coord-h", action='store_true')
+parser.add_argument("--no-lig-atom-h", action='store_true')
 parser.add_argument("--pocket-repeat", type=int, default=1)
 parser.add_argument("--pocket-data", default=f"{WORKDIR}/cheminfodata/unimol/pockets/train.lmdb")
 parser.add_argument("--frag-repeat", type=int, default=1)
 parser.add_argument("--frag-data")
+parser.add_argument("--no-pocket-atom-heavy", action='store_true')
+parser.add_argument("--pocket-coord-heavy", action='store_true')
+parser.add_argument("--pocket-atom-h", action='store_true')
+parser.add_argument("--pocket-coord-h", action='store_true')
 parser.add_argument("--frag2", action='store_true')
 
 ## environments
@@ -106,7 +113,6 @@ if args.sdp_kernel is not None:
 ## logger
 fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
 logger = logging.getLogger()
-# add_stream_handler(logger, logging.DEBUG if args.test else logging.INFO, fmt=fmt)
 add_stream_handler(logger, logging.INFO, fmt=fmt)
 add_file_handler(logger, f"{result_dir}/log.log", logging.DEBUG, fmt=fmt, mode='w')
 logger.setLevel(logging.NOTSET if is_main else logging.WARNING)
@@ -125,7 +131,7 @@ protein_atom_tokenizer = ProteinAtomTokenizer()
 if args.mol_repeat > 0:
     smiles_vocs = open("src/data/smiles_tokens.txt").read().splitlines()
     smiles_tokenizer = StringTokenizer(smiles_vocs)
-    mol_data = UniMolLigandDataset(args.mol_data, 10, atom_h=True, coord_h=True)
+    mol_data = UniMolLigandDataset(args.mol_data, 10, atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h)
     mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
     vocs |= mol_data.vocs()
     mol_data = RepeatDataset(mol_data, args.mol_repeat)
@@ -135,7 +141,9 @@ if args.mol_repeat > 0:
 ## pocket data
 if args.pocket_repeat > 0:
     pocket_data = UniMolPocketDataset(args.pocket_data, key_is_indexed=True)
-    pocket_data = ProteinDataset(pocket_data, protein_atom_tokenizer, coord_tokenizer, coord_transform)
+    pocket_data = ProteinDataset(pocket_data, protein_atom_tokenizer, coord_tokenizer, coord_transform, 
+        atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, 
+        atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, )
     vocs |= pocket_data.vocs()
     pocket_data = RepeatDataset(pocket_data, args.pocket_repeat)
     logger.info(f"pocket data: {len(pocket_data)}")
@@ -144,7 +152,9 @@ if args.pocket_repeat > 0:
 ## fragment data
 if args.frag_repeat > 0:
     frag_data = (PDBFragment2Dataset if args.frag2 else PDBFragmentDataset)(args.frag_data)
-    frag_data = ProteinDataset(frag_data, protein_atom_tokenizer, coord_tokenizer, coord_transform)
+    frag_data = ProteinDataset(frag_data, protein_atom_tokenizer, coord_tokenizer, coord_transform, 
+        atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, 
+        atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, )
     vocs |= frag_data.vocs()
     frag_data = RepeatDataset(frag_data, args.frag_repeat)
     logger.info(f"frag data: {len(frag_data)}")

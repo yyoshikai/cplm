@@ -19,5 +19,5 @@ notice
 hist
 
 # 241126 modified FinetuneDataset
-python process_finetune_dataset.py --radius 4 --test --output debug
+python process_finetune_dataset.py --radius 4
 

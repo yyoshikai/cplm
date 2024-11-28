@@ -90,19 +90,27 @@ class StringTokenizer:
 class FloatTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, vmin: float, vmax: float, decimal: int=3):
+    def __init__(self, vmin: float, vmax: float, decimal: int=3, oor_log_interval: int=1000000):
         self.decimal = decimal
         self.vmin = float(vmin)
         self.vmax = float(vmax)
+        self.n_tokenized = 0
+        self.n_over = 0
+        self.n_under = 0
+        self.oor_log_interval = oor_log_interval
 
     def tokenize(self, x: float):
         x = float(x)
         if x < self.vmin:
-            self.logger.warning(f"float value out of range: {x}")
+            self.n_over += 1
             x = self.vmin
         if x > self.vmax:
-            self.logger.warning(f"float value out of range: {x}")
+            self.n_under += 1
             x = self.vmax
+        self.n_tokenized += 1
+        if self.n_tokenized % self.oor_log_interval == 0:
+            self.logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax")
+            self.logger.info(f"{self.n_under}/{self.n_tokenized} are under vmin")
         xi, xf = str(x).split('.')
         xf = '.'+xf[:self.decimal].ljust(self.decimal, '0')
 
