@@ -1,5 +1,6 @@
 import itertools, math
 from collections.abc import Iterable
+from collections import defaultdict
 from logging import getLogger
 import numpy as np
 import torch
@@ -47,9 +48,12 @@ class TokenEncodeDataset(Dataset):
 
 class ProteinAtomTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN', 'BR', 'MG'], unk_voc='[UNK]'):
+    def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN', 'BR', 'MG'], unk_voc='[UNK]', log_interval: int=1000000):
         self.atom_vocs = sorted(atom_vocs, key=len, reverse=True)
         self.unk_voc = unk_voc
+        self.n_tokenized = 0
+        self.unk_count = defaultdict(int)
+        self.log_interval = log_interval
     def tokenize(self, atoms: list[str]):
         tokens = []
         for atom in atoms:
@@ -58,8 +62,17 @@ class ProteinAtomTokenizer:
                     tokens.append(voc)
                     break
             else:
-                self.logger.warning(f"Unknown atom {atom}")
+                self.unk_count[atom] += 1
                 tokens.append(self.unk_voc)
+        self.n_tokenized += len(atoms)
+        if (self.n_tokenized%self.log_interval) < len(atoms):
+            if len(self.unk_count) == 0:
+                self.logger.info(f"No unknown atoms in {self.n_tokenized} atoms.")
+            else:
+                self.logger.info(f"Unknown atoms in {self.n_tokenized} atoms:")
+                for atom, n in sorted(self.unk_count.items(), key=lambda x: x[1], reverse=True):
+                    self.logger.info(f"  {atom}: {n}")
+        
         return tokens
 
     def vocs(self):
@@ -80,7 +93,7 @@ class StringTokenizer:
                     string = string[len(voc):]
                     break
             else:
-                self.logger.warning(f"Unknown word {string} in {org_string}")
+                self.logger.info(f"Unknown word {string} in {org_string}")
                 tokens.append(self.unk_voc)
                 string = string[1:]
         return tokens
@@ -90,14 +103,14 @@ class StringTokenizer:
 class FloatTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, vmin: float, vmax: float, decimal: int=3, oor_log_interval: int=1000000):
+    def __init__(self, vmin: float, vmax: float, decimal: int=3, log_interval: int=1000000):
         self.decimal = decimal
         self.vmin = float(vmin)
         self.vmax = float(vmax)
         self.n_tokenized = 0
         self.n_over = 0
         self.n_under = 0
-        self.oor_log_interval = oor_log_interval
+        self.log_interval = log_interval
 
     def tokenize(self, x: float):
         x = float(x)
@@ -108,11 +121,16 @@ class FloatTokenizer:
             self.n_under += 1
             x = self.vmax
         self.n_tokenized += 1
-        if self.n_tokenized % self.oor_log_interval == 0:
-            self.logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax")
-            self.logger.info(f"{self.n_under}/{self.n_tokenized} are under vmin")
-        xi, xf = str(x).split('.')
-        xf = '.'+xf[:self.decimal].ljust(self.decimal, '0')
+        if self.n_tokenized % self.log_interval == 0:
+            self.logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
+        x = str(x)
+        if '.' not in x:
+            self.logger.error(f"{x=}")
+            xi = x
+            xf = '.'+'0'*self.decimal
+        else:
+            xi, xf = str(x).split('.')
+            xf = '.'+xf[:self.decimal].ljust(self.decimal, '0')
 
         return [xi, xf]
 

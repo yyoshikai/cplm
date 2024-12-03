@@ -33,7 +33,7 @@ def load_gninatypes(path, struct_fmt='fffi'):
         data = [struct_unpack(chunk) for chunk in iter(partial(tfile.read, struct_len), b'')]
     return data
 
-LOGTIME = True
+LOGTIME = False
 def set_logtime(logtime: bool):
     global LOGTIME
     LOGTIME = logtime

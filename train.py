@@ -21,7 +21,7 @@ from src.data.protein import PDBFragmentDataset, PDBFragment2Dataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import RandomState, set_logtime
-from tools.path import timestamp, cleardir, make_result_dir
+from src.utils.path import timestamp, cleardir, make_dir
 from tools.logger import add_file_handler, add_stream_handler
 from tools.rdkit import set_rdkit_logger
 
@@ -66,16 +66,20 @@ parser.add_argument("--pin-memory", action='store_true')
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
 parser.add_argument("--gc", action='store_true')
 parser.add_argument("--logtime", action='store_true')
+parser.add_argument("--tokenizer-log-interval", type=int)
+parser.add_argument("--duplicate", default='ask')
 
 args = parser.parse_args()
-
-# environment
 if args.test: args.studyname+='_test'
-result_dir = f"training/results/{timestamp()}_{args.studyname}"
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
+if args.tokenizer_log_interval is None:
+    args.tokenizer_log_interval = 10000 if args.test else int(1e6)
+
+# environment
+result_dir = make_dir(f"training/results/{timestamp()}_{args.studyname}", duplicate=args.duplicate)
 main_rank = 0
-batch_first = False
+batch_first = False 
 set_logtime(args.logtime)
 
 ## DDP
@@ -114,7 +118,8 @@ if args.sdp_kernel is not None:
 fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
 logger = logging.getLogger()
 add_stream_handler(logger, logging.INFO, fmt=fmt)
-add_file_handler(logger, f"{result_dir}/log.log", logging.DEBUG, fmt=fmt, mode='w')
+add_file_handler(logger, f"{result_dir}/debug.log", logging.DEBUG, fmt=fmt, mode='a')
+add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
 logger.setLevel(logging.NOTSET if is_main else logging.WARNING)
 log_step = 1 if args.test else 1000
 set_rdkit_logger()
@@ -125,12 +130,10 @@ coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
 datas = []
 vocs = set()
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
-coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
-protein_atom_tokenizer = ProteinAtomTokenizer()
+coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
+protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 ## mol data
 if args.mol_repeat > 0:
-    smiles_vocs = open("src/data/smiles_tokens.txt").read().splitlines()
-    smiles_tokenizer = StringTokenizer(smiles_vocs)
     mol_data = UniMolLigandDataset(args.mol_data, 10, atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h)
     mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
     vocs |= mol_data.vocs()
@@ -214,6 +217,7 @@ for step in range(args.max_step):
     data_start = time()
     batch = []
     max_length = 0
+    n_accum_token_last = n_accum_token
     while True:
         if next_item is None:
             try:
@@ -247,6 +251,8 @@ for step in range(args.max_step):
         logger.debug(f"batch of step {step}:")
         for idx in idxs:
             logger.debug(f"  [{idx:3}]={','.join(voc_encoder.decode(batch[:,idx].tolist()))}")
+    if step < 20:
+        logger.info(f"batch={tuple(batch.shape)}, fill rate: {n_accum_token-n_accum_token_last}/{batch.numel()}")
 
     batch = batch.to(device)
     batch_sizes.append(batch.shape[1])

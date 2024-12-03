@@ -24,7 +24,7 @@ from src.data.tokenizer import StringTokenizer, FloatTokenizer, ProteinAtomToken
     VocEncoder, TokenEncodeDataset
 from src.model import Model
 from src.utils import RandomState, set_logtime
-from src.utils.path import timestamp, cleardir
+from src.utils.path import timestamp, cleardir, make_dir
 from src.utils.logger import add_file_handler, add_stream_handler
 from src.utils.rdkit import set_rdkit_logger
 
@@ -59,12 +59,16 @@ parser.add_argument("--pin-memory", action='store_true')
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
 parser.add_argument("--gc", action='store_true')
 parser.add_argument("--logtime", action='store_true')
+parser.add_argument("--duplicate", default='ask')
 
 args = parser.parse_args()
 
 # environment
 if args.test: args.studyname+='_test'
+# result_dir = make_dir(f"finetune/results/{timestamp()}_{args.studyname}", args.duplicate)
 result_dir = f"finetune/results/{timestamp()}_{args.studyname}"
+os.makedirs(result_dir, exist_ok=True)
+
 pretrain_dir = f"training/results/{args.pretrain_name}"
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 100

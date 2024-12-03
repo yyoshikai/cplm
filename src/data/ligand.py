@@ -1,8 +1,9 @@
 from logging import getLogger
 import numpy as np
-from contextlib import nullcontext
 from torch.utils.data import Dataset
 from rdkit import Chem
+from rdkit.Chem import Conformer
+from rdkit.Geometry import Point3D
 from .data import LMDBDataset, CoordTransform
 from .tokenizer import FloatTokenizer, StringTokenizer
 from ..utils import logtime
@@ -64,6 +65,21 @@ class UniMolLigandDataset(Dataset):
                 mol = Chem.AddHs(mol)
                 smi = Chem.MolToSmiles(mol)
                 atom_idxs = np.array(mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
+                
+                # rdkitのバージョンにより水素の数が違う場合, 重原子の座標から水素の座標を推定する。
+                # (ただ, atom_h=False, coord_h=Trueの場合古いバージョンの結果をそのまま使っていることになるので, やや対応しない。)
+                # experiments/241202_241201_mol_pocket5_debugの `2. 原子のconformerを追加する方法を調べる。`より。
+                if np.max(atom_idxs) >= len(coord):
+                    coordf = coord.astype(float)
+                    mol = Chem.MolFromSmiles(smi)
+                    natom = mol.GetNumAtoms()
+                    conf = Conformer(natom)
+                    for i in range(natom):
+                        conf.SetAtomPosition(i, Point3D(*coordf[i]))
+                    mol.AddConformer(conf)
+                    mol = Chem.AddHs(mol, addCoords=True)
+                    coord = mol.GetConformer().GetPositions()
+                
                 if self.coord_h:
                     coord = coord[atom_idxs]
                 else:
