@@ -177,8 +177,17 @@ with open(f"{result_dir}/vocs.txt", 'w') as f:
         f.write(voc+'\n')
 
 train_data = SliceDataset(train_data, size, rank)
-train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
+
+# Make dataset in order
+if (rank != 0):
+    msg = torch.tensor([0], dtype=torch.int)
+    dist.recv(msg, src=rank-1)
+train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=True)
 train_iter = train_loader.__iter__()
+if (rank != size-1):
+    dist.send(torch.tensor([rank], dtype=torch.int), dst=rank+1)
+
+
 next_item = None
 n_accum_token = 0
 
