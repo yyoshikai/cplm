@@ -17,7 +17,7 @@ WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
 from src.data import *
-from src.data.protein import PDBFragmentDataset, PDBFragment2Dataset
+from src.data.fragment import PDBFragmentDataset, PDBFragment2Dataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import RandomState, set_logtime
@@ -67,7 +67,6 @@ parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIEN
 parser.add_argument("--gc", action='store_true')
 parser.add_argument("--logtime", action='store_true')
 parser.add_argument("--tokenizer-log-interval", type=int)
-parser.add_argument("--duplicate", default='ask')
 
 args = parser.parse_args()
 if args.test: args.studyname+='_test'
@@ -76,11 +75,10 @@ if args.record_opt_step is None:
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e6)
 
+
 # environment
-result_dir = make_dir(f"training/results/{timestamp()}_{args.studyname}", duplicate=args.duplicate)
 main_rank = 0
 batch_first = False 
-set_logtime(args.logtime)
 
 ## DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
@@ -90,10 +88,16 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 is_main = rank == main_rank
 
+set_logtime(args.logtime)
+
 ## make result dir
-os.makedirs(f"{result_dir}/models", exist_ok=True)
-os.makedirs(f"{result_dir}/step_data", exist_ok=True)
-os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
+result_dir = f"training/results/{timestamp()}_{args.studyname}"
+if is_main:
+    cleardir(result_dir)
+    os.makedirs(f"{result_dir}/models", exist_ok=True)
+    os.makedirs(f"{result_dir}/step_data", exist_ok=True)
+    os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
+dist.barrier()
 
 ## save args
 if is_main:
