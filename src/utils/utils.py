@@ -33,6 +33,11 @@ def load_gninatypes(path, struct_fmt='fffi'):
         data = [struct_unpack(chunk) for chunk in iter(partial(tfile.read, struct_len), b'')]
     return data
 
+# https://stackoverflow.com/questions/39042214/how-can-i-slice-each-element-of-a-numpy-array-of-strings
+def slice_str(x: np.ndarray, end: int):
+    b = x.view((str,1)).reshape(len(x),-1)[:, :end]
+    return np.fromstring(b.tostring(),dtype=(str,end))
+
 LOGTIME = False
 def set_logtime(logtime: bool):
     global LOGTIME

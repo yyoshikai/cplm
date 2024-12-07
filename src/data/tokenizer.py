@@ -111,6 +111,7 @@ class FloatTokenizer:
         self.n_over = 0
         self.n_under = 0
         self.log_interval = log_interval
+        self.float_format = "{:.0"+str(self.decimal)+"f}"
 
     def tokenize(self, x: float):
         x = float(x)
@@ -123,14 +124,9 @@ class FloatTokenizer:
         self.n_tokenized += 1
         if self.n_tokenized % self.log_interval == 0:
             self.logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
-        x = str(x)
-        if '.' not in x:
-            self.logger.error(f"{x=}")
-            xi = x
-            xf = '.'+'0'*self.decimal
-        else:
-            xi, xf = str(x).split('.')
-            xf = '.'+xf[:self.decimal].ljust(self.decimal, '0')
+        x = self.float_format.format(x)
+        xi = x[:-4]
+        xf = x[-4:]
 
         return [xi, xf]
 
@@ -138,6 +134,9 @@ class FloatTokenizer:
         return list(itertools.chain.from_iterable(self.tokenize(x) for x in x))
     
     def vocs(self):
-        return {str(i) for i in range(max(0, math.floor(self.vmin)), math.floor(self.vmax)+1)}\
-            |{'-'+str(i) for i in range(max(0, math.floor(-self.vmax)), math.floor(-self.vmin)+1)}\
-            |{'.'+str(i).zfill(self.decimal) for i in range(10**self.decimal)}
+        ivmin = int(self.float_format.format(self.vmin).split('.')[0])
+        ivmax = int(self.float_format.format(self.vmax).split('.')[0])
+        vocs = {str(i) for i in range(ivmin, ivmax+1)}
+        if self.vmin < 0: vocs.add('-0')
+        vocs |= {'.'+str(i).zfill(self.decimal) for i in range(10**self.decimal)}
+        return vocs

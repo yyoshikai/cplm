@@ -89,15 +89,16 @@ os.makedirs(f"{result_dir}/models", exist_ok=True)
 os.makedirs(f"{result_dir}/step_data", exist_ok=True)
 os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
 
-## save args
-if is_main:
-    with open(f"{result_dir}/config.yaml", 'w') as f:
-        yaml.dump(vars(args), f)
 
 ## load config
 pretrain_config = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
 if args.coord_range is None:
     args.coord_range = pretrain_config.coord_range
+
+## save args
+if is_main:
+    with open(f"{result_dir}/config.yaml", 'w') as f:
+        yaml.dump(vars(args), f)
 
 ## seed
 rstate = RandomState(args.seed)

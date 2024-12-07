@@ -5,12 +5,7 @@ from torch.utils.data import Dataset
  
 from .tokenizer import ProteinAtomTokenizer, FloatTokenizer
 from .data import CoordTransform, LMDBDataset
-from ..utils import logtime
-
-# https://stackoverflow.com/questions/39042214/how-can-i-slice-each-element-of-a-numpy-array-of-strings
-def slice_str(x: np.ndarray, end: int):
-    b = x.view((str,1)).reshape(len(x),-1)[:, :end]
-    return np.fromstring(b.tostring(),dtype=(str,end))
+from ..utils import logtime, slice_str
 
 # net_datasetは {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。

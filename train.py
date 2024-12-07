@@ -55,7 +55,9 @@ parser.add_argument("--no-pocket-atom-heavy", action='store_true')
 parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--pocket-atom-h", action='store_true')
 parser.add_argument("--pocket-coord-h", action='store_true')
-parser.add_argument("--frag2", action='store_true')
+# parser.add_argument("--frag2", action='store_true') 241205 changed for PDBFragment3
+parser.add_argument("--frag-type", default='1')
+
 
 ## environments
 parser.add_argument("--token-per-batch", type=int, default=25000)
@@ -158,7 +160,15 @@ if args.pocket_repeat > 0:
 
 ## fragment data
 if args.frag_repeat > 0:
-    frag_data = (PDBFragment2Dataset if args.frag2 else PDBFragmentDataset)(args.frag_data)
+    match args.frag_type:
+        case '1':
+            frag_data = PDBFragmentDataset(args.frag_data)
+        case '2':
+            frag_data = PDBFragment2Dataset(args.frag_data)
+        case '3':
+            frag_data = LMDBDataset(args.frag_data, key_is_indexed=True)
+        case _:
+            raise ValueError(f'Unsupported args.frag_class: {args.frag_type}')
     frag_data = ProteinDataset(frag_data, protein_atom_tokenizer, coord_tokenizer, coord_transform, 
         atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, 
         atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, )
