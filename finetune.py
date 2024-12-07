@@ -19,7 +19,7 @@ from torch.nn.utils.rnn import pad_sequence
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data import SliceDataset, FinetuneDataset
+from src.data import SliceDataset, FinetuneDataset, StringCollateLoader
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, ProteinAtomTokenizer,\
     VocEncoder, TokenEncodeDataset
 from src.model import Model
@@ -135,9 +135,16 @@ voc_encoder = VocEncoder(train_data.vocs())
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 
 train_data = SliceDataset(train_data, size, rank)
-train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
-train_iter = train_loader.__iter__()
-next_item = None
+
+# Make dataset in order
+if (rank != 0):
+    msg = torch.tensor([0], dtype=torch.int)
+    dist.recv(msg, src=rank-1)
+train_loader = StringCollateLoader(train_data, args.num_workers, args.pin_memory, 
+    args.token_per_batch, batch_first, voc_encoder.pad_token)
+if (rank != size-1):
+    dist.send(torch.tensor([rank], dtype=torch.int), dst=rank+1)
+
 n_accum_token = 0
 
 # model
@@ -183,30 +190,8 @@ for step in range(args.max_step):
 
     # get batch
     data_start = time()
-    batch = []
-    max_length = 0
-    while True:
-        if next_item is None:
-            try:
-                next_item = train_iter.__next__().squeeze(0)
-            except StopIteration:
-                logger.info(f"rank {rank}: epoch finished at step {step}")
-                train_iter = train_loader.__iter__()
-                next_item = train_iter.__next__().squeeze(0)
-        if ((len(batch)+1) * max(max_length, len(next_item)) <= args.token_per_batch):
-            batch.append(next_item)
-            max_length = max(max_length, len(next_item))
-            n_accum_token += len(next_item)
-            next_item = None
-        else:
-            if len(batch) == 0:
-                logger.warning(f"Item was too large even for single item per batch({len(next_item)}), and was skipped.")
-                next_item = None
-                continue
-            else:
-                break
-    batch = pad_sequence(batch, batch_first=batch_first,
-            padding_value=voc_encoder.pad_token).to(torch.long)
+    batch, n_token = train_loader.__next__()
+    n_accum_token += n_token
     
     # log tokens in initial few steps
     if step < 10:

@@ -37,7 +37,7 @@ parser.add_argument("--token-per-step", type=int, default=int(1.6e6))
 parser.add_argument("--max-step", type=int, default=1000000)
 parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--weight-decay", type=float, default=0.01)
-parser.add_argument("--clip_grad_norm", type=int, default=1.0)
+parser.add_argument("--clip-grad-norm", type=int, default=1.0)
 parser.add_argument("--coord-noise-std", type=float, default=50.0)
 parser.add_argument("--coord-range", type=int, default=200)
 
@@ -192,14 +192,11 @@ train_data = SliceDataset(train_data, size, rank)
 if (rank != 0):
     msg = torch.tensor([0], dtype=torch.int)
     dist.recv(msg, src=rank-1)
-train_loader = DataLoader(train_data, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=True)
-train_iter = train_loader.__iter__()
+train_loader = StringCollateLoader(train_data, args.num_workers, args.pin_memory, 
+    args.token_per_batch, batch_first, voc_encoder.pad_token)
 if (rank != size-1):
     dist.send(torch.tensor([rank], dtype=torch.int), dst=rank+1)
 
-
-next_item = None
-n_accum_token = 0
 
 # model
 model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
@@ -221,6 +218,7 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
 
 accum_loss = 0
 opt_step = 0
+n_accum_token = 0
 accum_losses = []
 accum_n_tokens = []
 lrs = []
@@ -236,34 +234,10 @@ max_lens = []
 logger.info("Training started.")
 for step in range(args.max_step):
 
-    # get batch
-    data_start = time()
-    batch = []
-    max_length = 0
-    n_accum_token_last = n_accum_token
-    while True:
-        if next_item is None:
-            try:
-                next_item = train_iter.__next__().squeeze(0)
-            except StopIteration:
-                logger.info(f"rank {rank}: epoch finished at step {step}")
-                train_iter = train_loader.__iter__()
-                next_item = train_iter.__next__().squeeze(0)
-        if ((len(batch)+1) * max(max_length, len(next_item)) <= args.token_per_batch):
-            batch.append(next_item)
-            max_length = max(max_length, len(next_item))
-            n_accum_token += len(next_item)
-            next_item = None
-        else:
-            if len(batch) == 0:
-                logger.warning(f"Item was too large even for single item per batch({len(next_item)}), and not used.")
-                next_item = None
-                continue
-            else:
-                break
 
-    batch = pad_sequence(batch, batch_first=batch_first,
-            padding_value=voc_encoder.pad_token).to(torch.long)
+    data_start = time()
+    batch, n_token = train_loader.__next__()
+    n_accum_token += n_token
     
     # log tokens in initial few steps
     if step < 10:
@@ -274,8 +248,6 @@ for step in range(args.max_step):
         logger.debug(f"batch of step {step}:")
         for idx in idxs:
             logger.debug(f"  [{idx:3}]={','.join(voc_encoder.decode(batch[:,idx].tolist()))}")
-    if step < 20:
-        logger.info(f"batch={tuple(batch.shape)}, fill rate: {n_accum_token-n_accum_token_last}/{batch.numel()}")
 
     batch = batch.to(device)
     batch_sizes.append(batch.shape[1])
