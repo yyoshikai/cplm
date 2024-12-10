@@ -19,7 +19,9 @@ class FinetuneDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
     def __init__(self, save_dir: str, protein_atom_tokenizer: ProteinAtomTokenizer,
             smiles_tokenizer: StringTokenizer, coord_tokenizer: FloatTokenizer,
-            seed:int=0, out_ligand: bool=True, coord_center: str='ligand', 
+            seed:int=0, out_ligand: bool=True, out_end: bool=True, 
+            coord_center: str='ligand', random_rotate: bool=True,
+            out_center: bool=False,
             pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
             pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
             mol_atom_h: bool=False, mol_coord_h: bool=True):
@@ -36,8 +38,11 @@ class FinetuneDataset(Dataset):
         self.coord_tokenizer = coord_tokenizer
         self.rstate = np.random.RandomState(seed)
         self.out_ligand = out_ligand
+        self.out_end = out_end
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
+        self.random_rotate = random_rotate
+        self.out_center = out_center
         self.pocket_atom_heavy = pocket_atom_heavy
         self.pocket_atom_h = pocket_atom_h
         self.pocket_coord_heavy = pocket_coord_heavy
@@ -91,9 +96,10 @@ class FinetuneDataset(Dataset):
 
             # normalize coords
             ## random rotation
-            rotation_matrix = get_random_rotation_matrix(self.rstate)
-            lig_coord = np.matmul(lig_coord, rotation_matrix)
-            pocket_coord = np.matmul(pocket_coord, rotation_matrix)
+            if self.random_rotate:
+                rotation_matrix = get_random_rotation_matrix(self.rstate)
+                lig_coord = np.matmul(lig_coord, rotation_matrix)
+                pocket_coord = np.matmul(pocket_coord, rotation_matrix)
             
             ## set center
             if self.coord_center == 'ligand':
@@ -118,9 +124,12 @@ class FinetuneDataset(Dataset):
             if self.out_ligand:
                 output += ['[LIGAND]']+self.smiles_tokenizer.tokenize(lig_smi)+\
                 ['[XYZ]']+self.coord_tokenizer.tokenize_array(lig_coord.ravel())
-            output += ['[END]']
-
-            return output
+            if self.out_end:
+                output += ['[END]']
+            if self.out_center:
+                return (output, center)
+            else:
+                return output
 
     def __len__(self):
         return len(self.lmdb_dataset)
@@ -146,6 +155,10 @@ class FinetuneDataset(Dataset):
         lig_idx = None
         if test:
             protein2n = defaultdict(int)
+        data_dnames = []
+        data_lig_names = []
+        data_protein_names = []
+        data_sdf_idxs = []
         with open("/workspace/cheminfodata/crossdocked/projects/survey/files/dirs.txt") as fd:
             dnames = sorted(fd.read().splitlines())
             if test: dnames = dnames[:20]
@@ -190,6 +203,10 @@ class FinetuneDataset(Dataset):
                                     'pocket_atoms': pocket_atoms,
                                     'pocket_coordinate': pocket_coord
                                 }
+                                data_dnames.append(dname)
+                                data_lig_names.append(basename)
+                                data_protein_names.append(f"{protein_name}_rec.pdb")
+                                data_sdf_idxs.append(lig_idx)
                                 txn.put(str(idx).encode('ascii'), pickle.dumps(data))
                                 idx += 1
 
@@ -215,6 +232,9 @@ class FinetuneDataset(Dataset):
                         lig_idx = None
         txn.commit()
         env.close()
+        df = pd.DataFrame({'dname': data_dnames, 'lig_name': data_lig_names, 
+            'protein_name': data_protein_names, 'sdf_idx': data_sdf_idxs})
+        df.to_csv(f"{save_dir}/filenames.csv", index_label='idx')
         cls.logger.info(f"# of data: {idx}")
         cls.logger.info(f"# of invalid mols: {n_invalid}")
         cls.logger.info(f"# of far away ligand: {n_far}")
