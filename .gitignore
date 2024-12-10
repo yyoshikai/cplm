@@ -131,7 +131,7 @@ dmypy.json
 .pyre/
 
 /experiments
-/training
+/training/*
 /finetune
 /.vscode
 /preprocess/results
@@ -142,4 +142,4 @@ todo.md
 /README2.md
 /graph
 command.sh
-
+!/training/generate.py
