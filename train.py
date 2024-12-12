@@ -21,9 +21,9 @@ from src.data.fragment import PDBFragmentDataset, PDBFragment2Dataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import RandomState, set_logtime
-from src.utils.path import timestamp, cleardir, make_dir
-from tools.logger import add_file_handler, add_stream_handler
-from tools.rdkit import set_rdkit_logger
+from src.utils.path import timestamp, cleardir
+from src.utils.logger import add_file_handler, add_stream_handler, INFO_WORKER
+from src.utils.rdkit import set_rdkit_logger
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -126,7 +126,7 @@ logger = logging.getLogger()
 add_stream_handler(logger, logging.INFO, fmt=fmt)
 add_file_handler(logger, f"{result_dir}/debug.log", logging.DEBUG, fmt=fmt, mode='a')
 add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
-logger.setLevel(logging.NOTSET if is_main else logging.WARNING)
+logger.setLevel(logging.NOTSET if is_main else INFO_WORKER)
 log_step = 1 if args.test else 1000
 set_rdkit_logger()
 logger.info(f"num_workers={args.num_workers}")
@@ -189,14 +189,8 @@ with open(f"{result_dir}/vocs.txt", 'w') as f:
 train_data = SliceDataset(train_data, size, rank)
 
 # Make dataset in order
-if (rank != 0):
-    msg = torch.tensor([0], dtype=torch.int)
-    dist.recv(msg, src=rank-1)
-train_loader = StringCollateLoader(train_data, args.num_workers, args.pin_memory, 
-    args.token_per_batch, batch_first, voc_encoder.pad_token)
-if (rank != size-1):
-    dist.send(torch.tensor([rank], dtype=torch.int), dst=rank+1)
-
+train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_memory, 
+    args.token_per_batch, batch_first, voc_encoder.pad_token, size, rank, main_rank)
 
 # model
 model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
@@ -234,9 +228,10 @@ max_lens = []
 logger.info("Training started.")
 for step in range(args.max_step):
 
-
     data_start = time()
-    batch, n_token = train_loader.__next__()
+    batch = train_loader.__next__()
+    batch = batch.to(device)
+    n_token = torch.sum(batch != voc_encoder.pad_token).item()
     n_accum_token += n_token
     
     # log tokens in initial few steps
@@ -245,11 +240,10 @@ for step in range(args.max_step):
         idxs = np.arange(batch.shape[1])
         if len(idxs) > 10: 
             idxs = np.sort(rstate.choice(batch.shape[1], size=10, replace=False))
-        logger.debug(f"batch of step {step}:")
+        logger.log(INFO_WORKER, f"batch of step {step}:")
         for idx in idxs:
-            logger.debug(f"  [{idx:3}]={','.join(voc_encoder.decode(batch[:,idx].tolist()))}")
+            logger.log(INFO_WORKER, f"  [{idx:3}]={','.join(voc_encoder.decode(batch[:,idx].cpu().tolist()))}")
 
-    batch = batch.to(device)
     batch_sizes.append(batch.shape[1])
     max_lens.append(batch.shape[0])
 

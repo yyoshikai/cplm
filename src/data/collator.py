@@ -1,7 +1,12 @@
+from bisect import bisect_right
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
-from ..utils.logger import get_logger
+
+import torch.distributed as dist
+from ..utils.logger import get_logger, INFO_WORKER
+from ..utils import logtime
+
 
 class StringCollateLoader:
     logger = get_logger(f"{__module__}.{__qualname__}")
@@ -52,3 +57,87 @@ class StringCollateLoader:
         self.step+=1
 
         return batch, n_token
+
+class DDPStringCollateLoader:
+    logger = get_logger(f"{__module__}.{__qualname__}")
+    def __init__(self, dataset: Dataset, num_workers:int, pin_memory: bool,
+            token_per_batch: int, batch_first: bool,
+            padding_value: int, size: int, rank: int, main_rank: int=0):
+        self.size = size
+        self.rank = rank
+        self.main_rank = main_rank
+
+        if self.rank == self.main_rank:
+            self.token_per_batch = token_per_batch
+            self.loader = DataLoader(dataset, batch_size=None, shuffle=True, num_workers=num_workers, 
+                pin_memory=pin_memory, persistent_workers=True)
+            self.iter = self.loader.__iter__()
+            self.next_item = None
+            self.step = 0
+            self.batch_first = batch_first
+            self.padding_value = padding_value
+
+    def __next__(self) -> tuple[torch.Tensor, int]:
+        with logtime(self.logger, '[next]', INFO_WORKER):
+            if self.rank == self.main_rank:
+                with logtime(self.logger, '[next.get_data]', INFO_WORKER):
+                    data_list = []
+                    while True:
+
+                        # get next item
+                        if self.next_item is None:
+                            try:
+                                self.next_item = self.iter.__next__()
+                            except StopIteration:
+                                self.logger.info(f"Epoch finished at {self.step} step.")
+                                self.iter = self.loader.__iter__()
+                                self.next_item = self.iter.__next__()
+
+                        # check maximum size
+                        next_size = len(self.next_item)
+                        if next_size > self.token_per_batch:
+                            self.logger.warning(f"Item was too large even for single item per batch({len(self.next_item)}), and not used.")
+                            self.next_item = None
+                            continue
+
+                        # insert size
+                        i = bisect_right(data_list, -len(self.next_item), key=lambda x: -len(x))
+                        next_data_list = data_list[:i]+[self.next_item]+data_list[i:] # most slow
+
+                        # check more data can be added
+                        i = 0
+                        for i_worker in range(self.size):
+                            max_len = len(next_data_list[i])
+                            i += self.token_per_batch // max_len
+                            if i >= len(next_data_list): break
+                        if i >= len(next_data_list):
+                            ## More data may be able to be added.
+                            data_list = next_data_list
+                            self.next_item = None
+                            continue
+                        break
+                    
+                # If no data can be added, output batch
+                with logtime(self.logger, '[next.send_batch]', INFO_WORKER):
+                    i = 0
+                    batch = None
+                    for dst_rank in range(self.size):
+                        max_len = len(data_list[i])
+                        batch_size = self.token_per_batch // max_len
+
+                        # 送ってからpad_sequenceとどちらが速い？
+                        dst_batch = pad_sequence(data_list[i:i+batch_size],
+                            batch_first=self.batch_first, padding_value=self.padding_value)
+                        if dst_rank == self.rank:
+                            batch = dst_batch
+                        else:
+                            dist.send(torch.tensor(dst_batch.shape, dtype=torch.int), dst=dst_rank)
+                            dist.send(dst_batch, dst=dst_rank)
+                        i += batch_size
+            else:
+                with logtime(self.logger, '[next.receive]', INFO_WORKER):
+                    batch_shape = torch.zeros(2, dtype=torch.int)
+                    dist.recv(batch_shape, src=self.main_rank)
+                    batch = torch.zeros(batch_shape[0], batch_shape[1], dtype=torch.long)
+                    dist.recv(batch, src=self.main_rank)
+            return batch

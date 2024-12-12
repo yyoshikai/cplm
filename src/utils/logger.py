@@ -7,6 +7,8 @@ import yaml
 DEFAULT_FMT = "[{asctime}][{name}][{levelname}]{message}"
 DEFAULT_DATEFMT = "%y%m%d %H:%M:%S"
 
+INFO_WORKER = 25
+
 log_name2level = {
     'debug': logging.DEBUG,
     'info': logging.INFO,
