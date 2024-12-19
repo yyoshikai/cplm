@@ -5,12 +5,13 @@ import numpy as np
 def ignore_warning():
     RDLogger.DisableLog("rdApp.*")
 
-def set_rdkit_logger():
+def set_rdkit_logger(propagate=True):
     rdBase.LogToPythonLogger()
     rdkit_logger = logging.getLogger('rdkit')
-    rdkit_logger.propagate = True
+    rdkit_logger.propagate = propagate
     for handler in rdkit_logger.handlers: 
         rdkit_logger.removeHandler(handler)
+    rdBase.LogToPythonLogger()
 
 sanitize_ops = 0
 for k,v in Chem.rdmolops.SanitizeFlags.values.items():

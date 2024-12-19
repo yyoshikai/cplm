@@ -1,8 +1,8 @@
 # 241025 若干argumentを変更した。
 import sys, os
-import argparse
+import argparse, logging
 from time import time
-import math, gc, logging
+import math, gc
 
 import psutil, yaml
 import numpy as np
@@ -10,9 +10,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import ConcatDataset
 from torch.nn.parallel import DistributedDataParallel
-from torch.nn.utils.rnn import pad_sequence
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
@@ -20,7 +19,7 @@ from src.data import *
 from src.data.fragment import PDBFragmentDataset, PDBFragment2Dataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
-from src.utils import RandomState, set_logtime
+from src.utils import RandomState, set_logtime, rectime
 from src.utils.path import timestamp, cleardir
 from src.utils.logger import add_file_handler, add_stream_handler, INFO_WORKER
 from src.utils.rdkit import set_rdkit_logger
@@ -55,7 +54,6 @@ parser.add_argument("--no-pocket-atom-heavy", action='store_true')
 parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--pocket-atom-h", action='store_true')
 parser.add_argument("--pocket-coord-h", action='store_true')
-# parser.add_argument("--frag2", action='store_true') 241205 changed for PDBFragment3
 parser.add_argument("--frag-type", default='1')
 
 
@@ -65,22 +63,24 @@ parser.add_argument("--record-opt-step", type=int)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--num-workers", type=int, default=0)
 parser.add_argument("--pin-memory", action='store_true')
+parser.add_argument("--prefetch-factor", type=int)
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
 parser.add_argument("--gc", action='store_true')
 parser.add_argument("--logtime", action='store_true')
 parser.add_argument("--tokenizer-log-interval", type=int)
+parser.add_argument("--duplicate", default='ask')
 
 args = parser.parse_args()
+
+# environment
 if args.test: args.studyname+='_test'
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e6)
-
-
-# environment
 main_rank = 0
-batch_first = False 
+batch_first = False
+set_logtime(args.logtime)
 
 ## DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
@@ -89,8 +89,6 @@ size = dist.get_world_size()
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 is_main = rank == main_rank
-
-set_logtime(args.logtime)
 
 ## make result dir
 result_dir = f"training/results/{timestamp()}_{args.studyname}"
@@ -180,17 +178,13 @@ train_data = ConcatDataset(datas)
 
 voc_encoder = VocEncoder(vocs)
 train_data = TokenEncodeDataset(train_data, voc_encoder)
+if rank != main_rank:
+    del train_data
+    train_data = None
 
-#for debug
-with open(f"{result_dir}/vocs.txt", 'w') as f:
-    for voc in voc_encoder.i2voc:
-        f.write(voc+'\n')
-
-train_data = SliceDataset(train_data, size, rank)
-
-# Make dataset in order
-train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_memory, 
-    args.token_per_batch, batch_first, voc_encoder.pad_token, size, rank, main_rank)
+# Make dataset
+train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_memory, args.prefetch_factor, 
+    args.token_per_batch, batch_first, voc_encoder.pad_token, device, size, rank, main_rank)
 
 # model
 model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
@@ -223,54 +217,49 @@ loss_times = []
 batch_sizes = []
 max_lens = []
 
-# n_prot = 0
-# n_total = 0
 logger.info("Training started.")
 for step in range(args.max_step):
 
-    data_start = time()
-    batch = train_loader.__next__()
-    batch = batch.to(device)
-    n_token = torch.sum(batch != voc_encoder.pad_token).item()
-    n_accum_token += n_token
-    
-    # log tokens in initial few steps
-    if step < 10:
-        rstate = np.random.RandomState(args.seed+step)
-        idxs = np.arange(batch.shape[1])
-        if len(idxs) > 10: 
-            idxs = np.sort(rstate.choice(batch.shape[1], size=10, replace=False))
-        logger.log(INFO_WORKER, f"batch of step {step}:")
-        for idx in idxs:
-            logger.log(INFO_WORKER, f"  [{idx:3}]={','.join(voc_encoder.decode(batch[:,idx].cpu().tolist()))}")
+    # get batch
+    with rectime() as data_timer:
+        batch = train_loader.__next__()
+        batch = batch.to(device)
+        n_token = torch.sum(batch != voc_encoder.pad_token).item()
+        n_accum_token += n_token
+        
+        # log tokens in initial few steps
+        if step < 5:
+            rstate = np.random.RandomState(args.seed+step)
+            idxs = np.arange(batch.shape[1])
+            if len(idxs) > 10: 
+                idxs = np.sort(rstate.choice(batch.shape[1], size=10, replace=False))
+            logger.log(INFO_WORKER, f"batch of step {step}:")
+            for idx in idxs:
+                logger.log(INFO_WORKER, f"  [{idx:3}]={','.join(voc_encoder.decode(batch[:,idx].cpu().tolist()))}")
 
-    batch_sizes.append(batch.shape[1])
-    max_lens.append(batch.shape[0])
+        batch_sizes.append(batch.shape[1])
+        max_lens.append(batch.shape[0])
+    data_times.append(data_timer.time)
 
-
-    data_end = time()
-    data_times.append(data_end-data_start)
-
-    with torch.autocast('cuda', dtype=torch.bfloat16):
-        pred = model(batch[:-1])
-        loss = criterion(pred.reshape(-1, voc_encoder.voc_size), batch[1:].ravel())
-        loss.backward()
-    accum_loss += loss.item()
-    loss_end = time()
-    loss_times.append(loss_end-data_end)
+    with rectime() as loss_timer:
+        with torch.autocast('cuda', dtype=torch.bfloat16):
+            pred = model(batch[:-1])
+            loss = criterion(pred.reshape(-1, voc_encoder.voc_size), batch[1:].ravel())
+            loss.backward()
+        accum_loss += loss.item()
+    loss_times.append(loss_timer.time)
 
     # sum accum_token
     reduced_accum_token = torch.tensor(n_accum_token, dtype=torch.int, device=device)
     dist.all_reduce(reduced_accum_token)
 
     if reduced_accum_token >= args.token_per_step:
+        with rectime() as optim_timer:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            optimizer.step()
+            optimizer.zero_grad()
         if args.test:
-            logger.info("optimizer stepped")
-        optim_start = time()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
-        optimizer.step()
-        optimizer.zero_grad()
-        optim_end = time()
+            logger.info(f"optim_time={optim_timer.time:.03f}")
         opt_step += 1
         accum_losses.append(accum_loss)
         accum_n_tokens.append(n_accum_token)
@@ -301,10 +290,9 @@ for step in range(args.max_step):
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
             if args.gc:
                 gc.collect()
-        if args.test:
-            logger.info(f"optim_time={optim_end-optim_start:.03f}")
         n_accum_token = 0
         accum_loss = 0
     if (step+1) % log_step == 0:
         logger.info(f"{step+1} step finished.")
+
 dist.destroy_process_group()

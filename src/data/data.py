@@ -1,5 +1,7 @@
 import pickle
+from collections.abc import Mapping
 from logging import getLogger
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -70,6 +72,17 @@ class LMDBDataset(Dataset):
 
     def __len__(self):
         return len(self.lmdb)
+
+class IndexSubset(Dataset):
+    def __init__(self, dataset: Dataset, indices: Mapping[int, int]):
+        self.dataset = dataset
+        self.indices = indices
+
+    def __getitem__(self, idx):
+        return self.dataset[self.indices[idx]]
+
+    def __len__(self):
+        return len(self.indices)
 
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):

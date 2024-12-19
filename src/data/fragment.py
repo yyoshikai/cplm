@@ -262,14 +262,12 @@ def partial_load(path, start, stop):
     with open(path, 'rb') as f:
         major, minor = np.lib.format.read_magic(f)
         shape, fortran, dtype = np.lib.format.read_array_header_1_0(f) # version compatibility
-        # print(f"{init_pos=}")
         assert not fortran, "Fortran order arrays not supported"
 
         row_size = int(np.prod(shape[1:]))
         values = []
         v = np.fromfile(f, dtype=dtype, count=row_size*(stop-start), offset=start*row_size*dtype.itemsize)
         values.append(v)
-        # print(values)
         values = np.array(values, dtype=dtype).reshape((-1,)+shape[1:])
         return values
 

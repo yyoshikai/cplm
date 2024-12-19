@@ -1,11 +1,13 @@
-import sys, os, pickle, io, psutil, logging
+import sys, os, pickle, io, psutil, logging, yaml
 from tqdm import tqdm
 from logging import getLogger
 import numpy as np
 import pandas as pd
 from collections import defaultdict
 from torch.utils.data import Dataset
+from time import time
 from prody import parsePDB, parsePDBStream, confProDy, Contacts
+from rdkit import rdBase
 from ..utils.lmdb import new_lmdb
 from .data import LMDBDataset, get_random_rotation_matrix
 from ..utils import logtime, slice_str
@@ -13,7 +15,8 @@ from rdkit import Chem
 from .tokenizer import ProteinAtomTokenizer, StringTokenizer, FloatTokenizer
 confProDy(verbosity='none')
 from ..utils.logger import add_file_handler, get_logger
-from ..utils.rdkit import set_rdkit_logger
+from ..utils.rdkit import set_rdkit_logger, ignore_warning
+from ..utils.utils import logtime
 
 class FinetuneDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
@@ -140,14 +143,19 @@ class FinetuneDataset(Dataset):
             self.smiles_tokenizer.vocs()|{'[POCKET]', '[XYZ]', '[END]', '[SCORE]', '[LIGAND]'}
 
     @classmethod
-    def preprocess(cls, cddir, save_dir, radius, test=False):
+    def preprocess(cls, args, cddir, save_dir, radius, 
+            ends=['lig_tt_docked.sdf', 'lig_tt_min.sdf'], 
+            map_size: int=int(100e9), test=False, rank=None, size=None):
+        if size is not None:
+            assert rank is not None
+            save_dir = f"{save_dir}/{rank}"
         os.makedirs(save_dir, exist_ok=True)
         add_file_handler(getLogger(), f"{save_dir}/root.log", level=logging.INFO)
-        add_file_handler(cls.logger, f"{save_dir}/process.log")
-        set_rdkit_logger()
-        cls.logger.info(f"{radius=}")
-
-        env, txn = new_lmdb(f"{save_dir}/main.lmdb")
+        ignore_warning()
+        ends = tuple(ends)
+        with open(f"{save_dir}/args.yaml", 'w') as f:
+            yaml.dump(args, f)
+        env, txn = new_lmdb(f"{save_dir}/main.lmdb", map_size=map_size)
         n_invalid = 0
         n_far = 0
         idx = 0
@@ -162,10 +170,12 @@ class FinetuneDataset(Dataset):
         with open("/workspace/cheminfodata/crossdocked/projects/survey/files/dirs.txt") as fd:
             dnames = sorted(fd.read().splitlines())
             if test: dnames = dnames[:20]
-            for dname in (pbar:=tqdm(dnames)):
+            if size is not None:
+                dnames = dnames[rank::size]
+            for idir, dname in enumerate(dnames):
                 with open(f"/workspace/cheminfodata/crossdocked/projects/survey/files/{dname}.txt") as ff:
                     for basename in sorted(ff.read().splitlines()):
-                        if not basename.endswith(('lig_tt_docked.sdf', 'lig_tt_min.sdf')): continue
+                        if not basename.endswith(ends): continue
 
                         protein_name = basename.split('_rec_')[0]
                         protein_agroup = parsePDB(f"{cddir}/{dname}/{protein_name}_rec.pdb")
@@ -175,26 +185,33 @@ class FinetuneDataset(Dataset):
                         if test:
                             if protein2n[protein_name] >= 10:
                                 continue
-
+                        
                         lig_sup = Chem.SDMolSupplier(f"{cddir}/{dname}/{basename}", removeHs=False)
+                        t_addh = 0
+                        t_prody = 0
+                        t_data = 0
                         for lig_idx, lig_mol in enumerate(lig_sup):
                             if lig_mol is None:
                                 n_invalid+=1
                                 continue
                             try:
                                 # 水素付加
+                                start = time()
                                 lig_mol = Chem.AddHs(lig_mol, addCoords=True)
+                                t_addh += time()-start
 
                                 # ポケットをProDyで抽出
+                                start = time()
                                 lig_pdb = Chem.MolToPDBBlock(lig_mol)
                                 lig_agroup = parsePDBStream(io.StringIO(lig_pdb))
                                 pocket = protein_contact.select(radius, lig_agroup)
                                 if pocket is None:
-                                    cls.logger.warning(f"Far away ligand: {dname=}, {basename=}, {lig_idx=}")
                                     n_far += 1
                                     continue
+                                t_prody += time() - start
 
                                 # データ作成
+                                start = time()
                                 pocket_atoms = pocket.getData('name')
                                 pocket_coord = pocket.getCoords()
                                 data = {
@@ -209,10 +226,7 @@ class FinetuneDataset(Dataset):
                                 data_sdf_idxs.append(lig_idx)
                                 txn.put(str(idx).encode('ascii'), pickle.dumps(data))
                                 idx += 1
-
-                                if idx % 100 == 0:
-                                    mem = psutil.virtual_memory()
-                                    pbar.set_postfix_str(f"memory={mem.used/(2**30):.03f}/{mem.total/(2**30):.03f}")
+                                t_data += time() - start
                                 
                                 if test:
                                     protein2n[protein_name] += 1
@@ -228,8 +242,9 @@ class FinetuneDataset(Dataset):
                                 cls.logger.error(f"{protein_agroup=}")
                                 cls.logger.error(f"{protein_contact=}")
                                 raise e
-
+                            
                         lig_idx = None
+                cls.logger.info(f'finished: ({idir}){dname}')
         txn.commit()
         env.close()
         df = pd.DataFrame({'dname': data_dnames, 'lig_name': data_lig_names, 

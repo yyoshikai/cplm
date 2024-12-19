@@ -44,13 +44,25 @@ def set_logtime(logtime: bool):
     LOGTIME = logtime
 
 class logtime:
-    def __init__(self, logger: logging.Logger, prefix: str='', level=logging.DEBUG):
+    def __init__(self, logger: logging.Logger, prefix: str='', level=logging.DEBUG, thres: float=0):
         self.logger = logger
         self.prefix = prefix
         self.level = level
+        self.thres = thres
     def __enter__(self):
         if LOGTIME:
             self.start = time()
     def __exit__(self, exc_type, exc_value, traceback):
         if LOGTIME:
-            self.logger.log(self.level, f"{self.prefix} {time()-self.start:.4f}") 
+            elapse = time() - self.start
+            if elapse >= self.thres:
+                self.logger.log(self.level, f"{self.prefix} {elapse:.4f}") 
+
+class rectime: 
+    def __init__(self):
+        pass
+    def __enter__(self):
+        self.start = time()
+        return self
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.time = time() - self.start

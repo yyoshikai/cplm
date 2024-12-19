@@ -311,8 +311,8 @@ class Model(nn.Module):
 
             if self.norm is not None:
                 x = self.norm(x)
-            x = self.predictor(x)
 
+            x = self.predictor(x)
             prob = F.softmax(x[0], dim=1) # [B, D]
             output = torch.multinomial(prob, num_samples=1) # [B, 1]
             output = output.view(-1) # [B]
