@@ -83,7 +83,7 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
 is_main = rank == main_rank
 
 ## make result dir
-result_dir = f"training/results/{timestamp()}_{args.studyname}"
+result_dir = f"finetune/results/{timestamp()}_{args.studyname}"
 if is_main:
     cleardir(result_dir)
     os.makedirs(f"{result_dir}/models", exist_ok=True)
@@ -134,11 +134,12 @@ protein_atom_tokenizer = ProteinAtomTokenizer()
 
 train_data = FinetuneDataset(args.finetune_save_dir, 
     protein_atom_tokenizer, smiles_tokenizer, coord_tokenizer, args.seed, mol_atom_h=True, mol_coord_h=True)
+vocs = train_data.vocs()
 if args.index_lmdb is not None:
     index_data = LMDBDataset(args.index_lmdb, key_is_indexed=True)
     train_data = IndexSubset(train_data, index_data)
 
-voc_encoder = VocEncoder(train_data.vocs())
+voc_encoder = VocEncoder(vocs)
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 if rank != main_rank:
     del train_data

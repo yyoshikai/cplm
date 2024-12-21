@@ -236,10 +236,10 @@ class Model(nn.Module):
             state_vocs = np.array(state_dict[prefix+'vocs'], dtype=object)
             self_vocs = np.array(self.vocs, dtype=object)
             if np.any(state_vocs != self_vocs):
-                self.logger.warning(f"vocs in state_dict does not match current vocs."
+                self.logger.warning(f"vocs in state_dict does not match current vocs. "
                         "Some weights will be permuted.")
-                self.logger.debug(f"Removed from state_dict: {sorted(set(state_vocs)-set(self.vocs))}")
-                self.logger.debug(f"New in model: {sorted(set(self.vocs)-set(state_vocs))}")
+                self.logger.info(f"Removed from state_dict: {sorted(set(state_vocs)-set(self.vocs))}")
+                self.logger.info(f"New in model: {sorted(set(self.vocs)-set(state_vocs))}")
                 common_vocs = list(set(list(state_vocs))&set(list(self_vocs)))
                 state_idx = np.array([np.where(state_vocs == v)[0][0] for v in common_vocs])
                 self_idx = np.array([np.where(self_vocs == v)[0][0] for v in common_vocs])

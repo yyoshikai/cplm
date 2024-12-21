@@ -7,7 +7,6 @@ from collections import defaultdict
 from torch.utils.data import Dataset
 from time import time
 from prody import parsePDB, parsePDBStream, confProDy, Contacts
-from rdkit import rdBase
 from ..utils.lmdb import new_lmdb
 from .data import LMDBDataset, get_random_rotation_matrix
 from ..utils import logtime, slice_str
@@ -15,7 +14,7 @@ from rdkit import Chem
 from .tokenizer import ProteinAtomTokenizer, StringTokenizer, FloatTokenizer
 confProDy(verbosity='none')
 from ..utils.logger import add_file_handler, get_logger
-from ..utils.rdkit import set_rdkit_logger, ignore_warning
+from ..utils.rdkit import ignore_warning
 from ..utils.utils import logtime
 
 class FinetuneDataset(Dataset):
