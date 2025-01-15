@@ -283,7 +283,7 @@ class Model(nn.Module):
 
         context: torch.Tensor(long)[L, B]
         """
-        self.logger.info("generate2 used.")
+        
         device = self.predictor.weight.device
         vocs = np.array(self.vocs)
         end_token = np.where(vocs == end_voc)[0][0]

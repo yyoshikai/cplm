@@ -46,6 +46,7 @@ parser.add_argument("--mol-repeat", type=int, default=1)
 parser.add_argument("--mol-data", default=f"{WORKDIR}/cheminfodata/unimol/ligands/train.lmdb")
 parser.add_argument("--no-lig-coord-h", action='store_true')
 parser.add_argument("--no-lig-atom-h", action='store_true')
+parser.add_argument("--lig-randomize", action='store_true')
 parser.add_argument("--pocket-repeat", type=int, default=1)
 parser.add_argument("--pocket-data", default=f"{WORKDIR}/cheminfodata/unimol/pockets/train.lmdb")
 parser.add_argument("--frag-repeat", type=int, default=1)
@@ -74,10 +75,13 @@ args = parser.parse_args()
 
 # environment
 if args.test: args.studyname+='_test'
+if args.mol_data is None:
+    args.mol_data = f"{WORKDIR}/cheminfodata/unimol/ligands/train.lmdb"
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e6)
+
 main_rank = 0
 batch_first = False
 set_logtime(args.logtime)
@@ -138,7 +142,9 @@ coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interv
 protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 ## mol data
 if args.mol_repeat > 0:
-    mol_data = UniMolLigandDataset(args.mol_data, 10, atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h)
+    mol_data = UniMolLigandDataset(args.mol_data, 10, seed=args.seed, 
+        atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h, randomize=args.lig_randomize, 
+        sample_save_dir=f"{result_dir}/ligand_sample" if args.test else None)
     mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
     vocs |= mol_data.vocs()
     mol_data = RepeatDataset(mol_data, args.mol_repeat)

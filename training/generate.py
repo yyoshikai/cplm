@@ -5,8 +5,8 @@ import torch
 
 
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
-sys.path.append(WORKDIR)
-from tools.logger import get_logger, add_stream_handler, add_file_handler
+sys.path += [f"{WORKDIR}/cplm"]
+from src.utils.logger import get_logger, add_stream_handler, add_file_handler
 from src.model import Model
 from src.data.tokenizer import VocEncoder
 
@@ -26,7 +26,7 @@ step = args.step
 
 # directories
 train_dir = f"./training/results/{args.studyname}"
-rdir = f"./generate/results/{args.studyname}/{args.step}/{args.genname}"
+rdir = f"./training/generate/results/{args.studyname}/{args.step}/{args.genname}"
 os.makedirs(rdir, exist_ok=True)
 
 # save args
@@ -66,14 +66,14 @@ model.eval()
 
 # generate tokens
 max_len = args.max_len
-batch_size = 25000 // max_len
+batch_size = token_per_batch // max_len
 nbatch = math.ceil(float(args.n)/float(batch_size))
 outputs = []
 for ibatch in range(nbatch):
     bsz0 = min(batch_size, args.n-batch_size*ibatch)
     context = torch.full((1, bsz0), dtype=torch.long, device=device, 
         fill_value=voc_encoder.voc2i[args.start_voc])
-    with torch.no_grad():
+    with torch.inference_mode():
         output = model.generate(context, args.end_voc, args.max_len, voc_encoder.pad_token)
         outputs += output.cpu().numpy().tolist()
 

@@ -1,5 +1,5 @@
 import pickle
-from collections.abc import Mapping
+from functools import lru_cache
 from logging import getLogger
 
 import numpy as np
@@ -46,8 +46,6 @@ class LMDB(Dataset):
 
     def __len__(self):
         return self.env().stat()['entries']
-    
-
 
 class LMDBDataset(Dataset):
     logger = getLogger(f"{__module__}.{__qualname__}")
@@ -72,17 +70,6 @@ class LMDBDataset(Dataset):
 
     def __len__(self):
         return len(self.lmdb)
-
-class IndexSubset(Dataset):
-    def __init__(self, dataset: Dataset, indices: Mapping[int, int]):
-        self.dataset = dataset
-        self.indices = indices
-
-    def __getitem__(self, idx):
-        return self.dataset[self.indices[idx]]
-
-    def __len__(self):
-        return len(self.indices)
 
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):
@@ -112,14 +99,62 @@ class SliceDataset(Dataset):
     def __len__(self):
         return self.size
 
+class SampleDataset(Dataset):
+    def __init__(self, dataset: Dataset, size: int, seed: int=0):
+        rstate = np.random.RandomState(seed)
+        assert size <= len(dataset)
+        self.idxs = rstate.choice(len(dataset), size=size, replace=False)
+        self.dataset = dataset
+
+    def __getitem__(self, idx: int):
+        return self.dataset[self.idxs[idx]]
+    
+    def __len__(self):
+        return len(self.idxs)
+
+class LRUCacheDataset(Dataset):
+    def __init__(self, dataset: Dataset, maxsize: int=1):
+        self.dataset = dataset
+        self._getitem_cached = lru_cache(maxsize=maxsize, typed=True)(self._getitem)
+
+    def _getitem(self, idx: int):
+        return self.dataset[idx]
+    
+    def __getitem__(self, idx: int):
+        return self._getitem_cached(idx)
+    
+    def __len__(self):
+        return len(self.dataset)
+
 class KeyDataset(Dataset):
-    def __init__(self, dataset: Dataset, key):
+    def __init__(self, dataset: LRUCacheDataset, key):
+        if not isinstance(dataset, LRUCacheDataset):
+            raise ValueError(f"KeyDataset not on LRUCacheDataset({type(dataset)}) is slow.")
         self.dataset = dataset
         self.key = key
     def __getitem__(self, idx):
         return self.dataset[idx][self.key]
     def __len__(self):
         return len(self.dataset)
+
+def untuple_dataset(dataset: Dataset, size: int):
+    if not isinstance(dataset, LRUCacheDataset):
+        dataset = LRUCacheDataset(dataset)
+    return tuple(KeyDataset(dataset, i) for i in range(size))
+    
+class IndexDataset(Dataset):
+    def __init__(self, dataset: Dataset):
+        self.dataset = dataset
+
+    def __getitem__(self, idx: int):
+        return idx, self.dataset[idx]
+    
+    def __len__(self): 
+        return len(self.dataset)
+
+def index_dataset(dataset: Dataset):
+    dataset = IndexDataset(dataset)
+    return untuple_dataset(dataset, 2)
 
 class CoordTransform:
     def __init__(self, seed:int=0, normalize_coord=False, random_rotate=False, coord_noise_std=0.0):

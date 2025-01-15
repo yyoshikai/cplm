@@ -1,8 +1,8 @@
 # 241025 若干argumentを変更した。
 import sys, os
 import argparse, logging
-from time import time
 import math, gc
+from glob import glob
 
 import psutil, yaml
 from addict import Dict
@@ -11,11 +11,13 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.distributed as dist
+from torch.utils.data.dataset import Subset
 from torch.nn.parallel import DistributedDataParallel
+import torch.optim.lr_scheduler as lrs
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data import LMDBDataset, IndexSubset, FinetuneDataset, DDPStringCollateLoader
+from src.data import LMDBDataset, FinetuneDataset, DDPStringCollateLoader
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, ProteinAtomTokenizer,\
     VocEncoder, TokenEncodeDataset
 from src.model import Model
@@ -32,16 +34,24 @@ parser.add_argument("--studyname", default='default')
 parser.add_argument("--test", action='store_true')
 
 parser.add_argument("--pretrain-name", required=True)
-parser.add_argument("--pretrain-step", type=int, required=True)
+parser.add_argument("--pretrain-step", type=int)
 
 ## hyperparameters
 parser.add_argument("--token-per-step", type=int, default=int(1.6e6))
 parser.add_argument("--max-step", type=int, default=1000000)
+parser.add_argument("--max-opt-step", type=int, default=float('inf'))
 parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--weight-decay", type=float, default=0.01)
-parser.add_argument("--clip-grad-norm", type=int, default=1.0)
+parser.add_argument("--clip-grad-value", type=float, default=None)
+parser.add_argument("--clip-grad-norm", type=float, default=1.0)
 parser.add_argument("--coord-noise-std", type=float, default=50.0)
 parser.add_argument("--coord-range", type=float, help='Defaults to value in training')
+parser.add_argument("--loss-scale")
+parser.add_argument("--pocket-coord-heavy", action='store_true')
+parser.add_argument("--reset-nan-grad", action='store_true')
+
+### scheduler
+parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
 
 ## data
 parser.add_argument("--finetune-save-dir", required=True)
@@ -70,6 +80,14 @@ if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e6)
+
+auto_pretrain_step = False
+if args.pretrain_step is None:
+    steps = [os.path.splitext(os.path.basename(step))[0] for step in glob(f"{pretrain_dir}/models/*")]
+    steps = [int(step) for step in steps if step.isdigit()]
+    args.pretrain_step = max(steps)
+    auto_pretrain_step = True
+
 main_rank = 0
 batch_first = False
 set_logtime(args.logtime)
@@ -90,7 +108,6 @@ if is_main:
     os.makedirs(f"{result_dir}/step_data", exist_ok=True)
     os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
 dist.barrier()
-
 
 ## load config
 pretrain_config = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
@@ -125,7 +142,11 @@ add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='
 logger.setLevel(logging.NOTSET if is_main else INFO_WORKER)
 log_step = 1 if args.test else 1000
 set_rdkit_logger()
+
+### log environment
 logger.info(f"num_workers={args.num_workers}")
+if auto_pretrain_step:
+    logger.info(f"pretrain_step was set to {args.pretrain_step}")
 
 # data
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
@@ -133,11 +154,12 @@ coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
 protein_atom_tokenizer = ProteinAtomTokenizer()
 
 train_data = FinetuneDataset(args.finetune_save_dir, 
-    protein_atom_tokenizer, smiles_tokenizer, coord_tokenizer, args.seed, mol_atom_h=True, mol_coord_h=True)
+    protein_atom_tokenizer, smiles_tokenizer, coord_tokenizer, args.seed, mol_atom_h=True, mol_coord_h=True, 
+    pocket_coord_heavy=args.pocket_coord_heavy)
 vocs = train_data.vocs()
 if args.index_lmdb is not None:
     index_data = LMDBDataset(args.index_lmdb, key_is_indexed=True)
-    train_data = IndexSubset(train_data, index_data)
+    train_data = Subset(train_data, index_data)
 
 voc_encoder = VocEncoder(vocs)
 train_data = TokenEncodeDataset(train_data, voc_encoder)
@@ -145,7 +167,6 @@ if rank != main_rank:
     del train_data
     train_data = None
 
-# Make dataset
 train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_memory, args.prefetch_factor, 
     args.token_per_batch, batch_first, voc_encoder.pad_token, device, size, rank, main_rank)
 
@@ -160,18 +181,34 @@ state_dict = torch.load(f"{pretrain_dir}/models/{args.pretrain_step}.pth",
     map_location={f'cuda:{main_rank}': f'cuda:{rank}'}, weights_only=True)
 model.load_state_dict(state_dict)
 
+## criterion, optimizer
 criterion = nn.CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
 optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
 optimizer.zero_grad()
+match args.loss_scale:
+    case None:
+        loss_scale = 1
+    case 'token_per_batch':
+        loss_scale = 1/args.token_per_step
+    case _:
+        loss_scale = float(args.loss_scale)
 
-def schedule(step):
-    if step <= 2000:
-        return step / 2000
-    elif step <= 55000:
-        return math.cos(math.pi*((step-2000)/(55000-2000)))*0.49+0.51
-    else:
-        return 0.02
-scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
+match args.scheduler:
+    case 'warmup':
+        def schedule(step: int):
+            if step <= 2000:
+                return step / 2000
+            elif step <= 55000:
+                return math.cos(math.pi*((step-2000)/(55000-2000)))*0.49+0.51
+            else:
+                return 0.02
+    case 'step':
+        def schedule(step: int):
+            return 0.02 ** (step / 55000)
+    case _:
+        raise ValueError
+scheduler = lrs.LambdaLR(optimizer, schedule)
+    
 
 accum_loss = 0
 opt_step = 0
@@ -185,6 +222,14 @@ data_times = []
 loss_times = []
 batch_sizes = []
 max_lens = []
+nan_grad_step_saved = False
+
+# save at step 0
+if is_main:
+    torch.save(model.state_dict(), f"{result_dir}/models/{opt_step}.pth")
+    cleardir(f"{result_dir}/optimizers")
+    torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
+            
 
 logger.info("Training started.")
 for step in range(args.max_step):
@@ -195,6 +240,19 @@ for step in range(args.max_step):
         batch = batch.to(device)
         n_token = torch.sum(batch != voc_encoder.pad_token).item()
         n_accum_token += n_token
+
+        batch_sizes.append(batch.shape[1])
+        max_lens.append(batch.shape[0])
+        # make weight
+        weight = torch.zeros_like(batch, dtype=torch.float)
+        smi_count = torch.cumsum(batch == voc_encoder.voc2i['[LIGAND]'], dim=0)
+        weight[smi_count >= 1] = 1
+        coord_count = torch.cumsum(batch == voc_encoder.voc2i['[XYZ]'], dim=0)
+        weight[coord_count >= 2] = 5
+        end_count = torch.cumsum(batch == voc_encoder.voc2i['[END]'], dim=0)
+        weight[end_count >= 1] = 0
+        logger.info(f"{weight.shape=}, {batch.shape=}")
+
         
         # log tokens in initial few steps
         if step < 5:
@@ -205,22 +263,54 @@ for step in range(args.max_step):
             logger.log(INFO_WORKER, f"batch of step {step}:")
             for idx in idxs:
                 logger.log(INFO_WORKER, f"  [{idx:3}]={','.join(voc_encoder.decode(batch[:,idx].cpu().tolist()))}")
+                logger.log(INFO_WORKER, f"  weight[{idx:3}]={weight[:,idx].cpu().tolist()}")
 
-        batch_sizes.append(batch.shape[1])
-        max_lens.append(batch.shape[0])
-        # make weight
-        weight = torch.zeros_like(batch, dtype=torch.float)
-        smi_count = torch.cumsum(batch == voc_encoder.voc2i['[LIGAND]'], dim=0)
-        weight[smi_count >= 1] = 1
-        coord_count = torch.cumsum(batch == voc_encoder.voc2i['[XYZ]'], dim=0)
-        weight[coord_count >= 2] = 5
     data_times.append(data_timer.time)
 
     with rectime() as loss_timer:
         with torch.autocast('cuda', dtype=torch.bfloat16):
+
             pred = model(batch[:-1])
-            loss = torch.sum(criterion(pred.reshape(-1, voc_encoder.voc_size), batch[1:].ravel())*weight[1:].ravel())
+            loss = torch.sum(criterion(pred.reshape(-1, voc_encoder.voc_size), batch[1:].ravel())*weight[:-1].ravel()) * loss_scale
             loss.backward()
+
+            """ gradientの分布を表示
+            grad_max = -torch.inf
+            grad_min = torch.inf
+            grad_norm = 0.0
+            for param in model.parameters():
+                grad = param.grad
+                grad_max = max(grad_max, torch.max(grad))
+                grad_min = min(grad_min, torch.min(grad))
+                grad_norm += torch.sum(grad**2)
+            logger.info(f"grad_max={grad_max.item()}, grad_min={grad_min}, grad_norm={grad_norm.item()}")
+            """
+            
+            # check nan
+            if args.reset_nan_grad:
+                grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
+                if not grad_is_finite:
+                    if is_main:
+                        logger.warning("nan or infinite value in gradient. Gradient is reset.")
+                        for name, param in model.module.named_parameters():
+                            n_nan = torch.sum(torch.isnan(param.grad)).item()
+                            n_inf = torch.sum(torch.isinf(param.grad)).item()
+                            if n_nan > 0 or n_inf > 0:
+                                logger.warning(f"{name}: {n_nan=}, {n_inf=}")
+
+                    ## save situation
+                    if is_main and not nan_grad_step_saved:
+                        nan_dir = f"{result_dir}/nan_step_{step}/{rank}"
+                        os.makedirs(nan_dir, exist_ok=True)
+                        torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
+                        torch.save(model.state_dict(), f"{nan_dir}/model.pth")
+                        nan_grad_step_saved = True
+                    
+                    ## reset grad
+                    n_accum_token = 0
+                    accum_loss = 0
+                    optimizer.zero_grad()
+
         accum_loss += loss.item()
     loss_times.append(loss_timer.time)
 
@@ -230,6 +320,8 @@ for step in range(args.max_step):
 
     if reduced_accum_token >= args.token_per_step:
         with rectime() as optim_timer:
+            if args.clip_grad_value is not None:
+                torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
             optimizer.zero_grad()
@@ -240,8 +332,7 @@ for step in range(args.max_step):
         accum_n_tokens.append(n_accum_token)
         lrs.append(scheduler.get_last_lr()[0])
 
-        mem = psutil.virtual_memory()
-        mems.append(mem.used/(2**30))
+        mems.append(psutil.virtual_memory().used/(2**30))
 
         scheduler.step()
         if opt_step % args.record_opt_step == 0:
@@ -267,7 +358,11 @@ for step in range(args.max_step):
                 gc.collect()
         n_accum_token = 0
         accum_loss = 0
+
+        if opt_step >= args.max_opt_step:
+            break
     if (step+1) % log_step == 0:
         logger.info(f"{step+1} step finished.")
-
+logger.info("Training finished!")
 dist.destroy_process_group()
+

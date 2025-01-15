@@ -15,18 +15,18 @@ from .tokenizer import ProteinAtomTokenizer, StringTokenizer, FloatTokenizer
 confProDy(verbosity='none')
 from ..utils.logger import add_file_handler, get_logger
 from ..utils.rdkit import ignore_warning
-from ..utils.utils import logtime
+from ..utils.utils import logtime, CompressedArray
 
 class FinetuneDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
     def __init__(self, save_dir: str, protein_atom_tokenizer: ProteinAtomTokenizer,
             smiles_tokenizer: StringTokenizer, coord_tokenizer: FloatTokenizer,
-            seed:int=0, out_ligand: bool=True, out_end: bool=True, 
+            seed:int=0, out_ligand: bool=True, 
             coord_center: str='ligand', random_rotate: bool=True,
             out_center: bool=False,
             pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
             pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
-            mol_atom_h: bool=False, mol_coord_h: bool=True):
+            mol_atom_h: bool=False, mol_coord_h: bool=True, out_filename: bool=False):
         """
         train.py: 
             mol: atom_h=True, coord_h=True, 
@@ -40,7 +40,6 @@ class FinetuneDataset(Dataset):
         self.coord_tokenizer = coord_tokenizer
         self.rstate = np.random.RandomState(seed)
         self.out_ligand = out_ligand
-        self.out_end = out_end
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
         self.random_rotate = random_rotate
@@ -52,7 +51,15 @@ class FinetuneDataset(Dataset):
         self.mol_atom_h = mol_atom_h
         self.mol_coord_h = mol_coord_h
         assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
-
+        self.out_filename = out_filename
+        if self.out_filename:
+            df = pd.read_csv(f"{save_dir}/filenames.csv.gz")
+            self.df = {'idx': df['idx'].values}
+            for key in ['dname', 'lig_name', 'protein_name']:
+                self.df[key] = CompressedArray(df[key].values)
+            self.df['sdf_idx'] = df['sdf_idx'].values
+            del df
+        
     def __getitem__(self, idx):
         data = self.lmdb_dataset[idx]
         with logtime(self.logger, f"[{idx}]"):
@@ -125,13 +132,17 @@ class FinetuneDataset(Dataset):
             ## ligand
             if self.out_ligand:
                 output += ['[LIGAND]']+self.smiles_tokenizer.tokenize(lig_smi)+\
-                ['[XYZ]']+self.coord_tokenizer.tokenize_array(lig_coord.ravel())
-            if self.out_end:
-                output += ['[END]']
-            if self.out_center:
-                return (output, center)
+                ['[XYZ]']+self.coord_tokenizer.tokenize_array(lig_coord.ravel())+['[END]']
             else:
-                return output
+                output += ['[LIGAND]']
+
+            out = (output, )
+            if self.out_center:
+                out += (center, )
+            if self.out_filename:
+                out += ({key: self.df[key][idx] for key in self.df}, )
+            
+            return out[0] if len(out) == 1 else out
 
     def __len__(self):
         return len(self.lmdb_dataset)
@@ -151,6 +162,7 @@ class FinetuneDataset(Dataset):
         os.makedirs(save_dir, exist_ok=True)
         add_file_handler(getLogger(), f"{save_dir}/root.log", level=logging.INFO)
         ignore_warning()
+        logger = get_logger(f"{cls.__name__}.preprocess")
         ends = tuple(ends)
         with open(f"{save_dir}/args.yaml", 'w') as f:
             yaml.dump(args, f)
@@ -158,7 +170,7 @@ class FinetuneDataset(Dataset):
         n_invalid = 0
         n_far = 0
         idx = 0
-        cls.logger.info("Processing...")
+        logger.info("Processing...")
         lig_idx = None
         if test:
             protein2n = defaultdict(int)
@@ -233,22 +245,22 @@ class FinetuneDataset(Dataset):
                                         break
 
                             except Exception as e:
-                                cls.logger.error(f"Error at {dname, basename, lig_idx}: {e}")
-                                cls.logger.error(f"{lig_mol=}")
-                                cls.logger.error(f"{lig_pdb=}")
-                                cls.logger.error(f"{lig_agroup=}")
-                                cls.logger.error(f"{pocket=}")
-                                cls.logger.error(f"{protein_agroup=}")
-                                cls.logger.error(f"{protein_contact=}")
+                                logger.error(f"Error at {dname, basename, lig_idx}: {e}")
+                                logger.error(f"{lig_mol=}")
+                                logger.error(f"{lig_pdb=}")
+                                logger.error(f"{lig_agroup=}")
+                                logger.error(f"{pocket=}")
+                                logger.error(f"{protein_agroup=}")
+                                logger.error(f"{protein_contact=}")
                                 raise e
                             
                         lig_idx = None
-                cls.logger.info(f'finished: ({idir}){dname}')
+                logger.info(f'finished: ({idir}){dname}')
         txn.commit()
         env.close()
         df = pd.DataFrame({'dname': data_dnames, 'lig_name': data_lig_names, 
             'protein_name': data_protein_names, 'sdf_idx': data_sdf_idxs})
-        df.to_csv(f"{save_dir}/filenames.csv", index_label='idx')
-        cls.logger.info(f"# of data: {idx}")
-        cls.logger.info(f"# of invalid mols: {n_invalid}")
-        cls.logger.info(f"# of far away ligand: {n_far}")
+        df.to_csv(f"{save_dir}/filenames.csv.gz", index_label='idx')
+        logger.info(f"# of data: {idx}")
+        logger.info(f"# of invalid mols: {n_invalid}")
+        logger.info(f"# of far away ligand: {n_far}")

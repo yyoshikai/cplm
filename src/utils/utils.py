@@ -1,8 +1,10 @@
 import random, struct, logging
 from functools import partial
+from bisect import bisect_right
 from time import time
 import numpy as np
 import torch
+from .logger import get_logger
 
 class RandomState:
     def __init__(self, seed: int=None):
@@ -66,3 +68,32 @@ class rectime:
         return self
     def __exit__(self, exc_type, exc_value, traceback):
         self.time = time() - self.start
+
+def remove_module(state: dict):
+    new_state = {}
+    for key, value in state.items():
+        assert key[:7] == 'module.'
+        new_state[key[7:]] = value
+    return new_state
+
+
+
+class CompressedArray:
+    logger = get_logger(f'{__module__}.{__qualname__}')
+    def __init__(self, array: np.ndarray):
+        self.logger.info("Compressing array...")
+        self.points = np.where(array[1:] != array[:-1])[0]+1
+        self.values = np.concatenate([array[[0]], array[self.points]], axis=0)
+        self.size = len(array)
+        self.logger.info("compressed.")
+
+    def __getitem__(self, idx: int):
+        if idx >= self.size or idx < -self.size:
+            raise IndexError(f'CompressedArray index out of range({idx}/{self.size})')
+        if idx < 0:
+            idx += self.size
+        bin = bisect_right(self.points, idx)
+        return self.values[bin]
+
+    def __len__(self):
+        return self.size
