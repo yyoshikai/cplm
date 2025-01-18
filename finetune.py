@@ -83,6 +83,7 @@ if args.tokenizer_log_interval is None:
 
 auto_pretrain_step = False
 if args.pretrain_step is None:
+    print(f"{pretrain_dir}/models/*", flush=True)
     steps = [os.path.splitext(os.path.basename(step))[0] for step in glob(f"{pretrain_dir}/models/*")]
     steps = [int(step) for step in steps if step.isdigit()]
     args.pretrain_step = max(steps)
@@ -178,7 +179,7 @@ model = DistributedDataParallel(model)
 
 ## load state dict
 state_dict = torch.load(f"{pretrain_dir}/models/{args.pretrain_step}.pth", 
-    map_location={f'cuda:{main_rank}': f'cuda:{rank}'}, weights_only=True)
+    map_location=device, weights_only=True)
 model.load_state_dict(state_dict)
 
 ## criterion, optimizer
@@ -251,8 +252,6 @@ for step in range(args.max_step):
         weight[coord_count >= 2] = 5
         end_count = torch.cumsum(batch == voc_encoder.voc2i['[END]'], dim=0)
         weight[end_count >= 1] = 0
-        logger.info(f"{weight.shape=}, {batch.shape=}")
-
         
         # log tokens in initial few steps
         if step < 5:
