@@ -210,7 +210,6 @@ class Model(nn.Module):
         num_embeddings = len(vocs)
         
         super().__init__()
-        torch._C._log_api_usage_once(f"torch.nn.modules.{self.__class__.__name__}")
         self.layers = nn.ModuleList([
             TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model*d_ff_factor,
@@ -291,7 +290,57 @@ class Model(nn.Module):
         assert context_len >= 1
 
         is_finished = torch.full((batch_size,), fill_value=False, device=device)
-        input = context[:1] # [L, B]
+        input = context[:1] # [1, B]
+        cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
+        outputs = [input.squeeze(0)]
+        for pos in tqdm(range(max_len)):
+
+            x = self.embedding(input)
+
+            position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
+                    for pos in range(pos+1)])            
+            sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
+            cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
+            sin = sin[pos:pos+1]
+            cos = cos[pos:pos+1]
+
+            layer: TransformerEncoderLayer
+            for i_layer, layer in enumerate(self.layers):
+                x, cache[i_layer] = layer.forward_one(x, cache[i_layer], sin, cos)
+
+            if self.norm is not None:
+                x = self.norm(x)
+
+            x = self.predictor(x)
+            prob = F.softmax(x[0], dim=1) # [B, D]
+            output = torch.multinomial(prob, num_samples=1) # [B, 1]
+            output = output.view(-1) # [B]
+            if pos < context_len-1:
+                pos_context = context[pos+1]
+                output[pos_context != pad_token] = pos_context[pos_context != pad_token]
+            outputs.append(output)
+                
+            is_finished = torch.logical_or(is_finished, output == end_token)
+            input = output.unsqueeze(0)
+            if torch.all(is_finished): break
+        outputs = torch.stack(outputs, dim=1)
+        return outputs
+
+    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int) -> torch.Tensor:
+        """
+        Use kv-cache, remove finished samples
+
+        context: torch.Tensor(long)[L, B]
+        """
+        
+        device = self.predictor.weight.device
+        vocs = np.array(self.vocs)
+        end_token = np.where(vocs == end_voc)[0][0]
+        context_len, batch_size = context.shape
+        assert context_len >= 1
+
+        is_finished = torch.full((batch_size,), fill_value=False, device=device)
+        input = context[:1] # [1, B]
         cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
         outputs = [input.squeeze(0)]
         for pos in tqdm(range(max_len)):

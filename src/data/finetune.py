@@ -1,4 +1,4 @@
-import sys, os, pickle, io, psutil, logging, yaml
+import sys, os, pickle, io, psutil, logging, yaml, random
 from tqdm import tqdm
 from logging import getLogger
 import numpy as np
@@ -8,22 +8,21 @@ from torch.utils.data import Dataset
 from time import time
 from prody import parsePDB, parsePDBStream, confProDy, Contacts
 from ..utils.lmdb import new_lmdb
-from .data import LMDBDataset, get_random_rotation_matrix
+from .data import LMDBDataset, get_random_rotation_matrix, untuple_dataset
 from ..utils import logtime, slice_str
 from rdkit import Chem
-from .tokenizer import ProteinAtomTokenizer, StringTokenizer, FloatTokenizer
+from .tokenizer import ProteinAtomTokenizer, FloatTokenizer, StringTokenizer, \
+    TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
 confProDy(verbosity='none')
 from ..utils.logger import add_file_handler, get_logger
 from ..utils.rdkit import ignore_warning
 from ..utils.utils import logtime, CompressedArray
 
-class FinetuneDataset(Dataset):
+
+class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, save_dir: str, protein_atom_tokenizer: ProteinAtomTokenizer,
-            smiles_tokenizer: StringTokenizer, coord_tokenizer: FloatTokenizer,
-            seed:int=0, out_ligand: bool=True, 
+    def __init__(self, save_dir: str, seed:int=0,
             coord_center: str='ligand', random_rotate: bool=True,
-            out_center: bool=False,
             pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
             pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
             mol_atom_h: bool=False, mol_coord_h: bool=True, out_filename: bool=False):
@@ -35,15 +34,11 @@ class FinetuneDataset(Dataset):
         BindGPTも↑と同じ。
         """
         self.lmdb_dataset = LMDBDataset(f"{save_dir}/main.lmdb", key_is_indexed=True)
-        self.protein_atom_tokenizer = protein_atom_tokenizer
-        self.smiles_tokenizer = smiles_tokenizer
-        self.coord_tokenizer = coord_tokenizer
+
         self.rstate = np.random.RandomState(seed)
-        self.out_ligand = out_ligand
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
         self.random_rotate = random_rotate
-        self.out_center = out_center
         self.pocket_atom_heavy = pocket_atom_heavy
         self.pocket_atom_h = pocket_atom_h
         self.pocket_coord_heavy = pocket_coord_heavy
@@ -53,7 +48,9 @@ class FinetuneDataset(Dataset):
         assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
         self.out_filename = out_filename
         if self.out_filename:
+            self.logger.info("Loading filenames.csv.gz ... ")
             df = pd.read_csv(f"{save_dir}/filenames.csv.gz")
+            self.logger.info("loaded.")
             self.df = {'idx': df['idx'].values}
             for key in ['dname', 'lig_name', 'protein_name']:
                 self.df[key] = CompressedArray(df[key].values)
@@ -120,37 +117,13 @@ class FinetuneDataset(Dataset):
             lig_coord -= center
             pocket_coord -= center
 
-            # output
-            output = []
-            ## pocket
-            output += ['[POCKET]']+self.protein_atom_tokenizer.tokenize(pocket_atoms)+\
-                ['[XYZ]']+self.coord_tokenizer.tokenize_array(pocket_coord.ravel())
-
-            ## score
-            output += ['[SCORE]']+self.coord_tokenizer.tokenize(score)
-
-            ## ligand
-            if self.out_ligand:
-                output += ['[LIGAND]']+self.smiles_tokenizer.tokenize(lig_smi)+\
-                ['[XYZ]']+self.coord_tokenizer.tokenize_array(lig_coord.ravel())+['[END]']
-            else:
-                output += ['[LIGAND]']
-
-            out = (output, )
-            if self.out_center:
-                out += (center, )
+            output = (pocket_atoms, pocket_coord, lig_smi, lig_coord, score, center)
             if self.out_filename:
-                out += ({key: self.df[key][idx] for key in self.df}, )
-            
-            return out[0] if len(out) == 1 else out
+                output += ({key: self.df[key][idx] for key in self.df}, )
+            return output
 
     def __len__(self):
         return len(self.lmdb_dataset)
-    
-    def vocs(self):
-        return self.protein_atom_tokenizer.vocs()|\
-            self.coord_tokenizer.vocs()|\
-            self.smiles_tokenizer.vocs()|{'[POCKET]', '[XYZ]', '[END]', '[SCORE]', '[LIGAND]'}
 
     @classmethod
     def preprocess(cls, args, cddir, save_dir, radius, 
@@ -264,3 +237,30 @@ class FinetuneDataset(Dataset):
         logger.info(f"# of data: {idx}")
         logger.info(f"# of invalid mols: {n_invalid}")
         logger.info(f"# of far away ligand: {n_far}")
+
+class FinetuneDataset(SentenceDataset):
+    def __init__(self, cddataset: Dataset, 
+            protein_atom_tokenizer: ProteinAtomTokenizer, 
+            float_tokenizer: FloatTokenizer,
+            smiles_tokenizer: StringTokenizer):
+        
+        pocket_atom, pocket_coord, lig_smi, lig_coord, score, _ \
+            = untuple_dataset(cddataset, 6)
+        pocket_atom = TokenizeDataset(pocket_atom, protein_atom_tokenizer)
+        pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
+        score = TokenizeDataset(score, float_tokenizer)
+        lig_smi = TokenizeDataset(lig_smi, smiles_tokenizer)
+        lig_coord = TokenizeDataset(lig_coord, float_tokenizer)
+
+        super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
+            '[SCORE]', score, '[LIGAND]', lig_smi, '[XYZ]', lig_coord)
+
+class RandomScoreDataset(Dataset[float]):
+    def __init__(self, min: float, max: float, size: int, seed: int):
+        self.min = min
+        self.max = max
+        self.size = size
+        self.rng = random.Random(seed)
+
+    def __getitem__(self, idx: int):
+        return self.rng.uniform(self.min, self.max)

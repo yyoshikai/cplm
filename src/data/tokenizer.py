@@ -46,7 +46,17 @@ class TokenEncodeDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-class ProteinAtomTokenizer:
+class Tokenizer:
+    def __init__(self):
+        pass
+
+    def tokenize(self, item) -> list[str]:
+        raise NotImplementedError
+    
+    def vocs(self) -> set[str]:
+        raise NotImplementedError
+
+class ProteinAtomTokenizer(Tokenizer):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN', 'BR', 'MG'], unk_voc='[UNK]', log_interval: int=1000000):
         self.atom_vocs = sorted(atom_vocs, key=len, reverse=True)
@@ -78,7 +88,7 @@ class ProteinAtomTokenizer:
     def vocs(self):
         return set(self.atom_vocs+[self.unk_voc])
                 
-class StringTokenizer:
+class StringTokenizer(Tokenizer):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, vocs: list, unk_voc='[UNK]'):
         self.vocs_ = sorted(vocs, key=len, reverse=True)
@@ -100,7 +110,7 @@ class StringTokenizer:
     def vocs(self):
         return set(self.vocs_+[self.unk_voc])
 
-class FloatTokenizer:
+class FloatTokenizer(Tokenizer):
     logger = getLogger(f"{__module__}.{__qualname__}")
 
     def __init__(self, vmin: float, vmax: float, decimal: int=3, log_interval: int=1000000):
@@ -139,4 +149,63 @@ class FloatTokenizer:
         vocs = {str(i) for i in range(ivmin, ivmax+1)}
         if self.vmin < 0: vocs.add('-0')
         vocs |= {'.'+str(i).zfill(self.decimal) for i in range(10**self.decimal)}
+        return vocs
+
+class TokenizeDataset(Dataset[list[str]]):
+    def __init__(self, dataset: Dataset, tokenizer: Tokenizer):
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+    
+    def __getitem__(self, idx: int):
+        return self.tokenizer.tokenize(self.dataset[idx])
+    
+    def __len__(self):
+        return len(self.dataset)
+
+    def vocs(self):
+        return self.tokenizer.vocs()
+
+class ArrayTokenizeDataset(TokenizeDataset):
+    def __init__(self, dataset: Dataset[np.ndarray], tokenizer: FloatTokenizer):
+        super().__init__(dataset, tokenizer)
+
+    def __getitem__(self, idx: int):
+        return self.tokenizer.tokenize_array(self.dataset[idx].ravel())
+
+class SentenceDataset(Dataset[list[str]]):
+    def __init__(self, *sentence: list[str|Dataset[list[str]]]):
+        self.sentence = sentence
+
+        # check length
+        self.len = None
+        for word in self.sentence:
+            if isinstance(word, Dataset):
+                if self.len is None:
+                    self.len = len(word)
+                else:
+                    assert self.len == len(word)
+        if self.len is None:
+            raise ValueError(f"No dataset in sentence.")
+
+    def __getitem__(self, idx: int) -> list[str]:        
+        item = []
+        for word in self.sentence:
+            if isinstance(word, str):
+                item.append(word)
+            else:
+                item += word[idx]
+        return item
+    
+    def __len__(self):
+        return self.len
+    
+    def vocs(self) -> set[str]:
+        vocs = set()
+        for word in self.sentence:
+            if isinstance(word, str):
+                vocs.add(word)
+            elif isinstance(word, TokenizeDataset):
+                    vocs |= word.vocs()
+            else:
+                raise NotImplementedError(f"Unknown word when gathering vocs: {word}")
         return vocs

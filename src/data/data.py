@@ -112,9 +112,24 @@ class SampleDataset(Dataset):
     def __len__(self):
         return len(self.idxs)
 
-class LRUCacheDataset(Dataset):
-    def __init__(self, dataset: Dataset, maxsize: int=1):
+class CacheDataset(Dataset):
+    def __init__(self, dataset: Dataset):
         self.dataset = dataset
+        self.cache_idx = None
+        self.cache_item = None
+    
+    def __getitem__(self, idx: int):
+        if idx != self.cache_idx:
+            self.cache_idx = idx
+            self.cache_item = self.dataset[idx]
+        return self.cache_item
+
+    def __len__(self):
+        return len(self.dataset)
+
+class LRUCacheDataset(CacheDataset):
+    def __init__(self, dataset: Dataset, maxsize: int=1):
+        super().__init__(dataset)
         self._getitem_cached = lru_cache(maxsize=maxsize, typed=True)(self._getitem)
 
     def _getitem(self, idx: int):
@@ -122,14 +137,11 @@ class LRUCacheDataset(Dataset):
     
     def __getitem__(self, idx: int):
         return self._getitem_cached(idx)
-    
-    def __len__(self):
-        return len(self.dataset)
 
 class KeyDataset(Dataset):
-    def __init__(self, dataset: LRUCacheDataset, key):
-        if not isinstance(dataset, LRUCacheDataset):
-            raise ValueError(f"KeyDataset not on LRUCacheDataset({type(dataset)}) is slow.")
+    def __init__(self, dataset: CacheDataset, key):
+        if not isinstance(dataset, CacheDataset):
+            raise ValueError(f"KeyDataset not on CacheDataset({type(dataset)}) is slow.")
         self.dataset = dataset
         self.key = key
     def __getitem__(self, idx):
@@ -138,8 +150,8 @@ class KeyDataset(Dataset):
         return len(self.dataset)
 
 def untuple_dataset(dataset: Dataset, size: int):
-    if not isinstance(dataset, LRUCacheDataset):
-        dataset = LRUCacheDataset(dataset)
+    if not isinstance(dataset, CacheDataset):
+        dataset = CacheDataset(dataset)
     return tuple(KeyDataset(dataset, i) for i in range(size))
     
 class IndexDataset(Dataset):

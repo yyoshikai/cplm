@@ -17,7 +17,8 @@ import torch.optim.lr_scheduler as lrs
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data import LMDBDataset, FinetuneDataset, DDPStringCollateLoader
+from src.data import LMDBDataset, FinetuneDataset, CDDataset, DDPStringCollateLoader
+
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, ProteinAtomTokenizer,\
     VocEncoder, TokenEncodeDataset
 from src.model import Model
@@ -40,7 +41,6 @@ parser.add_argument("--pretrain-step", type=int)
 parser.add_argument("--token-per-step", type=int, default=int(1.6e6))
 parser.add_argument("--max-step", type=int, default=1000000)
 parser.add_argument("--max-opt-step", type=int, default=float('inf'))
-parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--weight-decay", type=float, default=0.01)
 parser.add_argument("--clip-grad-value", type=float, default=None)
 parser.add_argument("--clip-grad-norm", type=float, default=1.0)
@@ -51,6 +51,7 @@ parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--reset-nan-grad", action='store_true')
 
 ### scheduler
+parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
 
 ## data
@@ -79,7 +80,7 @@ pretrain_dir = f"training/results/{args.pretrain_name}"
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
 if args.tokenizer_log_interval is None:
-    args.tokenizer_log_interval = 10000 if args.test else int(1e6)
+    args.tokenizer_log_interval = 10000 if args.test else int(1e7)
 
 auto_pretrain_step = False
 if args.pretrain_step is None:
@@ -151,17 +152,17 @@ if auto_pretrain_step:
 
 # data
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
-coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
+float_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
 protein_atom_tokenizer = ProteinAtomTokenizer()
 
-train_data = FinetuneDataset(args.finetune_save_dir, 
-    protein_atom_tokenizer, smiles_tokenizer, coord_tokenizer, args.seed, mol_atom_h=True, mol_coord_h=True, 
-    pocket_coord_heavy=args.pocket_coord_heavy)
-vocs = train_data.vocs()
+cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
+        mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
 if args.index_lmdb is not None:
     index_data = LMDBDataset(args.index_lmdb, key_is_indexed=True)
-    train_data = Subset(train_data, index_data)
+    cddata = Subset(cddata, index_data)
+train_data = FinetuneDataset(cddata, protein_atom_tokenizer, float_tokenizer, smiles_tokenizer)
 
+vocs = train_data.vocs()
 voc_encoder = VocEncoder(vocs)
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 if rank != main_rank:
