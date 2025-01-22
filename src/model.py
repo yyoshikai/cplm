@@ -135,12 +135,17 @@ class TransformerEncoderLayer(nn.Module):
         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         return self.dropout2(x)
     
-    def generate_init_cache(self, batch_size) -> torch.Tensor:
+    def generate_init_cache(self, batch_size) -> dict[str, torch.Tensor]:
         return {
             'k': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
                     device=self.linear2.weight.device, dtype=self.linear2.weight.dtype),
             'v': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
                     device=self.linear2.weight.device, dtype=self.linear2.weight.dtype),
+        }
+    
+    def slice_cache(self, cache, indices) -> dict:
+        return {
+            'k': cache['k'][indices], 'v': cache['v'][indices]
         }
     def forward_one(self, x, cache, sin, cos):
         assert self.norm_first # norm_first=False is not supported
@@ -326,7 +331,7 @@ class Model(nn.Module):
         outputs = torch.stack(outputs, dim=1)
         return outputs
 
-    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int) -> torch.Tensor:
+    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int) -> list[torch.Tensor]:
         """
         Use kv-cache, remove finished samples
 
@@ -339,10 +344,15 @@ class Model(nn.Module):
         context_len, batch_size = context.shape
         assert context_len >= 1
 
-        is_finished = torch.full((batch_size,), fill_value=False, device=device)
+        finished_idxs = []
+        finished_outputs = []
+
+        indices = torch.arange(batch_size, dtype=torch.int, device=device) # [B,]
+        is_finished = torch.full((batch_size,), fill_value=False, device=device) # [B,]
         input = context[:1] # [1, B]
         cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
-        outputs = [input.squeeze(0)]
+        outputs = input # [1, B]
+
         for pos in tqdm(range(max_len)):
 
             x = self.embedding(input)
@@ -368,10 +378,29 @@ class Model(nn.Module):
             if pos < context_len-1:
                 pos_context = context[pos+1]
                 output[pos_context != pad_token] = pos_context[pos_context != pad_token]
-            outputs.append(output)
+            outputs = torch.cat([outputs, output.unsqueeze(0)], dim=0) # [L, B]
                 
             is_finished = torch.logical_or(is_finished, output == end_token)
             input = output.unsqueeze(0)
             if torch.all(is_finished): break
-        outputs = torch.stack(outputs, dim=1)
+
+            if (pos+1) % remove_freq == 0:
+                finished_js = torch.where(is_finished)[0]
+                remain_js = torch.where(~is_finished)[0]
+                finished_idxs += indices[finished_js].tolist()
+                finished_outputs += list(outputs[:, finished_js].T)
+                
+                indices = indices[remain_js]
+                is_finished = is_finished[remain_js]
+                input = input[:, remain_js]
+                cache = [layer.slice_cache(c, remain_js) for c, layer in zip(cache, self.layers)]
+                outputs = outputs[:, remain_js]
+                context = context[:, remain_js]
+        finished_idxs += indices.tolist()
+        finished_outputs += list(outputs.T)
+            
+        # Order outputs
+        outputs = [(idx, output) for idx, output in zip(finished_idxs, finished_outputs)]
+        outputs.sort(key=lambda x: x[0])
+        outputs = [output[1] for output in outputs]
         return outputs
