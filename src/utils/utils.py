@@ -9,10 +9,14 @@ from .logger import get_logger
 class RandomState:
     def __init__(self, seed: int=None):
         if seed is not None:
-            random.seed(seed)
-            np.random.seed(seed)
-            torch.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)
+            self.seed(seed)
+
+    def seed(self, seed: int):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
     
     def state_dict(self):
         state_dict = {
@@ -27,6 +31,7 @@ class RandomState:
         np.random.set_state(state_dict['numpy'])
         torch.set_rng_state(state_dict['torch'])
         torch.cuda.set_rng_state_all(state_dict['cuda'])
+RANDOM_STATE = RandomState()
 
 def load_gninatypes(path, struct_fmt='fffi'):
     struct_len = struct.calcsize(struct_fmt)
@@ -59,6 +64,19 @@ class logtime:
             elapse = time() - self.start
             if elapse >= self.thres:
                 self.logger.log(self.level, f"{self.prefix} {elapse:.4f}") 
+class logend:
+    def __init__(self, logger: logging.Logger, process_name: str, level=logging.INFO, thres: float=0.0):
+        self.logger = logger
+        self.process_name = process_name
+        self.level = level
+        self.thres = thres
+    def __enter__(self):
+        self.start = time()
+        self.logger.log(self.level, f"{self.process_name} started.")
+    def __exit__(self, exc_type, exc_value, traceback):
+        t = time() - self.start
+        if t >= self.thres:
+            self.logger.log(self.level, f"{self.process_name} ended ({t:.03}s).")
 
 class rectime: 
     def __init__(self):

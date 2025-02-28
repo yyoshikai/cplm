@@ -264,3 +264,6 @@ class RandomScoreDataset(Dataset[float]):
 
     def __getitem__(self, idx: int):
         return self.rng.uniform(self.min, self.max)
+
+    def __len__(self):
+        return self.size

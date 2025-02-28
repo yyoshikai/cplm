@@ -59,7 +59,7 @@ assert vocs == voc_encoder.i2voc
 end_token = voc_encoder.voc2i[args.end_voc]
 
 # model
-model = Model(8, 768, 12, 4, 0.1, 'gelu', True, vocs, voc_encoder.pad_token)
+model = Model(config.get('n_layer', 8), 768, 12, 4, 0.1, 'gelu', True, vocs, voc_encoder.pad_token)
 logger.info(model.load_state_dict(state2))
 model.to(device)
 model.eval()

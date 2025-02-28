@@ -1,4 +1,5 @@
-from typing import Optional, Union, Callable, Tuple
+from typing import Optional, Union, Callable
+from collections.abc import Iterable
 import math
 from tqdm import tqdm
 import copy
@@ -80,7 +81,7 @@ class MultiheadAttention(nn.Module):
         nn.init.constant_(self.in_proj_bias, 0.)
         nn.init.constant_(self.out_proj.bias, 0.)
         
-    def forward(self, query: Tensor, attn_mask: Tensor, sin, cos) -> Tuple[Tensor, Optional[Tensor]]:
+    def forward(self, query: Tensor, attn_mask: Tensor, sin, cos) -> tuple[Tensor, Optional[Tensor]]:
         return multi_head_attention_forward(
             query, self.num_heads,
             self.in_proj_weight, self.in_proj_bias,
@@ -135,18 +136,18 @@ class TransformerEncoderLayer(nn.Module):
         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         return self.dropout2(x)
     
-    def generate_init_cache(self, batch_size) -> dict[str, torch.Tensor]:
+    def generate_init_cache(self, batch_size, device: torch.device=None) -> dict[str, torch.Tensor]:
+        if device is None: device = self.linear2.weight.device
         return {
             'k': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
-                    device=self.linear2.weight.device, dtype=self.linear2.weight.dtype),
+                    device=device, dtype=self.linear2.weight.dtype),
             'v': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
-                    device=self.linear2.weight.device, dtype=self.linear2.weight.dtype),
+                    device=device, dtype=self.linear2.weight.dtype),
         }
     
     def slice_cache(self, cache, indices) -> dict:
-        return {
-            'k': cache['k'][indices], 'v': cache['v'][indices]
-        }
+        return { 'k': cache['k'][indices], 'v': cache['v'][indices] }
+
     def forward_one(self, x, cache, sin, cos):
         assert self.norm_first # norm_first=False is not supported
         xr = x
@@ -207,7 +208,7 @@ class Model(nn.Module):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
     __constants__ = ['norm']
     def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, norm: bool, 
-                vocs: list, padding_idx: int):
+                vocs: list, padding_idx: int, pos_buffer_len: int=100):
         if norm:
             norm = nn.LayerNorm(d_model ,elementwise_affine=False)
         else:
@@ -228,6 +229,9 @@ class Model(nn.Module):
         self.predictor = nn.Linear(d_model, num_embeddings)
         self.head_dim = d_model // nhead
         self.vocs = vocs
+
+        self.pos_buffer_len = None
+        self.make_pos_buffer(pos_buffer_len)
 
         def save_vocs(module, state_dict, prefix, local_metadata):
             state_dict[prefix+'vocs'] = self.vocs
@@ -261,20 +265,32 @@ class Model(nn.Module):
             del state_dict[prefix+'vocs']
         self._register_load_state_dict_pre_hook(load_pre_hook, with_module=True)
 
+    def make_pos_buffer(self, length):
+        if self.pos_buffer_len is not None:
+            self.logger.warning(f"Length of positional buffers will be reset to {length}.")
+        position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
+                for pos in range(length)])
+        device = self.embedding.weight.device
+        dtype = self.embedding.weight.dtype
+        sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
+        cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
+        mask = nn.Transformer.generate_square_subsequent_mask(length).to(device).to(dtype)
+        
+        self.register_buffer('sin', sin, persistent=False)
+        self.register_buffer('cos', cos, persistent=False)
+        self.register_buffer('mask', mask, persistent=False)
+        self.pos_buffer_len = length
+
     def forward(self, src: torch.Tensor):
         x = self.embedding(src)
-        length = x.shape[0]
-        mask = nn.Transformer.generate_square_subsequent_mask(length).to(x.device).to(x.dtype)
+        L = x.shape[0]
 
-        position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
-                for pos in range(len(src))])
-        sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
-        cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
+        if L > self.pos_buffer_len:
+            self.make_pos_buffer(L)
 
-        # x = super().forward(x, mask, sin, cos)
         output = x
         for layer in self.layers:
-            output = layer(output, src_mask=mask, sin=sin, cos=cos)
+            output = layer(output, src_mask=self.mask[:L, :L], sin=self.sin[:L], cos=self.cos[:L])
         if self.norm is not None:
             output = self.norm(output)
         x = output
@@ -294,6 +310,9 @@ class Model(nn.Module):
         context_len, batch_size = context.shape
         assert context_len >= 1
 
+        if max_len > self.pos_buffer_len:
+            self.make_pos_buffer(max_len)
+
         is_finished = torch.full((batch_size,), fill_value=False, device=device)
         input = context[:1] # [1, B]
         cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
@@ -302,12 +321,8 @@ class Model(nn.Module):
 
             x = self.embedding(input)
 
-            position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
-                    for pos in range(pos+1)])            
-            sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
-            cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
-            sin = sin[pos:pos+1]
-            cos = cos[pos:pos+1]
+            sin = self.sin[pos:pos+1]
+            cos = self.cos[pos:pos+1]
 
             layer: TransformerEncoderLayer
             for i_layer, layer in enumerate(self.layers):
@@ -353,20 +368,16 @@ class Model(nn.Module):
         cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
         outputs = input # [1, B]
 
+        if max_len > self.pos_buffer_len:
+            self.make_pos_buffer(max_len)
+
         for pos in tqdm(range(max_len)):
 
             x = self.embedding(input)
 
-            position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
-                    for pos in range(pos+1)])            
-            sin = torch.tensor(np.sin(position_enc), device=x.device, dtype=x.dtype)
-            cos = torch.tensor(np.cos(position_enc), device=x.device, dtype=x.dtype)
-            sin = sin[pos:pos+1]
-            cos = cos[pos:pos+1]
-
             layer: TransformerEncoderLayer
             for i_layer, layer in enumerate(self.layers):
-                x, cache[i_layer] = layer.forward_one(x, cache[i_layer], sin, cos)
+                x, cache[i_layer] = layer.forward_one(x, cache[i_layer], self.sin[pos:pos+1], self.cos[pos:pos+1])
 
             if self.norm is not None:
                 x = self.norm(x)
@@ -384,6 +395,7 @@ class Model(nn.Module):
             input = output.unsqueeze(0)
             if torch.all(is_finished): break
 
+            # Remove finished entries from inference
             if (pos+1) % remove_freq == 0:
                 finished_js = torch.where(is_finished)[0]
                 remain_js = torch.where(~is_finished)[0]
@@ -399,6 +411,125 @@ class Model(nn.Module):
         finished_idxs += indices.tolist()
         finished_outputs += list(outputs.T)
             
+        # Order outputs
+        outputs = [(idx, output) for idx, output in zip(finished_idxs, finished_outputs)]
+        outputs.sort(key=lambda x: x[0])
+        outputs = [output[1] for output in outputs]
+        return outputs
+
+    def generate3(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tokens_per_batch: int, rebatch_lens: Iterable[int]) -> list[torch.Tensor]:
+        """
+        Use kv-cache, dynamic batching
+
+        context: torch.Tensor(long)[L, B]
+
+        遅かった。
+        """
+
+        assert tokens_per_batch >= max_len
+
+        device = self.predictor.weight.device
+        cpu = torch.device('cpu')
+
+        vocs = np.array(self.vocs)
+        end_token = np.where(vocs == end_voc)[0][0]
+
+        context_len, batch_size = context.shape
+        assert context_len >= 1
+        rebatch_lens = sorted(list(rebatch_lens))
+        assert rebatch_lens[-1] == max_len
+
+        if max_len > self.pos_buffer_len:
+            self.make_pos_buffer(max_len)
+        
+        finished_idxs = []
+        finished_outputs = []
+
+        all_context = context.cpu()
+        all_indices = torch.arange(batch_size, dtype=torch.int, device=cpu) # [B,]
+        all_input = context[:1] # [1, B]
+        all_cache = [layer.generate_init_cache(batch_size, cpu) for layer in self.layers]
+        all_outputs = all_input # [1, B]
+
+        pbar = tqdm(total=max_len)
+        l_start = 0
+        for l_end in rebatch_lens:
+            cb_size = tokens_per_batch // l_end
+
+            all_remain_js = []
+            new_input = []
+            new_cache = []
+            new_outputs = []
+
+            cb_total_step = 0
+            ncb = len(range(0, len(all_indices), cb_size))
+            for cb_start in range(0, len(all_indices), cb_size):
+                cb_end = min(cb_start+cb_size, len(all_indices))
+
+                context = all_context[:, cb_start:cb_end].to(device)
+                input = all_input[:, cb_start:cb_end].to(device)
+                cache = [{k: v[cb_start:cb_end].to(device) for k, v in c.items()}
+                    for c in all_cache]
+                outputs = [all_outputs[:, cb_start:cb_end]]
+                is_finished = torch.full((cb_end-cb_start,), fill_value=False, dtype=torch.bool, device=device)
+
+                for pos in range(l_start, l_end):
+
+                    x = self.embedding(input)
+
+                    layer: TransformerEncoderLayer
+                    for i_layer, layer in enumerate(self.layers):
+                        x, cache[i_layer] = layer.forward_one(x, cache[i_layer], self.sin[pos:pos+1], self.cos[pos:pos+1])
+
+                    if self.norm is not None:
+                        x = self.norm(x)
+
+                    x = self.predictor(x)
+                    prob = F.softmax(x[0], dim=1) # [B, D]
+                    output = torch.multinomial(prob, num_samples=1) # [B, 1]
+                    output = output.view(-1) # [B]
+                    if pos < context_len-1:
+                        pos_context = context[pos+1]
+                        output[pos_context != pad_token] = pos_context[pos_context != pad_token]
+                    is_finished = torch.logical_or(is_finished, output == end_token)
+                    output = output.unsqueeze(0)
+                    outputs.append(output.cpu())
+                    input = output
+                    cb_total_step += 1
+                    if cb_total_step % ncb == 0:
+                        pbar.update()
+                outputs = torch.cat(outputs, dim=0) # [L, B]    
+                
+                finished_js = torch.where(is_finished)[0].cpu()
+                remain_js = torch.where(~is_finished)[0].cpu()
+
+                finished_idxs += all_indices[finished_js+cb_start].tolist()
+                finished_outputs += list(outputs[:, finished_js].T.cpu())
+
+                all_remain_js.append(remain_js.cpu()+cb_start)
+                new_input.append(input[:, remain_js].cpu()) # [1, B]
+                new_cache.append([{k: v[remain_js].cpu() for k, v in c.items()} 
+                    for c in cache])
+                new_outputs.append(output[:, remain_js].cpu())
+
+
+            all_remain_js = torch.cat(all_remain_js)
+            all_outputs = torch.cat(new_outputs, dim=1)
+            if len(all_remain_js) == 0:
+                break
+            all_context = all_context[:, all_remain_js]
+            all_indices = all_indices[all_remain_js]
+
+
+            all_input = torch.cat(new_input, dim=1)
+            all_cache = []
+            for cs in zip(*new_cache):
+                c = {key: torch.cat([c[key] for c in cs]) for key in cs[0].keys()}
+                all_cache.append(c)
+            l_start = l_end
+        finished_idxs += all_remain_js.tolist()
+        finished_outputs += list(all_outputs.T)
+
         # Order outputs
         outputs = [(idx, output) for idx, output in zip(finished_idxs, finished_outputs)]
         outputs.sort(key=lambda x: x[0])

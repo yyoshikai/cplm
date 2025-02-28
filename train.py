@@ -39,6 +39,8 @@ parser.add_argument("--weight-decay", type=float, default=0.01)
 parser.add_argument("--clip-grad-norm", type=int, default=1.0)
 parser.add_argument("--coord-noise-std", type=float, default=50.0)
 parser.add_argument("--coord-range", type=int, default=200)
+parser.add_argument("--n-layer", type=int, default=8)
+parser.add_argument("--loss-scale")
 
 ## data
 # bool系は何も指定しない場合BindGPTの設定になるようにしている
@@ -56,7 +58,6 @@ parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--pocket-atom-h", action='store_true')
 parser.add_argument("--pocket-coord-h", action='store_true')
 parser.add_argument("--frag-type", default='1')
-
 
 ## environments
 parser.add_argument("--token-per-batch", type=int, default=25000)
@@ -193,13 +194,20 @@ train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_mem
     args.token_per_batch, batch_first, voc_encoder.pad_token, device, size, rank, main_rank)
 
 # model
-model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+model = Model(args.n_layer, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)
 criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=voc_encoder.pad_token)
 optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
 optimizer.zero_grad()
+match args.loss_scale:
+    case None:
+        loss_scale = 1
+    case 'token_per_batch':
+        loss_scale = 1/args.token_per_step
+    case _:
+        loss_scale = float(args.loss_scale)
 
 def schedule(step):
     if step <= 2000:
@@ -250,7 +258,7 @@ for step in range(args.max_step):
     with rectime() as loss_timer:
         with torch.autocast('cuda', dtype=torch.bfloat16):
             pred = model(batch[:-1])
-            loss = criterion(pred.reshape(-1, voc_encoder.voc_size), batch[1:].ravel())
+            loss = criterion(pred.reshape(-1, voc_encoder.voc_size), batch[1:].ravel()) * loss_scale
             loss.backward()
         accum_loss += loss.item()
     loss_times.append(loss_timer.time)
