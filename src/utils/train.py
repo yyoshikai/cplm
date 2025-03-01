@@ -64,13 +64,17 @@ class WeightedCELoss(nn.Module):
         """
         
         # make weight
-        weight = torch.zeros_like(target, dtype=torch.float)
+        L, B = target.shape
+        weight = torch.zeros_like(target, dtype=torch.float) # [L, B]
         smi_count = torch.cumsum(target == self.voc_encoder.voc2i['[LIGAND]'], dim=0)
         weight[smi_count >= 1] = 1
         coord_count = torch.cumsum(target == self.voc_encoder.voc2i['[XYZ]'], dim=0)
         weight[coord_count >= 2] = 5
         end_count = torch.cumsum(target == self.voc_encoder.voc2i['[END]'], dim=0)
         weight[end_count >= 1] = 0
+        weight = torch.cat([
+            torch.zeros(1, B, dtype=torch.float, device=weight.device), weight[:-1]
+        ], dim=0)
         
 
         # log tokens in initial few steps
@@ -84,7 +88,7 @@ class WeightedCELoss(nn.Module):
                 self.logger.log(INFO_WORKER, f"  [{idx:3}]={','.join(self.voc_encoder.decode(target[:,idx].cpu().tolist()))}")
                 self.logger.log(INFO_WORKER, f"  weight[{idx:3}]={weight[:,idx].cpu().tolist()}")
         self.step += 1
-        return torch.sum(F.cross_entropy(input.reshape(-1, self.voc_encoder.voc_size), target.ravel(), reduction='none')*weight)
+        return torch.sum(F.cross_entropy(input.reshape(-1, self.voc_encoder.voc_size), target.ravel(), reduction='none')*weight.ravel())
 
 def make_train_dir(result_dir):
     if dist.get_rank() == MAIN_RANK:
@@ -110,6 +114,7 @@ def get_train_logger(result_dir):
     add_stream_handler(logger, logging.INFO, fmt=fmt)
     add_file_handler(logger, f"{result_dir}/debug.log", logging.DEBUG, fmt=fmt, mode='a')
     add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/warning.log", logging.WARNING, fmt=fmt, mode='a')
     logger.setLevel(logging.NOTSET if rank == MAIN_RANK else INFO_WORKER)
     set_rdkit_logger()
     return logger
@@ -146,9 +151,7 @@ def add_train_args(parser: ArgumentParser):
 def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.Module, result_dir: str, pad_token: int, device: torch.device, log_step):
     logger = getLogger('train')
 
-
     # Environment
-
     ## rank
     rank = dist.get_rank()
     is_main = rank == MAIN_RANK
@@ -171,16 +174,16 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
     ## optimizer
     optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
     optimizer.zero_grad()
-    match loss_scale:
+    match args.loss_scale:
         case None:
             loss_scale = 1
         case 'token_per_batch':
             loss_scale = 1/args.token_per_step
         case _:
-            loss_scale = float(loss_scale)
+            loss_scale = float(args.loss_scale)
 
     ## scheduler
-    match scheduler:
+    match args.scheduler:
         case 'warmup':
             def schedule(step: int):
                 if step <= 2000:
@@ -221,6 +224,7 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
     for step in range(args.max_step):
 
         # get batch
+        logger.warning(f'{step=} get batch started.')
         with rectime() as data_timer:
             batch = train_loader.__next__()
             batch = batch.to(device)
@@ -230,12 +234,17 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
             batch_sizes.append(batch.shape[1])
             max_lens.append(batch.shape[0])
         data_times.append(data_timer.time)
+        logger.warning(f'{step=} get batch ended.')
 
         with rectime() as loss_timer:
             with torch.autocast('cuda', dtype=torch.bfloat16):
+
+                logger.warning(f'{step=} forward started.')
                 pred = model(batch[:-1])
-                loss = criterion(pred, batch) * loss_scale
+                logger.warning(f'{step=} forward ended.')
+                loss = criterion(pred, batch[1:]) * loss_scale
                 loss.backward()
+                logger.warning(f'{step=} backward ended.')
 
                 
                 # check nan
@@ -265,18 +274,26 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
 
             accum_loss += loss.item()
         loss_times.append(loss_timer.time)
+        logger.warning(f'{step=} all f&b ended.')
 
         # sum accum_token
         reduced_accum_token = torch.tensor(n_accum_token, dtype=torch.int, device=device)
+        logger.warning(f'{step=} {reduced_accum_token=}')
+        logger.warning(f'{step=} reduce accum token started.')
         dist.all_reduce(reduced_accum_token)
+        logger.warning(f'{step=} reduce accum token ended.')
+        print(reduced_accum_token)
+        logger.warning(f'{step=} reduce token printed.')
 
         if reduced_accum_token >= args.token_per_step:
+            logger.warning(f'{step=} optimizer step started.')
             with rectime() as optim_timer:
                 if args.clip_grad_value is not None:
                     torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
                 optimizer.step()
                 optimizer.zero_grad()
+            logger.warning(f'{step=} optimizer step started.')
             if args.test:
                 logger.info(f"optim_time={optim_timer.time:.03f}")
             opt_step += 1
@@ -313,6 +330,8 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
 
             if opt_step >= args.max_opt_step:
                 break
+            logger.warning(f'optimizer process ended.')
         if (step+1) % log_step == 0:
             logger.info(f"{step+1} step finished.")
+        logger.warning(f'{step=} ended.')
     logger.info("Training finished!")

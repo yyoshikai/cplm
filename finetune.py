@@ -34,6 +34,7 @@ parser.add_argument("--coord-range", type=float, help='Defaults to value in trai
 parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--finetune-save-dir", required=True)
 parser.add_argument("--index-lmdb")
+parser.add_argument("--no-score", action='store_true')
 
 ## pretrain
 parser.add_argument("--pretrain-name", required=True)
@@ -41,27 +42,26 @@ parser.add_argument("--pretrain-step", type=int)
 
 args = parser.parse_args()
 
-## defaults in test
-if args.test: args.studyname+='_test'
-if args.record_opt_step is None:
-    args.record_opt_step = 1 if args.test else 1000
-if args.tokenizer_log_interval is None:
-    args.tokenizer_log_interval = 10000 if args.test else int(1e7)
-
-# load pretrain
+# get finetune info
 pretrain_dir = f"training/results/{args.pretrain_name}"
 pretrain_config = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
-if args.coord_range is None:
-    args.coord_range = pretrain_config.coord_range
 
+## get last pretrain step
 auto_pretrain_step = False
 if args.pretrain_step is None:
-    print(f"{pretrain_dir}/models/*", flush=True)
     steps = [os.path.splitext(os.path.basename(step))[0] for step in glob(f"{pretrain_dir}/models/*")]
     steps = [int(step) for step in steps if step.isdigit()]
     args.pretrain_step = max(steps)
     auto_pretrain_step = True
 
+# set default args
+if args.test: args.studyname+='_test'
+if args.record_opt_step is None:
+    args.record_opt_step = 1 if args.test else 1000
+if args.tokenizer_log_interval is None:
+    args.tokenizer_log_interval = 10000 if args.test else int(1e7)
+if args.coord_range is None:
+    args.coord_range = pretrain_config.coord_range
 
 batch_first = False
 set_logtime(args.logtime)
@@ -85,16 +85,16 @@ if auto_pretrain_step:
     logger.info(f"pretrain_step was set to {args.pretrain_step}")
 
 # data
-smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
-float_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
-protein_atom_tokenizer = ProteinAtomTokenizer()
-
 cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
         mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
 if args.index_lmdb is not None:
     index_data = LMDBDataset(args.index_lmdb, key_is_indexed=True)
     cddata = Subset(cddata, index_data)
-train_data = FinetuneDataset(cddata, protein_atom_tokenizer, float_tokenizer, smiles_tokenizer)
+train_data = FinetuneDataset(cddata, 
+    ProteinAtomTokenizer(), 
+    FloatTokenizer(-args.coord_range, args.coord_range), 
+    StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()),
+    not args.no_score)
 
 vocs = train_data.vocs()
 voc_encoder = VocEncoder(vocs)
