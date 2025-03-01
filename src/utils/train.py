@@ -86,6 +86,14 @@ class WeightedCELoss(nn.Module):
         self.step += 1
         return torch.sum(F.cross_entropy(input.reshape(-1, self.voc_encoder.voc_size), target.ravel(), reduction='none')*weight)
 
+def make_train_dir(result_dir):
+    if dist.get_rank() == MAIN_RANK:
+        cleardir(result_dir)
+        os.makedirs(f"{result_dir}/models", exist_ok=True)
+        os.makedirs(f"{result_dir}/step_data", exist_ok=True)
+        os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
+    dist.barrier()
+
 def set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:
         assert sdp_kernel in ['FLASH', 'CUDNN', ]
@@ -107,7 +115,7 @@ def get_train_logger(result_dir):
     return logger
 
 def add_train_args(parser: ArgumentParser):
-    ### training
+    # training
     parser.add_argument("--token-per-step", type=int, default=int(1.6e6))
     parser.add_argument("--max-step", type=int, default=1000000)
     parser.add_argument("--max-opt-step", type=int, default=float('inf'))
@@ -117,7 +125,11 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--coord-noise-std", type=float, default=50.0)
     parser.add_argument("--loss-scale")
 
-    ## environments
+    ## scheduler
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
+
+    # environments
     parser.add_argument("--token-per-batch", type=int, default=25000)
     parser.add_argument("--record-opt-step", type=int)
     parser.add_argument("--seed", type=int, default=0)
@@ -129,6 +141,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--logtime", action='store_true')
     parser.add_argument("--tokenizer-log-interval", type=int)
     parser.add_argument("--duplicate", default='ask')
+    parser.add_argument("--reset-nan-grad", action='store_true')
 
 def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.Module, result_dir: str, pad_token: int, device: torch.device, log_step):
     logger = getLogger('train')
@@ -139,13 +152,6 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
     ## rank
     rank = dist.get_rank()
     is_main = rank == MAIN_RANK
-
-    if is_main:
-        cleardir(result_dir)
-        os.makedirs(f"{result_dir}/models", exist_ok=True)
-        os.makedirs(f"{result_dir}/step_data", exist_ok=True)
-        os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
-    dist.barrier()
 
     ## save args
     if is_main:

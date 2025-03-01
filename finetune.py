@@ -17,7 +17,7 @@ from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import set_logtime
 from src.utils.path import timestamp
-from src.utils.train import WeightedCELoss, train, add_train_args, get_train_logger, MAIN_RANK
+from src.utils.train import WeightedCELoss, train, add_train_args, get_train_logger, make_train_dir, MAIN_RANK
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -26,30 +26,22 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--studyname", default='default')
 parser.add_argument("--test", action='store_true')
 
-parser.add_argument("--pretrain-name", required=True)
-parser.add_argument("--pretrain-step", type=int)
-
-## hyperparameters
+## training
 add_train_args(parser)
 
-
-
+## data
 parser.add_argument("--coord-range", type=float, help='Defaults to value in training')
 parser.add_argument("--pocket-coord-heavy", action='store_true')
-parser.add_argument("--reset-nan-grad", action='store_true')
-
-### scheduler
-parser.add_argument("--lr", type=float, default=1e-3)
-parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
-
-## data
 parser.add_argument("--finetune-save-dir", required=True)
 parser.add_argument("--index-lmdb")
 
+## pretrain
+parser.add_argument("--pretrain-name", required=True)
+parser.add_argument("--pretrain-step", type=int)
 
 args = parser.parse_args()
 
-# environment
+## defaults in test
 if args.test: args.studyname+='_test'
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
@@ -84,6 +76,7 @@ is_main = rank == MAIN_RANK
 
 ## make result dir
 result_dir = f"finetune/results/{timestamp()}_{args.studyname}"
+make_train_dir(result_dir)
 
 ## logger
 logger = get_train_logger(result_dir)
@@ -127,6 +120,7 @@ model.load_state_dict(state_dict)
 
 criterion = WeightedCELoss(voc_encoder, args.seed)
 
-train(args, train_loader, model, criterion, result_dir, is_main)
+train(args, train_loader, model, criterion, result_dir, voc_encoder.pad_token, device, 
+    1 if args.test else 10000)
 
 dist.destroy_process_group()

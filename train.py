@@ -24,18 +24,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--studyname", default='default')
 parser.add_argument("--test", action='store_true')
 
-## hyperparameters
+## training
 add_train_args(parser)
 
-
-
-
-parser.add_argument("--coord-range", type=int, default=200)
-parser.add_argument("--lr", type=float, default=1e-3)
+## model
 parser.add_argument("--n-layer", type=int, default=8)
 
 ## data
 # bool系は何も指定しない場合BindGPTの設定になるようにしている
+parser.add_argument("--coord-range", type=int, default=200)
 parser.add_argument("--mol-repeat", type=int, default=1)
 parser.add_argument("--mol-data", default=f"{WORKDIR}/cheminfodata/unimol/ligands/train.lmdb")
 parser.add_argument("--no-lig-coord-h", action='store_true')
@@ -47,15 +44,13 @@ parser.add_argument("--frag-repeat", type=int, default=1)
 parser.add_argument("--frag-data")
 parser.add_argument("--no-pocket-atom-heavy", action='store_true')
 parser.add_argument("--pocket-coord-heavy", action='store_true')
-parser.add_argument("--reset-nan-grad", action='store_true')
 parser.add_argument("--pocket-atom-h", action='store_true')
 parser.add_argument("--pocket-coord-h", action='store_true')
 parser.add_argument("--frag-type", default='1')
 
-
 args = parser.parse_args()
 
-# environment
+# defaults in test
 if args.test: args.studyname+='_test'
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
