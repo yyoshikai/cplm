@@ -277,6 +277,7 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
         logger.warning(f'{step=} all f&b ended.')
 
         # sum accum_token
+        """
         reduced_accum_token = torch.tensor(n_accum_token, dtype=torch.int, device=device)
         logger.warning(f'{step=} {reduced_accum_token=}')
         logger.warning(f'{step=} reduce accum token started.')
@@ -284,7 +285,9 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
         logger.warning(f'{step=} reduce accum token ended.')
         print(reduced_accum_token)
         logger.warning(f'{step=} reduce token printed.')
-
+        """
+        reduced_accum_token = args.token_per_step
+        
         if reduced_accum_token >= args.token_per_step:
             logger.warning(f'{step=} optimizer step started.')
             with rectime() as optim_timer:
