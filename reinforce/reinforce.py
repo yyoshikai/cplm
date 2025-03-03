@@ -74,11 +74,20 @@ train_data = ReinforceDataset(
     cddata, 
     ProteinAtomTokenizer(), 
     FloatTokenizer(-args.coord_range, args.coord_range))
-smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
+if not is_main:
+    del train_data
+    train_data = None
+train_loader = DDPStringCollateLoader
 
 # load state dict(for vocs)
 state_dict = torch.load(f"{finetune_dir}/models/{args.pretrain_step}.pth", 
     map_location=device, weights_only=True)
+vocs = state_dict['module.vocs']
+assert train_data.vocs() < set(vocs)
+
+
+
+
 
 
 
