@@ -272,13 +272,13 @@ class Model(nn.Module):
                 for pos in range(length)])
         device = self.embedding.weight.device
         dtype = self.embedding.weight.dtype
-        sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
-        cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
-        mask = nn.Transformer.generate_square_subsequent_mask(length).to(device).to(dtype)
+        self.sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
+        self.cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
+        self.mask = nn.Transformer.generate_square_subsequent_mask(length).to(device).to(dtype)
         
-        self.register_buffer('sin', sin, persistent=False)
-        self.register_buffer('cos', cos, persistent=False)
-        self.register_buffer('mask', mask, persistent=False)
+        # self.register_buffer('sin', sin, persistent=False)
+        # self.register_buffer('cos', cos, persistent=False)
+        # self.register_buffer('mask', mask, persistent=False)
         self.pos_buffer_len = length
 
     def forward(self, src: torch.Tensor):
