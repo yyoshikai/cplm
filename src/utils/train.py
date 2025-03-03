@@ -23,7 +23,6 @@ from torch import Tensor
 a = torch.tensor([0])
 a.item()
 
-
 class CELoss(nn.Module):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, voc_encoder: VocEncoder, seed: int):
@@ -221,7 +220,8 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
         torch.save(model.state_dict(), f"{result_dir}/models/{opt_step}.pth")
         cleardir(f"{result_dir}/optimizers")
         torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
-                
+    
+    os.makedirs(f"{result_dir}/batches/{rank}", exist_ok=True)
 
     logger.info("Training started.")
     for step in range(args.max_step):
@@ -237,6 +237,7 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
             batch_sizes.append(batch.shape[1])
             max_lens.append(batch.shape[0])
         data_times.append(data_timer.time)
+        torch.save(batch, f"{result_dir}/batches/{rank}/{step}.pt")
         logger.warning(f'{step=} get batch ended.')
 
         with rectime() as loss_timer:
