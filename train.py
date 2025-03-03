@@ -15,7 +15,7 @@ from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import set_logtime
 from src.utils.path import timestamp
-from src.utils.train import CELoss, train, add_train_args, get_train_logger, MAIN_RANK
+from src.utils.train import CELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -70,7 +70,7 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
 is_main = rank == MAIN_RANK
 
 ## make result dir
-result_dir = f"training/results/{timestamp()}_{args.studyname}"
+result_dir = sync_train_dir(f"training/results/{timestamp()}_{args.studyname}")
 
 ## logger
 logger = get_train_logger(result_dir)
