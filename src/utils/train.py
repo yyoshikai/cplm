@@ -238,43 +238,43 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
 
         with rectime() as loss_timer:
             with torch.autocast('cuda', dtype=torch.bfloat16):
-
                 logger.warning(f'{step=} forward started.')
                 pred = model(batch[:-1])
                 logger.warning(f'{step=} forward ended.')
                 loss = criterion(pred, batch[1:]) * loss_scale
-                loss.backward()
-                logger.warning(f'{step=} backward ended.')
-
-                
-                # check nan
-                if args.reset_nan_grad:
-                    logger.warning(f'{step=} checking nan grad...')
-                    grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
-                    if not grad_is_finite:
-                        if is_main:
-                            logger.warning("nan or infinite value in gradient. Gradient is reset.")
-                            for name, param in model.module.named_parameters():
-                                n_nan = torch.sum(torch.isnan(param.grad)).item()
-                                n_inf = torch.sum(torch.isinf(param.grad)).item()
-                                if n_nan > 0 or n_inf > 0:
-                                    logger.warning(f"{name}: {n_nan=}, {n_inf=}")
-
-                        ## save situation
-                        if is_main and not nan_grad_step_saved:
-                            nan_dir = f"{result_dir}/nan_step_{step}/{rank}"
-                            os.makedirs(nan_dir, exist_ok=True)
-                            torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
-                            torch.save(model.state_dict(), f"{nan_dir}/model.pth")
-                            nan_grad_step_saved = True
-                        
-                        ## reset grad
-                        n_accum_token = 0
-                        accum_loss = 0
-                        optimizer.zero_grad()
-                logger.warning(f'{step=} check nan grad ended')
-            accum_loss += loss.item()
             logger.warning(f'{step=} autocast ended.')
+
+            loss.backward()
+            logger.warning(f'{step=} backward ended.')
+            accum_loss += loss.item()
+
+            # check nan
+            if args.reset_nan_grad:
+                logger.warning(f'{step=} checking nan grad...')
+                grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
+                if not grad_is_finite:
+                    if is_main:
+                        logger.warning("nan or infinite value in gradient. Gradient is reset.")
+                        for name, param in model.module.named_parameters():
+                            n_nan = torch.sum(torch.isnan(param.grad)).item()
+                            n_inf = torch.sum(torch.isinf(param.grad)).item()
+                            if n_nan > 0 or n_inf > 0:
+                                logger.warning(f"{name}: {n_nan=}, {n_inf=}")
+
+                    ## save situation
+                    if is_main and not nan_grad_step_saved:
+                        nan_dir = f"{result_dir}/nan_step_{step}/{rank}"
+                        os.makedirs(nan_dir, exist_ok=True)
+                        torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
+                        torch.save(model.state_dict(), f"{nan_dir}/model.pth")
+                        nan_grad_step_saved = True
+                    
+                    ## reset grad
+                    n_accum_token = 0
+                    accum_loss = 0
+                    optimizer.zero_grad()
+            logger.warning(f'{step=} check nan grad ended')
+
         logger.warning('rectime eended.')    
         loss_times.append(loss_timer.time)
         logger.warning(f'{step=} all f&b ended.')
