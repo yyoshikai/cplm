@@ -92,13 +92,20 @@ class WeightedCELoss(nn.Module):
         self.step += 1
         return torch.sum(F.cross_entropy(input.reshape(-1, self.voc_encoder.voc_size), target.ravel(), reduction='none')*weight.ravel())
 
-def make_train_dir(result_dir):
+def sync_train_dir(result_dir):
     if dist.get_rank() == MAIN_RANK:
         cleardir(result_dir)
         os.makedirs(f"{result_dir}/models", exist_ok=True)
         os.makedirs(f"{result_dir}/step_data", exist_ok=True)
         os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
-    dist.barrier()
+        for dst in range(dist.get_world_size()):
+            if dst != MAIN_RANK:
+                dist.send_object_list([result_dir], dst=dst)
+    else:
+        result_dirs = [None]
+        dist.recv_object_list(result_dirs, src=MAIN_RANK)
+        result_dir = result_dirs[0]
+    return result_dir
 
 def set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:

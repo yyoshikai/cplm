@@ -17,7 +17,7 @@ from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import set_logtime
 from src.utils.path import timestamp2
-from src.utils.train import WeightedCELoss, train, add_train_args, get_train_logger, make_train_dir, MAIN_RANK
+from src.utils.train import WeightedCELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -74,9 +74,9 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 is_main = rank == MAIN_RANK
 
-## make result dir
-result_dir = f"finetune/results/{timestamp2()}_{args.studyname}"
-make_train_dir(result_dir)
+## make&sync result dir
+result_dir = sync_train_dir(f"finetune/results/{timestamp2()}_{args.studyname}")
+
 
 if is_main:
     os.makedirs(f"{result_dir}/cplm", exist_ok=True)
