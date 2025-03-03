@@ -1,5 +1,5 @@
 # 241025 若干argumentを変更した。
-import sys, os
+import sys, os, shutil
 import argparse, logging
 from glob import glob
 
@@ -16,7 +16,7 @@ from src.data import *
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import set_logtime
-from src.utils.path import timestamp
+from src.utils.path import timestamp2
 from src.utils.train import WeightedCELoss, train, add_train_args, get_train_logger, make_train_dir, MAIN_RANK
 
 # arguments
@@ -75,8 +75,13 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
 is_main = rank == MAIN_RANK
 
 ## make result dir
-result_dir = f"finetune/results/{timestamp()}_{args.studyname}"
+result_dir = f"finetune/results/{timestamp2()}_{args.studyname}"
 make_train_dir(result_dir)
+
+if is_main:
+    os.makedirs(f"{result_dir}/cplm", exist_ok=True)
+    shutil.copy2('finetune.py', f"{result_dir}/cplm/finetune.py")
+    shutil.copytree('src', f"{result_dir}/cplm/src")
 
 ## logger
 logger = get_train_logger(result_dir)

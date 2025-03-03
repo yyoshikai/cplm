@@ -44,3 +44,7 @@ def make_dir(path=None, duplicate='ask'):
 def timestamp():
     dt_now = datetime.now()
     return f"{dt_now.year%100:02}{dt_now.month:02}{dt_now.day:02}"
+
+def timestamp2():
+    dt_now = datetime.now()
+    return f"{dt_now.year%100:02}{dt_now.month:02}{dt_now.day:02}_{dt_now.hour:02}{dt_now.minute:02}{dt_now.second:02}"
