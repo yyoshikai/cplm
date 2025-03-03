@@ -272,21 +272,24 @@ class Model(nn.Module):
                 for pos in range(length)])
         device = self.embedding.weight.device
         dtype = self.embedding.weight.dtype
-        sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
-        cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
-        mask = nn.Transformer.generate_square_subsequent_mask(length).to(device).to(dtype)
+        self.sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
+        self.cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
+        self.mask = nn.Transformer.generate_square_subsequent_mask(length).to(device).to(dtype)
         
-        self.register_buffer('sin', sin, persistent=False)
-        self.register_buffer('cos', cos, persistent=False)
-        self.register_buffer('mask', mask, persistent=False)
         self.pos_buffer_len = length
+
+    def set_pos_device(self):
+        device = self.embedding.weight.device
+        self.sin = self.sin.to(device)
+        self.cos = self.cos.to(device)
+        self.mask = self.mask.to(device)
 
     def forward(self, src: torch.Tensor):
         x = self.embedding(src)
         L = x.shape[0]
-
         if L > self.pos_buffer_len:
             self.make_pos_buffer(L)
+        self.set_pos_device()
 
         output = x
         for layer in self.layers:
@@ -309,6 +312,7 @@ class Model(nn.Module):
         end_token = np.where(vocs == end_voc)[0][0]
         context_len, batch_size = context.shape
         assert context_len >= 1
+        self.set_pos_device()
 
         if max_len > self.pos_buffer_len:
             self.make_pos_buffer(max_len)
@@ -358,6 +362,7 @@ class Model(nn.Module):
         end_token = np.where(vocs == end_voc)[0][0]
         context_len, batch_size = context.shape
         assert context_len >= 1
+        self.set_pos_device()
 
         finished_idxs = []
         finished_outputs = []
@@ -438,6 +443,7 @@ class Model(nn.Module):
         assert context_len >= 1
         rebatch_lens = sorted(list(rebatch_lens))
         assert rebatch_lens[-1] == max_len
+        self.set_pos_device()
 
         if max_len > self.pos_buffer_len:
             self.make_pos_buffer(max_len)
