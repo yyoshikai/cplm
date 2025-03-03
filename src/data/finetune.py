@@ -250,10 +250,10 @@ class FinetuneDataset(SentenceDataset):
         pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
         score = TokenizeDataset(score, float_tokenizer)
         lig_smi = TokenizeDataset(lig_smi, smiles_tokenizer)
-        lig_coord = TokenizeDataset(lig_coord, float_tokenizer)
+        lig_coord = ArrayTokenizeDataset(lig_coord, float_tokenizer)
 
         super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
-            '[SCORE]', score, '[LIGAND]', lig_smi, '[XYZ]', lig_coord)
+            '[SCORE]', score, '[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]')
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):
