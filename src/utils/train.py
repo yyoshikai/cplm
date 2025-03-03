@@ -20,6 +20,9 @@ MAIN_RANK = 0
 
 ## criterion, optimizer
 from torch import Tensor
+a = torch.tensor([0])
+a.item()
+
 
 class CELoss(nn.Module):
     logger = getLogger(f"{__module__}.{__qualname__}")
