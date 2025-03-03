@@ -227,14 +227,11 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
         torch.save(model.state_dict(), f"{result_dir}/models/{opt_step}.pth")
         cleardir(f"{result_dir}/optimizers")
         torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
-    
-    os.makedirs(f"{result_dir}/batches/{rank}", exist_ok=True)
 
     logger.info("Training started.")
     for step in range(args.max_step):
 
         # get batch
-        logger.warning(f'{step=} get batch started.')
         with rectime() as data_timer:
             batch = train_loader.__next__()
             batch = batch.to(device)
@@ -244,26 +241,18 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
             batch_sizes.append(batch.shape[1])
             max_lens.append(batch.shape[0])
         data_times.append(data_timer.time)
-        torch.save(batch, f"{result_dir}/batches/{rank}/{step}.pt")
-        logger.warning(f'{step=} get batch ended.')
-
+        
         with rectime() as loss_timer:
             with torch.autocast('cuda', dtype=torch.bfloat16):
-                logger.warning(f'{step=} forward started.')
                 pred = model(batch[:-1])
-                logger.warning(f'{step=} forward ended.')
                 loss = criterion(pred, batch[1:]) * loss_scale
-            logger.warning(f'{step=} autocast ended.')
-
+            
             loss.backward()
-            logger.warning(f'{step=} backward ended.')
             l = loss.item()
             accum_loss += l
-            logger.warning(f'{step=} {l=}')
-
+            
             # check nan
             if args.reset_nan_grad:
-                logger.warning(f'{step=} checking nan grad...')
                 grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
                 if not grad_is_finite:
                     if is_main:
@@ -286,33 +275,22 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
                     n_accum_token = 0
                     accum_loss = 0
                     optimizer.zero_grad()
-            logger.warning(f'{step=} check nan grad ended')
-
-        logger.warning('rectime eended.')    
+            
         loss_times.append(loss_timer.time)
-        logger.warning(f'{step=} all f&b ended.')
-
+        
         # sum accum_token
-        """
         reduced_accum_token = torch.tensor(n_accum_token, dtype=torch.int, device=device)
-        logger.warning(f'{step=} {reduced_accum_token=}')
-        logger.warning(f'{step=} reduce accum token started.')
         dist.all_reduce(reduced_accum_token)
-        logger.warning(f'{step=} reduce accum token ended.')
         print(reduced_accum_token)
-        logger.warning(f'{step=} reduce token printed.')
-        """
         reduced_accum_token = args.token_per_step
         
         if reduced_accum_token >= args.token_per_step:
-            logger.warning(f'{step=} optimizer step started.')
             with rectime() as optim_timer:
                 if args.clip_grad_value is not None:
                     torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
                 optimizer.step()
                 optimizer.zero_grad()
-            logger.warning(f'{step=} optimizer step ended.')
             if args.test:
                 logger.info(f"optim_time={optim_timer.time:.03f}")
             opt_step += 1
@@ -349,8 +327,6 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
 
             if opt_step >= args.max_opt_step:
                 break
-            logger.warning(f'optimizer process ended.')
         if (step+1) % log_step == 0:
             logger.info(f"{step+1} step finished.")
-        logger.warning(f'{step=} ended.')
-    logger.info("Training finished!")
+        er.info("Training finished!")
