@@ -329,4 +329,4 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
                 break
         if (step+1) % log_step == 0:
             logger.info(f"{step+1} step finished.")
-        er.info("Training finished!")
+    logger.info("Training finished!")
