@@ -246,7 +246,9 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
 
             loss.backward()
             logger.warning(f'{step=} backward ended.')
-            accum_loss += loss.item()
+            l = loss.item()
+            accum_loss += l
+            logger.warning(f'{step=} {l=}')
 
             # check nan
             if args.reset_nan_grad:
