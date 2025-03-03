@@ -249,6 +249,7 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
                 
                 # check nan
                 if args.reset_nan_grad:
+                    logger.warning(f'{step=} checking nan grad...')
                     grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
                     if not grad_is_finite:
                         if is_main:
@@ -271,8 +272,10 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
                         n_accum_token = 0
                         accum_loss = 0
                         optimizer.zero_grad()
-
+                logger.warning(f'{step=} check nan grad ended')
             accum_loss += loss.item()
+            logger.warning(f'{step=} autocast ended.')
+        logger.warning('rectime eended.')    
         loss_times.append(loss_timer.time)
         logger.warning(f'{step=} all f&b ended.')
 
@@ -296,7 +299,7 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
                 optimizer.step()
                 optimizer.zero_grad()
-            logger.warning(f'{step=} optimizer step started.')
+            logger.warning(f'{step=} optimizer step ended.')
             if args.test:
                 logger.info(f"optim_time={optim_timer.time:.03f}")
             opt_step += 1
