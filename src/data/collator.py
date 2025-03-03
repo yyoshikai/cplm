@@ -113,7 +113,7 @@ class DDPStringCollateLoader:
             # If no data can be added, output batch
             i = 0
             batch = None
-            for dst_rank in range(self.size):
+            for dst_rank in range(self.size-1, -1, -1):
                 max_len = len(data_list[i])
                 batch_size = self.token_per_batch // max_len
 
