@@ -281,7 +281,6 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
         # sum accum_token
         reduced_accum_token = torch.tensor(n_accum_token, dtype=torch.int, device=device)
         dist.all_reduce(reduced_accum_token)
-        reduced_accum_token = args.token_per_step
         
         if reduced_accum_token >= args.token_per_step:
             with rectime() as optim_timer:
