@@ -90,6 +90,7 @@ result_dir = sync_train_dir(f"reinforce/results/{timestamp()}_{args.studyname}")
 if is_main:
     os.makedirs(f"{result_dir}/steps", exist_ok=True)
     os.makedirs(f"{result_dir}/errors", exist_ok=True)
+    os.makedirs(f"{result_dir}/scores", exist_ok=True)
     os.makedirs(f"{result_dir}/cplm", exist_ok=True)
     shutil.copy2('reinforce.py', f"{result_dir}/cplm/reinforce.py")
     shutil.copytree('src', f"{result_dir}/cplm/src")
@@ -380,12 +381,12 @@ for step in range(args.max_step):
     steps['memory'].append(psutil.virtual_memory().used/(2**30))
 
     scheduler.step()
-    # test
-    pd.DataFrame(steps).to_csv(f"{result_dir}/steps/{rank}.csv")
-    pd.DataFrame(scoress).to_csv(f"{result_dir}/scores/{rank}.csv")
-    pd.DataFrame(errorss).to_csv(f"{result_dir}/errors/{rank}.csv")
-    watch.flush()
+    
     if step % args.record_opt_step == 0:
+        pd.DataFrame(steps).to_csv(f"{result_dir}/steps/{rank}.csv")
+        pd.DataFrame(scoress).to_csv(f"{result_dir}/scores/{rank}.csv")
+        pd.DataFrame(errorss).to_csv(f"{result_dir}/errors/{rank}.csv")
+        watch.flush()
         if is_main:
             torch.save(model.state_dict(), f"{result_dir}/models/{step}.pth")
             cleardir(f"{result_dir}/optimizers")
