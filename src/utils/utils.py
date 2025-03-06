@@ -17,7 +17,6 @@ class RandomState:
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-    
     def state_dict(self):
         state_dict = {
             'random': random.getstate(),

@@ -1,7 +1,7 @@
 from typing import Optional, Union, Callable
 from collections.abc import Iterable
 import math
-from tqdm import tqdm
+from tqdm import tqdm as _tqdm
 import copy
 import logging
 
@@ -13,6 +13,7 @@ from torch import Tensor
 from torch.nn.modules.transformer import _get_clones, _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
+from torch.nn.parallel import DistributedDataParallel
 def multi_head_attention_forward(
     query: Tensor,
     num_heads: int,
@@ -272,22 +273,22 @@ class Model(nn.Module):
                 for pos in range(length)])
         device = self.embedding.weight.device
         dtype = self.embedding.weight.dtype
-        self.sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
-        self.cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
-        self.mask = nn.Transformer.generate_square_subsequent_mask(length).to(device).to(dtype)
+        sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
+        cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
+        mask = nn.Transformer.generate_square_subsequent_mask(length).to(device).to(dtype)
         
-        # self.register_buffer('sin', sin, persistent=False)
-        # self.register_buffer('cos', cos, persistent=False)
-        # self.register_buffer('mask', mask, persistent=False)
+        self.register_buffer('sin', sin, persistent=False)
+        self.register_buffer('cos', cos, persistent=False)
+        self.register_buffer('mask', mask, persistent=False)
+        DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(self, ['sin', 'cos', 'mask'])
+        
         self.pos_buffer_len = length
 
     def forward(self, src: torch.Tensor):
         x = self.embedding(src)
         L = x.shape[0]
-
         if L > self.pos_buffer_len:
             self.make_pos_buffer(L)
-
         output = x
         for layer in self.layers:
             output = layer(output, src_mask=self.mask[:L, :L], sin=self.sin[:L], cos=self.cos[:L])
@@ -317,7 +318,7 @@ class Model(nn.Module):
         input = context[:1] # [1, B]
         cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
         outputs = [input.squeeze(0)]
-        for pos in tqdm(range(max_len)):
+        for pos in _tqdm(range(max_len)):
 
             x = self.embedding(input)
 
@@ -346,7 +347,7 @@ class Model(nn.Module):
         outputs = torch.stack(outputs, dim=1)
         return outputs
 
-    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int) -> list[torch.Tensor]:
+    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True) -> list[torch.Tensor]:
         """
         Use kv-cache, remove finished samples
 
@@ -371,7 +372,7 @@ class Model(nn.Module):
         if max_len > self.pos_buffer_len:
             self.make_pos_buffer(max_len)
 
-        for pos in tqdm(range(max_len)):
+        for pos in _tqdm(range(max_len)) if tqdm else range(max_len):
 
             x = self.embedding(input)
 
@@ -401,6 +402,7 @@ class Model(nn.Module):
                 remain_js = torch.where(~is_finished)[0]
                 finished_idxs += indices[finished_js].tolist()
                 finished_outputs += list(outputs[:, finished_js].T)
+
                 
                 indices = indices[remain_js]
                 is_finished = is_finished[remain_js]
@@ -412,9 +414,8 @@ class Model(nn.Module):
         finished_outputs += list(outputs.T)
             
         # Order outputs
-        outputs = [(idx, output) for idx, output in zip(finished_idxs, finished_outputs)]
-        outputs.sort(key=lambda x: x[0])
-        outputs = [output[1] for output in outputs]
+        finished_idxs_inv = np.argsort(finished_idxs)
+        outputs = [finished_outputs[idx] for idx in finished_idxs_inv]
         return outputs
 
     def generate3(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tokens_per_batch: int, rebatch_lens: Iterable[int]) -> list[torch.Tensor]:
@@ -451,7 +452,7 @@ class Model(nn.Module):
         all_cache = [layer.generate_init_cache(batch_size, cpu) for layer in self.layers]
         all_outputs = all_input # [1, B]
 
-        pbar = tqdm(total=max_len)
+        pbar = _tqdm(total=max_len)
         l_start = 0
         for l_end in rebatch_lens:
             cb_size = tokens_per_batch // l_end

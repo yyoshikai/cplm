@@ -62,9 +62,8 @@ class CDDataset(Dataset):
         with logtime(self.logger, f"[{idx}]"):
             
             # ligand
-            lig_mol: Chem.Mol
-            lig_mol, score, = (data[key] for key in ['lig_mol', 'score'])
-            score = float(score)
+            lig_mol: Chem.Mol = data['lig_mol']
+            score = float(data['score'])
             
             ## randomize
             nums = np.arange(lig_mol.GetNumAtoms())
@@ -239,10 +238,10 @@ class CDDataset(Dataset):
         logger.info(f"# of far away ligand: {n_far}")
 
 class FinetuneDataset(SentenceDataset):
-    def __init__(self, cddataset: Dataset, 
+    def __init__(self, cddataset: CDDataset, 
             protein_atom_tokenizer: ProteinAtomTokenizer, 
             float_tokenizer: FloatTokenizer,
-            smiles_tokenizer: StringTokenizer):
+            smiles_tokenizer: StringTokenizer, out_score):
         
         pocket_atom, pocket_coord, lig_smi, lig_coord, score, _ \
             = untuple_dataset(cddataset, 6)
@@ -251,9 +250,20 @@ class FinetuneDataset(SentenceDataset):
         score = TokenizeDataset(score, float_tokenizer)
         lig_smi = TokenizeDataset(lig_smi, smiles_tokenizer)
         lig_coord = ArrayTokenizeDataset(lig_coord, float_tokenizer)
+<<<<<<< HEAD
 
         super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
             '[SCORE]', score, '[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]')
+=======
+
+        if out_score:
+            super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
+                '[SCORE]', score, '[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]')
+        else:
+            super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
+                '[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]')
+
+>>>>>>> merge_train
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):

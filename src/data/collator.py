@@ -1,6 +1,8 @@
 from bisect import bisect_right
+from functools import partial
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch import Tensor
+from torch.utils.data import Dataset, DataLoader, BatchSampler
 from torch.nn.utils.rnn import pad_sequence
 
 import torch.distributed as dist
@@ -61,9 +63,9 @@ class DDPStringCollateLoader:
     logger = get_logger(f"{__module__}.{__qualname__}")
     def __init__(self, dataset: Dataset, num_workers:int, pin_memory: bool, prefetch_factor: int, 
             token_per_batch: int, batch_first: bool, padding_value: int,
-            device: torch.device, size: int, rank: int, main_rank: int=0):
-        self.size = size
-        self.rank = rank
+            device: torch.device, main_rank: int=0):
+        self.size = dist.get_world_size()
+        self.rank = dist.get_rank()
         self.main_rank = main_rank
         self.device = device
 
@@ -133,51 +135,3 @@ class DDPStringCollateLoader:
             batch = torch.zeros(batch_shape[0], batch_shape[1], dtype=torch.long, device=self.device)
             dist.recv(batch, src=self.main_rank)
         return batch
-
-class DDPStringCollateLoader2:
-    """
-    250121 Pending.
-    """
-    logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, dataset: Dataset, num_workers:int, pin_memory: bool, prefetch_factor: int, token_per_step: int,
-            token_per_batch: int, batch_first: bool, padding_value: int,
-            device: torch.device, size: int, rank: int, main_rank: int=0):
-        self.size = size
-        self.rank = rank
-        self.main_rank = main_rank
-        self.device = device
-
-        if self.rank == main_rank:
-            sampler = InfiniteRandomSampler(dataset)
-            self.token_per_step = token_per_step
-            self.token_per_batch = token_per_batch
-            self.loader = DataLoader(dataset, batch_size=None, sampler=sampler, num_workers=num_workers, 
-                pin_memory=pin_memory, persistent_workers=True, prefetch_factor=prefetch_factor)
-            self.iter = self.loader.__iter__()
-            self.next_item = None
-            self.step = 0
-            self.batch_first = batch_first
-            self.padding_value = padding_value
-        
-    def __iter__(self):
-
-        while True:
-
-            n_token = 0
-            data_list = []
-            while True:
-                next_item = self.iter.__next__()
-                next_size = len(next_item)
-                if next_size > self.token_per_batch:
-                    self.logger.warning(f"Item was too large even for single item per batch({len(self.next_item)}), and not used.")
-                    continue
-                data_list.append(next_item)
-                n_token += next_size
-                if n_token >= self.token_per_step:
-                    break
-            
-            data_list = sorted(data_list, key=len, reverse=True)
-
-            batch_list = []
-
-
