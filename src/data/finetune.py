@@ -250,11 +250,6 @@ class FinetuneDataset(SentenceDataset):
         score = TokenizeDataset(score, float_tokenizer)
         lig_smi = TokenizeDataset(lig_smi, smiles_tokenizer)
         lig_coord = ArrayTokenizeDataset(lig_coord, float_tokenizer)
-<<<<<<< HEAD
-
-        super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
-            '[SCORE]', score, '[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]')
-=======
 
         if out_score:
             super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
@@ -263,7 +258,6 @@ class FinetuneDataset(SentenceDataset):
             super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
                 '[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]')
 
->>>>>>> merge_train
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):
