@@ -62,9 +62,8 @@ class CDDataset(Dataset):
         with logtime(self.logger, f"[{idx}]"):
             
             # ligand
-            lig_mol: Chem.Mol
-            lig_mol, score, = (data[key] for key in ['lig_mol', 'score'])
-            score = float(score)
+            lig_mol: Chem.Mol = data['lig_mol']
+            score = float(data['score'])
             
             ## randomize
             nums = np.arange(lig_mol.GetNumAtoms())

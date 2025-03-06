@@ -8,14 +8,14 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import LambdaLR, ConstantLR
 from ..data.tokenizer import VocEncoder
 from ..utils.logger import INFO_WORKER, add_stream_handler, add_file_handler
 from ..utils.rdkit import set_rdkit_logger
 from ..model import Model
 from ..utils.path import cleardir
 from src.utils import RANDOM_STATE, rectime
-
+from torch.optim import Optimizer
 MAIN_RANK = 0
 
 ## criterion, optimizer
@@ -157,6 +157,27 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
 
+def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int):
+    match scheduler:
+        case 'warmup':
+            def schedule(step: int):
+                if step <= 2000:
+                    return step / 2000
+                elif step <= epoch_step:
+                    return math.cos(math.pi*((step-2000)/(epoch_step-2000)))*0.49+0.51
+                else:
+                    return 0.02
+        case 'step':
+            def schedule(step: int):
+                return 0.02 ** (step / epoch_step)
+        case 'constant':
+            def schedule(step: int):
+                return 1.0
+        case _:
+            raise ValueError
+    return LambdaLR(optimizer, schedule)
+
+
 def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.Module, result_dir: str, pad_token: int, device: torch.device, log_step):
     logger = getLogger('train')
 
@@ -190,23 +211,8 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
             loss_scale = 1/args.token_per_step
         case _:
             loss_scale = float(args.loss_scale)
-
     ## scheduler
-    match args.scheduler:
-        case 'warmup':
-            def schedule(step: int):
-                if step <= 2000:
-                    return step / 2000
-                elif step <= 55000:
-                    return math.cos(math.pi*((step-2000)/(55000-2000)))*0.49+0.51
-                else:
-                    return 0.02
-        case 'step':
-            def schedule(step: int):
-                return 0.02 ** (step / 55000)
-        case _:
-            raise ValueError
-    scheduler = LambdaLR(optimizer, schedule)
+    scheduler = get_scheduler(optimizer, args.scheduler, 55000)
 
     accum_loss = 0
     opt_step = 0

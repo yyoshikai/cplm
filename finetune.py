@@ -110,7 +110,7 @@ if not is_main:
 
 # Make dataset
 train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_memory, args.prefetch_factor, 
-    args.token_per_batch, batch_first, voc_encoder.pad_token, device, size, rank, MAIN_RANK)
+    args.token_per_batch, batch_first, voc_encoder.pad_token, device, MAIN_RANK)
 
 # model
 model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
