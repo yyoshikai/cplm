@@ -24,7 +24,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--studyname', required=True)
 ## trainings
 parser.add_argument("--seed", type=int, default=0)
-parser.add_argument("--batch-size", type=int, default=16)
+parser.add_argument("--batch-size", type=int, default=32)
 parser.add_argument('--max-len', type=int, default=2500)
 ## optimizer
 parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
@@ -175,6 +175,7 @@ class ReinforceLoader:
         if self.rank == self.main_rank:
             for dst_rank in range(self.size):
                 dst_idx, dst_batch = next(self.iter)
+                dst_batch = dst_batch.to(device)
                 dst_files = self.df_file.loc[dst_idx]
                 if dst_rank == self.rank:
                     files = dst_files
@@ -313,9 +314,12 @@ for step in range(args.max_step):
                         with open(f"{eval_dir}/lig.sdf", 'w') as f:
                             f.write(Chem.MolToMolBlock(mol))
                         dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
-                        _, score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
-                        n_valid += 1
-                        valid_score += score
+                        _, min_score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
+                        if min_score is None:
+                            error = 'VINA'
+                        else:
+                            n_valid += 1
+                            valid_score += score
                 else:
                     error = 'COORD_'+coord_error
                 errors.append(error)

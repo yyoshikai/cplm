@@ -1,13 +1,12 @@
 import sys, os
+from logging import getLogger
 import itertools, subprocess
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
-try:
-    from vina import Vina
-except Exception:
-    pass
+from vina import Vina
+logger = getLogger(__file__)
 
 def parse_mol_tokens(tokens: list[str]) -> tuple[str, str, np.ndarray|None]:
     """
@@ -113,6 +112,7 @@ def eval_vina(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]
         v.compute_vina_maps(center=center.tolist(), box_size=[20, 20, 20])
         score = v.score()[0]
         min_score = v.optimize()[0]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Error in Vina {lig_path=}, {rec_path=}: {e}")
         score = min_score = None
     return score, min_score
