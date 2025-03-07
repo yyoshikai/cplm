@@ -25,7 +25,7 @@ parser.add_argument('--studyname', required=True)
 ## trainings
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--batch-size", type=int, default=16)
-parser.add_argument('--max-len', type=int, default=1000)
+parser.add_argument('--max-len', type=int, default=2500)
 ## optimizer
 parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
 parser.add_argument("--clip-grad-norm", type=float, default=1.0) # same as BindGPT
