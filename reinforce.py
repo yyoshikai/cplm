@@ -102,7 +102,7 @@ if auto_finetune_step:
 log_step = 1 if args.test else 10000
 ## vina evaluation
 for i in range(args.batch_size):
-    os.makedirs(f"{result_dir}/eval_vina/{i}", exist_ok=True)
+    os.makedirs(f"{result_dir}/eval_vina/{rank}/{i}", exist_ok=True)
 
 # load state dict(for vocs)
 state_dict = torch.load(f"{finetune_dir}/models/{args.finetune_step}.pth", 
@@ -302,7 +302,7 @@ for step in range(args.max_step):
             valid_score = 0.0
             n_valid = 0
             for idx in range(len(outputs)):
-                eval_dir = f"{result_dir}/eval_vina/{idx}"
+                eval_dir = f"{result_dir}/eval_vina/{rank}/{idx}"
                 score = args.error_score
                 out_tokens = voc_encoder.decode(outputs[idx].tolist())
                 if step < 5:
