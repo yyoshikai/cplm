@@ -134,12 +134,12 @@ train_data = ReinforceDataset(
     ProteinAtomTokenizer(), 
     FloatTokenizer(-finetune_config.coord_range, finetune_config.coord_range))
 assert train_data.vocs() < set(vocs)
-if not is_main:
-    del train_data
-    train_data = None
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 index_data, token_data = index_dataset(train_data)
 train_data = StackDataset(index_data, token_data, center_data)
+if not is_main:
+    del train_data
+    train_data = None
 
 ## Make dataloader
 class ReinforceLoader:
