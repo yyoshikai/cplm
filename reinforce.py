@@ -197,7 +197,7 @@ class ReinforceLoader:
             files = [None]
             dist.recv_object_list(files, src=self.main_rank)
             files = files[0]
-            centers = torch.zeros(B, 3, dtyep=torch.float, device=self.device)
+            centers = torch.zeros((B, 3), dtyep=torch.float, device=self.device)
             dist.recv(centers, src=self.main_rank)
         return files, batch, centers
 
