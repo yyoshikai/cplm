@@ -320,8 +320,8 @@ for step in range(args.max_step):
                                 valid_score += score
                     else:
                         error = 'COORD_'+coord_error
-                errors.append(error)
-                scores.append(score)
+                    errors.append(error)
+                    scores.append(score)
             scoress.append(scores)
             scores = torch.tensor(scores, device=device, dtype=dtype)
             steps['n_valid'] = n_valid
