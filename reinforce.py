@@ -72,7 +72,7 @@ if args.finetune_step is None:
 # set default args
 if args.test: args.studyname+='_test'
 if args.record_opt_step is None:
-    args.record_opt_step = 1 if args.test else 1000
+    args.record_opt_step = 1 if args.test else 50
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e7)
 batch_first = False

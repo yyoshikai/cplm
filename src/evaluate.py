@@ -6,7 +6,7 @@ from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
 from vina import Vina
-logger = getLogger(__file__)
+logger = getLogger(__name__)
 
 def parse_mol_tokens(tokens: list[str]) -> tuple[str, str, np.ndarray|None]:
     """
