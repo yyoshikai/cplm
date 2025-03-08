@@ -94,6 +94,7 @@ if is_main:
     os.makedirs(f"{result_dir}/cplm", exist_ok=True)
     shutil.copy2('reinforce.py', f"{result_dir}/cplm/reinforce.py")
     shutil.copytree('src', f"{result_dir}/cplm/src")
+os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
 ## logger
 logger = get_train_logger(result_dir)
 logger.info(f"num_workers={args.num_workers}")
@@ -291,37 +292,34 @@ for step in range(args.max_step):
             weight[lig_count[:-1] > 0] = 1.0
             end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
             weight[end_count[:-1] > 0] = 0.0
-
-            ## Log sample
-            if step < 5:
-                logger.info(f"Generation at {step=}:")
             
             ## Get score
             scores = []
             errors = []
             valid_score = 0.0
             n_valid = 0
-            for idx in range(len(outputs)):
-                eval_dir = f"{result_dir}/eval_vina/{rank}/{idx}"
-                score = args.error_score
-                out_tokens = voc_encoder.decode(outputs[idx].tolist())
-                if step < 5:
-                    logger.info(f"[{idx}]: {' '.join(out_tokens)}")
-                coord_error, smiles, coords = parse_mol_tokens(out_tokens)
-                if coord_error == '':
-                    error, mol = parse_mol(smiles, coords)
-                    if error == '':
-                        with open(f"{eval_dir}/lig.sdf", 'w') as f:
-                            f.write(Chem.MolToMolBlock(mol))
-                        dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
-                        _, min_score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
-                        if min_score is None:
-                            error = 'VINA'
-                        else:
-                            n_valid += 1
-                            valid_score += score
-                else:
-                    error = 'COORD_'+coord_error
+            with open(f"{result_dir}/generated/{rank}/{step}.txt", 'w') as fw:
+                for idx in range(len(outputs)):
+                    eval_dir = f"{result_dir}/eval_vina/{rank}/{idx}"
+                    score = args.error_score
+                    out_tokens = voc_encoder.decode(outputs[idx].tolist())
+                    fw.write(','.join(out_tokens)+'\n')
+                    coord_error, smiles, coords = parse_mol_tokens(out_tokens)
+                    if coord_error == '':
+                        error, mol = parse_mol(smiles, coords)
+                        if error == '':
+                            with open(f"{eval_dir}/lig.sdf", 'w') as f:
+                                f.write(Chem.MolToMolBlock(mol))
+                            dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
+                            _, min_score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
+                            if min_score is None:
+                                error = 'VINA'
+                            else:
+                                n_valid += 1
+                                score = min_score
+                                valid_score += score
+                    else:
+                        error = 'COORD_'+coord_error
                 errors.append(error)
                 scores.append(score)
             scoress.append(scores)
