@@ -1,5 +1,5 @@
-import sys, os, argparse, yaml, shutil, math, psutil, gc
-from itertools import takewhile, dropwhile
+import sys, os, argparse, yaml, shutil, psutil, gc
+from logging import getLogger
 from collections import defaultdict
 import numpy as np, pandas as pd
 from addict import Dict
@@ -9,9 +9,12 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 from rdkit import Chem
+from torch.utils.data import Dataset, DataLoader, BatchSampler, StackDataset
+from torch.nn.utils.rnn import pad_sequence
 
+from src.data.sampler import InfiniteRandomSampler
 from src.model import Model
-from src.data import CDDataset, untuple_dataset
+from src.data import CDDataset, untuple_dataset, index_dataset
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, VocEncoder, TokenEncodeDataset
 from src.utils.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train_logger, get_scheduler
 from src.utils.path import timestamp, cleardir
@@ -115,20 +118,19 @@ voc_encoder = VocEncoder(vocs[1:]) # remove '[PAD]'
 # data
 cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
         mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
-
+pocket_atom_data, pocket_coord_data, _, _, _, center_data = \
+    untuple_dataset(cddata, 6)
 from src.data import SentenceDataset
 class ReinforceDataset(SentenceDataset):
-    def __init__(self, cddataset: CDDataset, 
+    def __init__(self, pocket_atom_data, pocket_coord_data,
         protein_atom_tokenizer: ProteinAtomTokenizer, 
         float_tokenizer: FloatTokenizer):
-        pocket_atom, pocket_coord, lig_smi, lig_coord, score, _ \
-            = untuple_dataset(cddataset, 6)
-        pocket_atom = TokenizeDataset(pocket_atom, protein_atom_tokenizer)
-        pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
+        pocket_atom_data = TokenizeDataset(pocket_atom_data, protein_atom_tokenizer)
+        pocket_coord_data = ArrayTokenizeDataset(pocket_coord_data, float_tokenizer)
 
-        super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, '[LIGAND]')
+        super().__init__('[POCKET]', pocket_atom_data, '[XYZ]', pocket_coord_data, '[LIGAND]')
 train_data = ReinforceDataset(
-    cddata, 
+    pocket_atom_data, pocket_coord_data,
     ProteinAtomTokenizer(), 
     FloatTokenizer(-finetune_config.coord_range, finetune_config.coord_range))
 assert train_data.vocs() < set(vocs)
@@ -136,13 +138,10 @@ if not is_main:
     del train_data
     train_data = None
 train_data = TokenEncodeDataset(train_data, voc_encoder)
+index_data, token_data = index_dataset(train_data)
+train_data = StackDataset(index_data, token_data, center_data)
 
 ## Make dataloader
-from logging import getLogger
-from torch.utils.data import Dataset, DataLoader, BatchSampler
-from src.data import IndexDataset
-from src.data.sampler import InfiniteRandomSampler
-from torch.nn.utils.rnn import pad_sequence
 class ReinforceLoader:
     """
 
@@ -157,12 +156,12 @@ class ReinforceLoader:
         self.device = device
 
         if self.rank == self.main_rank:
-            dataset = IndexDataset(dataset)
-            def collate_fn(datas: list[tuple[int, str]]):
-                idxs, datas = list(zip(*datas))
+            def collate_fn(datas: list[tuple[int, str, np.ndarray]]):
+                idxs, datas, centers = list(zip(*datas))
                 idxs = np.array(idxs)
                 datas = pad_sequence(datas, batch_first=batch_first, padding_value=padding_value)
-                return idxs, datas
+                centers = torch.tensor(np.array(centers))
+                return idxs, datas, centers
             loader = DataLoader(dataset, 
                 batch_sampler=BatchSampler(InfiniteRandomSampler(dataset), batch_size, drop_last=True), collate_fn=collate_fn,
                 num_workers=num_workers, pin_memory=pin_memory, persistent_workers=True, prefetch_factor=prefetch_factor)
@@ -173,28 +172,34 @@ class ReinforceLoader:
             self.next_item = None
             self.step = 0
 
-    def __next__(self) -> tuple[pd.DataFrame, torch.Tensor]:
+    def __next__(self) -> tuple[pd.DataFrame, torch.Tensor, torch.Tensor]:
         if self.rank == self.main_rank:
             for dst_rank in range(self.size):
-                dst_idx, dst_batch = next(self.iter)
+                dst_idx, dst_batch, dst_centers = next(self.iter)
                 dst_batch = dst_batch.to(device)
                 dst_files = self.df_file.loc[dst_idx]
+                dst_centers = dst_centers
                 if dst_rank == self.rank:
                     files = dst_files
                     batch = dst_batch
+                    centers = dst_centers
                 else:
                     dist.send(torch.tensor(dst_batch.shape, dtype=torch.int, device=self.device), dst=dst_rank)
                     dist.send(dst_batch, dst=dst_rank)
                     dist.send_object_list([files], dst=dst_rank)
+                    dist.send(dst_centers, dst=dst_rank)
         else:
             batch_shape = torch.zeros(2, dtype=torch.int, device=self.device)
             dist.recv(batch_shape, src=self.main_rank)
-            batch = torch.zeros(batch_shape[0], batch_shape[1], dtype=torch.long, device=self.device)
+            L, B = batch_shape.cpu().tolist()
+            batch = torch.zeros(L, B, dtype=torch.long, device=self.device)
             dist.recv(batch, src=self.main_rank)
             files = [None]
             dist.recv_object_list(files, src=self.main_rank)
             files = files[0]
-        return files, batch
+            centers = torch.zeros(B, 3, dtyep=torch.float, device=self.device)
+            dist.recv(centers, src=self.main_rank)
+        return files, batch, centers
 
 train_loader = ReinforceLoader(train_data, args.num_workers, 
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
@@ -272,8 +277,9 @@ for step in range(args.max_step):
 
     # get batch
     with watch.hold('data'):
-        files, batch = train_loader.__next__()
+        files, batch, centers = train_loader.__next__()
         batch = batch.to(device)
+        centers = centers.cpu().numpy()
         steps['batch_size'].append(batch.shape[1])
         steps['max_len'].append(batch.shape[0])
     
@@ -307,6 +313,7 @@ for step in range(args.max_step):
                     fw.write(','.join(out_tokens)+'\n')
                     coord_error, smiles, coords = parse_mol_tokens(out_tokens)
                     if coord_error == '':
+                        coords += centers[idx]
                         error, mol = parse_mol(smiles, coords)
                         if error == '':
                             with open(f"{eval_dir}/lig.sdf", 'w') as f:
