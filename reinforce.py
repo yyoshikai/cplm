@@ -20,7 +20,7 @@ from src.utils.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train
 from src.utils.path import timestamp, cleardir
 from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
-from src.evaluate import parse_mol_tokens, parse_mol, eval_vina
+from src.evaluate import parse_mol_tokens, parse_mol, eval_vina, eval_vina_dummy, eval_vina_dummy2
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 # arguments
 parser = argparse.ArgumentParser()
@@ -59,6 +59,7 @@ parser.add_argument("--tokenizer-log-interval", type=int)
 ## not classified
 parser.add_argument('--error-score', type=float, default=300)
 parser.add_argument('--test', action='store_true')
+parser.add_argument('--eval-vina', choices=['dummy', 'dummy2'], default=None)
 args = parser.parse_args()
 
 # get finetune info
@@ -176,9 +177,10 @@ class ReinforceLoader:
         if self.rank == self.main_rank:
             for dst_rank in range(self.size):
                 dst_idx, dst_batch, dst_centers = next(self.iter)
-                dst_batch = dst_batch.to(device)
+                dst_batch = dst_batch.to(self.device)
                 dst_files = self.df_file.loc[dst_idx]
-                dst_centers = dst_centers
+                dst_centers = dst_centers.to(self.device)
+                logger.warning(f"{dst_centers.shape=}, {dst_centers.device=}, {dst_centers.dtype=}")
                 if dst_rank == self.rank:
                     files = dst_files
                     batch = dst_batch
@@ -191,19 +193,32 @@ class ReinforceLoader:
         else:
             batch_shape = torch.zeros(2, dtype=torch.int, device=self.device)
             dist.recv(batch_shape, src=self.main_rank)
+            logger.warning(f"{batch_shape=}")
             L, B = batch_shape.cpu().tolist()
             batch = torch.zeros(L, B, dtype=torch.long, device=self.device)
             dist.recv(batch, src=self.main_rank)
+            logger.warning(f"{batch.shape=}")
             files = [None]
             dist.recv_object_list(files, src=self.main_rank)
             files = files[0]
-            centers = torch.zeros((B, 3), dtyep=torch.float, device=self.device)
+            logger.warning(f"{B=}")
+            centers = torch.zeros((B, 3), dtype=torch.float, device=self.device)
             dist.recv(centers, src=self.main_rank)
+            logger.warning(f"{centers.shape=}")
         return files, batch, centers
 
 train_loader = ReinforceLoader(train_data, args.num_workers, 
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
     voc_encoder.pad_token, device, MAIN_RANK)
+match args.eval_vina:
+    case 'dummy':
+        eval_func = eval_vina_dummy
+    case 'dummy2':
+        eval_func = eval_vina_dummy2
+    case None:
+        eval_func = eval_vina
+    case _:
+        raise ValueError
 
 # model
 net_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
@@ -288,9 +303,11 @@ for step in range(args.max_step):
         with torch.autocast('cuda', dtype=torch.bfloat16):
 
             ## generate sample
+            logger.warning("generation started.")
             model.eval()
             with torch.inference_mode():
                 outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, tqdm=False) # [B, L]
+            logger.warning("generation ended.")
             out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
             Lo, B = out_batch.shape
             dtype = torch.float
@@ -299,7 +316,8 @@ for step in range(args.max_step):
             weight[lig_count[:-1] > 0] = 1.0
             end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
             weight[end_count[:-1] > 0] = 0.0
-            
+            logger.warning("weight calculated.")
+
             ## Get score
             scores = []
             errors = []
@@ -307,6 +325,7 @@ for step in range(args.max_step):
             n_valid = 0
             with open(f"{result_dir}/generated/{rank}/{step}.txt", 'w') as fw:
                 for idx in range(len(outputs)):
+                    logger.warning(f"get score {idx=}")
                     eval_dir = f"{result_dir}/eval_vina/{rank}/{idx}"
                     score = args.error_score
                     out_tokens = voc_encoder.decode(outputs[idx].tolist())
@@ -319,7 +338,8 @@ for step in range(args.max_step):
                             with open(f"{eval_dir}/lig.sdf", 'w') as f:
                                 f.write(Chem.MolToMolBlock(mol))
                             dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
-                            _, min_score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
+                            logger.warning(f"Evaluating {idx=}")
+                            _, min_score = eval_func(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
                             if min_score is None:
                                 error = 'VINA'
                             else:
