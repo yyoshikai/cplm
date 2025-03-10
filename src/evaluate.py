@@ -1,12 +1,12 @@
 import sys, os
 from logging import getLogger
-import itertools, subprocess
+import itertools, subprocess, random
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
 from vina import Vina
-import random
+from openbabel import pybel
 logger = getLogger(__name__)
 
 def parse_mol_tokens(tokens: list[str]) -> tuple[str, str, np.ndarray|None]:
@@ -87,7 +87,7 @@ def parse_mol(smiles: str, coords: np.ndarray) -> tuple[str, Chem.Mol|None]:
     mol.AddConformer(conf)
     return '', mol
 
-def eval_vina(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]:
+def eval_vina0(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]:
     """
     Parameters
     ----------
@@ -124,21 +124,26 @@ def eval_vina_dummy(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, 
     else:
         return random.random(), random.random()
 
-def eval_vina_dummy2(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]:
-    """
-    Parameters
-    ----------
-    lig_path: ~.sdf
-    rec_path: ~.pdb
-    """
+def eval_vina(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]:
     os.makedirs(out_dir, exist_ok=True)
     
+    # Prepare ligand
+    mol = next(pybel.readfile('sdf', lig_path))
+    mol.addh()
+    mol.write('pdbqt', f"{out_dir}/lig_h.pdbqt", overwrite=True, opt={'c': None})
+    mol.write('sdf', f"{out_dir}/lig_h.sdf", overwrite=True)
+
+    # Prepare receptor
+    rec = next(pybel.readfile('pdb', rec_path))
+    rec.addh()
+    rec.write('pdbqt', f"{out_dir}/rec.pdbqt", overwrite=True, opt={'r': None, 'c': None})
+
     try:
         v = Vina(sf_name='vina', verbosity=0)
-        v.set_receptor(f"/work/gd43/a97003/cplm/reinforce/results/250308_coord_test/eval_vina/0/0/rec.pdbqt")
-        v.set_ligand_from_file(f"/work/gd43/a97003/cplm/reinforce/results/250308_coord_test/eval_vina/0/0/lig_h.pdbqt")
+        v.set_receptor(f"{out_dir}/rec.pdbqt")
+        v.set_ligand_from_file(f"{out_dir}/lig_h.pdbqt")
 
-        mol = Chem.SDMolSupplier(f"/work/gd43/a97003/cplm/reinforce/results/250308_coord_test/eval_vina/0/0/lig_h.sdf", removeHs=False).__next__()
+        mol = Chem.SDMolSupplier(f"{out_dir}/lig_h.sdf", removeHs=False).__next__()
         center = mol.GetConformer().GetPositions().mean(axis=0)
         v.compute_vina_maps(center=center.tolist(), box_size=[20, 20, 20])
         score = v.score()[0]

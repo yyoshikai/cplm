@@ -20,7 +20,7 @@ from src.utils.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train
 from src.utils.path import timestamp, cleardir
 from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
-from src.evaluate import parse_mol_tokens, parse_mol, eval_vina, eval_vina_dummy, eval_vina_dummy2
+from src.evaluate import parse_mol_tokens, parse_mol, eval_vina
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 # arguments
 parser = argparse.ArgumentParser()
@@ -59,7 +59,6 @@ parser.add_argument("--tokenizer-log-interval", type=int)
 ## not classified
 parser.add_argument('--error-score', type=float, default=300)
 parser.add_argument('--test', action='store_true')
-parser.add_argument('--eval-vina', choices=['dummy', 'dummy2'], default=None)
 args = parser.parse_args()
 
 # get finetune info
@@ -210,15 +209,6 @@ class ReinforceLoader:
 train_loader = ReinforceLoader(train_data, args.num_workers, 
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
     voc_encoder.pad_token, device, MAIN_RANK)
-match args.eval_vina:
-    case 'dummy':
-        eval_func = eval_vina_dummy
-    case 'dummy2':
-        eval_func = eval_vina_dummy2
-    case None:
-        eval_func = eval_vina
-    case _:
-        raise ValueError
 
 # model
 net_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
@@ -339,7 +329,7 @@ for step in range(args.max_step):
                                 f.write(Chem.MolToMolBlock(mol))
                             dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
                             logger.warning(f"Evaluating {idx=}")
-                            _, min_score = eval_func(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
+                            _, min_score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
                             if min_score is None:
                                 error = 'VINA'
                             else:
