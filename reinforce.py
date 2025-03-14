@@ -20,8 +20,9 @@ from src.utils.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train
 from src.utils.path import timestamp, cleardir
 from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
+from src.utils.logger import add_file_handler
 from src.evaluate import parse_mol_tokens, parse_mol, eval_vina
-WORKDIR = os.environ.get('WORKDIR', "/workspace")
+WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 # arguments
 parser = argparse.ArgumentParser()
 parser.add_argument('--studyname', required=True)
@@ -101,6 +102,7 @@ if is_main:
 os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
 ## logger
 logger = get_train_logger(result_dir)
+add_file_handler(logger, f"{result_dir}/debug{rank}.log", fmt="[{asctime}.{msecs}][{name}][{levelname}]{message}")
 logger.info(f"num_workers={args.num_workers}")
 if auto_finetune_step:
     logger.info(f"finetune_step was set to {args.finetune_step}")
@@ -279,6 +281,7 @@ if is_main:
 
 logger.info("Training started.")
 for step in range(args.max_step):
+    logger.warning(f"{step=}")    
 
     # get batch
     with watch.hold('data'):
@@ -287,18 +290,20 @@ for step in range(args.max_step):
         centers = centers.cpu().numpy()
         steps['batch_size'].append(batch.shape[1])
         steps['max_len'].append(batch.shape[0])
-    
+    logger.warning('end data')
+
     # forward
     with watch.hold('loss'):
         with torch.autocast('cuda', dtype=torch.bfloat16):
 
             ## generate sample
-            logger.warning("generation started.")
+            logger.warning("start")
             model.eval()
             with torch.inference_mode():
                 outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, tqdm=False) # [B, L]
-            logger.warning("generation ended.")
+            logger.warning("end generation")
             out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
+            logger.warning("end pad_sequence")
             Lo, B = out_batch.shape
             dtype = torch.float
             weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
@@ -306,7 +311,7 @@ for step in range(args.max_step):
             weight[lig_count[:-1] > 0] = 1.0
             end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
             weight[end_count[:-1] > 0] = 0.0
-            logger.warning("weight calculated.")
+            logger.warning("end weight")
 
             ## Get score
             scores = []
@@ -319,17 +324,24 @@ for step in range(args.max_step):
                     eval_dir = f"{result_dir}/eval_vina/{rank}/{idx}"
                     score = args.error_score
                     out_tokens = voc_encoder.decode(outputs[idx].tolist())
+                    logger.warning("end decode")
                     fw.write(','.join(out_tokens)+'\n')
+                    logger.warning("end write")
                     coord_error, smiles, coords = parse_mol_tokens(out_tokens)
+                    logger.warning(f"end parse_mol_tokens; {coord_error=}")
                     if coord_error == '':
                         coords += centers[idx]
+                        logger.warning(f"end add center")
                         error, mol = parse_mol(smiles, coords)
+                        logger.warning(f"end parse_mol; {error=}")
                         if error == '':
                             with open(f"{eval_dir}/lig.sdf", 'w') as f:
                                 f.write(Chem.MolToMolBlock(mol))
+                            logger.warning("end write lig.sdf")
                             dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
-                            logger.warning(f"Evaluating {idx=}")
+                            logger.warning(f"start eval_vina")
                             _, min_score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
+                            logger.warning(f"end eval_vina; {min_score=}")
                             if min_score is None:
                                 error = 'VINA'
                             else:
@@ -340,6 +352,7 @@ for step in range(args.max_step):
                         error = 'COORD_'+coord_error
                     errors.append(error)
                     scores.append(score)
+                    logger.warning(f"end get score {idx=}")
             scoress.append(scores)
             scores = torch.tensor(scores, device=device, dtype=dtype)
             if args.scale_reward:
