@@ -22,7 +22,7 @@ from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
 from src.utils.logger import add_file_handler
 from src.evaluate import parse_mol_tokens, parse_mol
-from src.evaluate import eval_vina_dummy2 as eval_vina
+from src.evaluate import eval_vina
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 # arguments
 parser = argparse.ArgumentParser()
@@ -109,9 +109,8 @@ if auto_finetune_step:
     logger.info(f"finetune_step was set to {args.finetune_step}")
 log_step = 1 if args.test else 10000
 ## vina evaluation
-
-# for i in range(args.batch_size):
-#     os.makedirs(f"{result_dir}/eval_vina/{rank}/{i}", exist_ok=True)
+for i in range(args.batch_size):
+    os.makedirs(f"{result_dir}/eval_vina_tmp/{rank}/{i}", exist_ok=True)
 
 # load state dict(for vocs)
 state_dict = torch.load(f"{finetune_dir}/models/{args.finetune_step}.pth", 
@@ -183,7 +182,6 @@ class ReinforceLoader:
                 dst_batch = dst_batch.to(torch.long).to(self.device)
                 dst_files = self.df_file.loc[dst_idx]
                 dst_centers = dst_centers.to(self.device).to(torch.float)
-                logger.warning(f"{dst_centers.shape=}, {dst_centers.device=}, {dst_centers.dtype=}")
                 if dst_rank == self.rank:
                     files = dst_files
                     batch = dst_batch
@@ -196,18 +194,14 @@ class ReinforceLoader:
         else:
             batch_shape = torch.zeros(2, dtype=torch.int, device=self.device)
             dist.recv(batch_shape, src=self.main_rank)
-            logger.warning(f"{batch_shape=}")
             L, B = batch_shape.cpu().tolist()
             batch = torch.zeros(L, B, dtype=torch.long, device=self.device)
             dist.recv(batch, src=self.main_rank)
-            logger.warning(f"{batch.shape=}")
             files = [None]
             dist.recv_object_list(files, src=self.main_rank)
             files = files[0]
-            logger.warning(f"{B=}")
             centers = torch.zeros((B, 3), dtype=torch.float, device=self.device)
             dist.recv(centers, src=self.main_rank)
-            logger.warning(f"{centers.shape=}")
         return files, batch, centers
 
 train_loader = ReinforceLoader(train_data, args.num_workers, 
@@ -282,8 +276,7 @@ if is_main:
     torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
 
 logger.info("Training started.")
-for step in range(args.max_step):
-    logger.warning(f"{step=}")    
+for step in range(args.max_step): 
 
     # get batch
     with watch.hold('data'):
@@ -292,20 +285,16 @@ for step in range(args.max_step):
         centers = centers.cpu().numpy()
         steps['batch_size'].append(batch.shape[1])
         steps['max_len'].append(batch.shape[0])
-    logger.warning('end data')
 
     # forward
     with watch.hold('loss'):
         with torch.autocast('cuda', dtype=torch.bfloat16):
 
             ## generate sample
-            logger.warning("start")
             model.eval()
             with torch.inference_mode():
                 outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, tqdm=False) # [B, L]
-            logger.warning("end generation")
             out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
-            logger.warning("end pad_sequence")
             Lo, B = out_batch.shape
             dtype = torch.float
             weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
@@ -313,56 +302,50 @@ for step in range(args.max_step):
             weight[lig_count[:-1] > 0] = 1.0
             end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
             weight[end_count[:-1] > 0] = 0.0
-            logger.warning("end weight")
 
             ## Get score
+            do_save = step < 5 or step % 50 == 0
             scores = []
             errors = []
             valid_score = 0.0
             n_valid = 0
-            with open(f"{result_dir}/generated/{rank}/{step}.txt", 'w') as fw:
-                for idx in range(len(outputs)):
-                    logger.warning(f"get score {idx=}")
+            for idx in range(len(outputs)):
+                center = centers[idx]
+                
+                if do_save:
                     eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
                     os.makedirs(eval_dir, exist_ok=True)
-                    center = centers[idx]
-                    info = {**files.iloc[idx].to_dict(), 'center': centers[idx].tolist()}
+                else:
+                    eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
+
+                score = args.error_score
+                out_tokens = voc_encoder.decode(outputs[idx].tolist())
+                coord_error, smiles, coords = parse_mol_tokens(out_tokens)
+                if coord_error == '':
+                    coords += center
+                    error, mol = parse_mol(smiles, coords)
+                    if error == '':
+                        with open(f"{eval_dir}/lig.sdf", 'w') as f:
+                            f.write(Chem.MolToMolBlock(mol))
+                        dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
+                        _, min_score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
+                        if min_score is None:
+                            error = 'VINA'
+                        else:
+                            n_valid += 1
+                            score = min_score
+                            valid_score += score
+                else:
+                    error = 'COORD_'+coord_error
+                if do_save:
+                    info = {**files.iloc[idx].to_dict(), 'center': center.tolist()}
                     with open(f"{eval_dir}/info.yaml", 'w') as f:
                         yaml.dump(info, f)
-                    score = args.error_score
-                    out_tokens = voc_encoder.decode(outputs[idx].tolist())
-                    logger.warning("end decode")
-                    out_tokens_str = ','.join(out_tokens)+'\n'
-                    fw.write(out_tokens_str)
                     with open(f"{eval_dir}/tokens.txt", 'w') as f:
-                        f.write(out_tokens_str)
-                    logger.warning("end write")
-                    coord_error, smiles, coords = parse_mol_tokens(out_tokens)
-                    logger.warning(f"end parse_mol_tokens; {coord_error=}")
-                    if coord_error == '':
-                        coords += center
-                        logger.warning(f"end add center")
-                        error, mol = parse_mol(smiles, coords)
-                        logger.warning(f"end parse_mol; {error=}")
-                        if error == '':
-                            with open(f"{eval_dir}/lig.sdf", 'w') as f:
-                                f.write(Chem.MolToMolBlock(mol))
-                            logger.warning("end write lig.sdf")
-                            dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
-                            logger.warning(f"start eval_vina")
-                            _, min_score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
-                            logger.warning(f"end eval_vina; {min_score=}")
-                            if min_score is None:
-                                error = 'VINA'
-                            else:
-                                n_valid += 1
-                                score = min_score
-                                valid_score += score
-                    else:
-                        error = 'COORD_'+coord_error
-                    errors.append(error)
-                    scores.append(score)
-                    logger.warning(f"end get score {idx=}")
+                        f.write(','.join(out_tokens)+'\n')
+
+                errors.append(error)
+                scores.append(score)
             scoress.append(scores)
             scores = torch.tensor(scores, device=device, dtype=dtype)
             if args.scale_reward:

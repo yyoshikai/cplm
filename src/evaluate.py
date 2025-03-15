@@ -87,150 +87,42 @@ def parse_mol(smiles: str, coords: np.ndarray) -> tuple[str, Chem.Mol|None]:
     mol.AddConformer(conf)
     return '', mol
 
-def eval_vina0(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]:
-    """
-    Parameters
-    ----------
-    lig_path: ~.sdf
-    rec_path: ~.pdb
-    """
-    os.makedirs(out_dir, exist_ok=True)
-    
-    # Prepare ligand
-    subprocess.run(f"obabel -i sdf {lig_path} -o pdbqt -O {out_dir}/lig_h.pdbqt -h -xc --errorlevel 1", shell=True, capture_output=True)
-    subprocess.run(f"obabel -i sdf {lig_path} -o sdf -O {out_dir}/lig_h.sdf -h --errorlevel 1", shell=True, capture_output=True)
-
-    # Prepare receptor
-    subprocess.run(f"obabel -i pdb {rec_path} -o pdbqt -O {out_dir}/rec.pdbqt -h -xr -xc", shell=True, capture_output=True)
-
-    try:
-        v = Vina(sf_name='vina', verbosity=0)
-        v.set_receptor(f"{out_dir}/rec.pdbqt")
-        v.set_ligand_from_file(f"{out_dir}/lig_h.pdbqt")
-
-        mol = Chem.SDMolSupplier(f"{out_dir}/lig_h.sdf", removeHs=False).__next__()
-        center = mol.GetConformer().GetPositions().mean(axis=0)
-        v.compute_vina_maps(center=center.tolist(), box_size=[20, 20, 20])
-        score = v.score()[0]
-        min_score = v.optimize()[0]
-    except Exception as e:
-        logger.warning(f"Error in Vina {lig_path=}, {rec_path=}: {e}")
-        score = min_score = None
-    return score, min_score
-
 def eval_vina_dummy(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]:
     if random.random() < 0.1:
         return None, None
     else:
         return random.random(), random.random()
 
-logger = getLogger('eval_vina')
 def eval_vina(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]:
     try:
-        logger.warning('started func eval_vina')
         os.makedirs(out_dir, exist_ok=True)
         
         # Prepare ligand
-        logger.warning('started prepare ligand')
         mol = next(pybel.readfile('sdf', lig_path))
-        logger.warning('end readfile')
         mol.addh()
-        logger.warning('end addh')
         mol.write('pdbqt', f"{out_dir}/lig_h.pdbqt", overwrite=True, opt={'c': None})
-        logger.warning('end pdbqt')
         mol.write('sdf', f"{out_dir}/lig_h.sdf", overwrite=True)
-        logger.warning('end sdf')
 
         # Prepare receptor
-        logger.warning('started prepare receptor')
         rec = next(pybel.readfile('pdb', rec_path))
-        logger.warning('end readifle')
         rec.addh()
-        logger.warning('end addh')
         rec.write('pdbqt', f"{out_dir}/rec.pdbqt", overwrite=True, opt={'r': None, 'c': None})
-        logger.warning('end pdbqt')
 
-        logger.warning('start vina') 
+        # Vina
         v = Vina(sf_name='vina', verbosity=0)
-        logger.warning('end Vina')
         v.set_receptor(f"{out_dir}/rec.pdbqt")
-        logger.warning('end set_receptor')
-        v.set_ligand_from_file(f"{out_dir}/lig_h.pdbqt")
-        logger.warning('end set_ligand')
-
-        mol = Chem.SDMolSupplier(f"{out_dir}/lig_h.sdf", removeHs=False).__next__()
-        logger.warning('end SDMolSupplier')
-        center = mol.GetConformer().GetPositions().mean(axis=0)
-        logger.warning('end center')
-        v.compute_vina_maps(center=center.tolist(), box_size=[20, 20, 20])
-        logger.warning('end compute_vina_maps')
-        score = v.score()[0]
-        logger.warning('end score')
-        min_score = v.optimize()[0]
-        logger.warning('end min_score')
-    except Exception as e:
-        logger.warning(f"Error in Vina {lig_path=}, {rec_path=}: {e}")
-        score = min_score = None
-    logger.warning('end func eval_vina')
-    return score, min_score
-
-def eval_vina_dummy2(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]:
-    try:
-        logger.warning('started func eval_vina')
-        os.makedirs(out_dir, exist_ok=True)
-        
-        # Prepare ligand
-        logger.warning('started prepare ligand')
-        mol = next(pybel.readfile('sdf', lig_path))
-        logger.warning('end readfile')
-        mol.addh()
-        logger.warning('end addh')
-        mol.write('pdbqt', f"{out_dir}/lig_h.pdbqt", overwrite=True, opt={'c': None})
-        logger.warning('end pdbqt')
-        mol.write('sdf', f"{out_dir}/lig_h.sdf", overwrite=True)
-        logger.warning('end sdf')
-
-        # Prepare receptor
-        logger.warning('started prepare receptor')
-        rec = next(pybel.readfile('pdb', rec_path))
-        logger.warning('end readifle')
-        rec.addh()
-        logger.warning('end addh')
-        rec.write('pdbqt', f"{out_dir}/rec.pdbqt", overwrite=True, opt={'r': None, 'c': None})
-        logger.warning('end pdbqt')
-
-        logger.warning('start vina') 
-        v = Vina(sf_name='vina', verbosity=0)
-        logger.warning('end Vina')
-        
-        v.set_receptor(f"{out_dir}/rec.pdbqt")
-        # v.set_receptor(f"/work/gd43/a97003/cplm/reinforce/results/250308_coord_test/eval_vina/0/0/rec.pdbqt")
-        # v.set_receptor(f"/work/gd43/a97003/cplm/reinforce/results/250314_coord_test_base/eval_vina/0/7/rec.pdbqt")
-        logger.warning('end set_receptor')
-
         mol = Chem.SDMolSupplier(f"{out_dir}/lig_h.sdf", removeHs=False).__next__()
         if mol is None:
+            logger.warning(f"Error: {lig_path=} is None.")
             return None, None
-        # mol = Chem.SDMolSupplier(f"/work/gd43/a97003/cplm/reinforce/results/250308_coord_test/eval_vina/0/0/lig_h.sdf", removeHs=False).__next__()
-        # mol = Chem.SDMolSupplier(f"/work/gd43/a97003/cplm/reinforce/results/250314_coord_test_base/eval_vina/0/7/lig.sdf", removeHs=False).__next__()
-        logger.warning('end SDMolSupplier')
         center = mol.GetConformer().GetPositions().mean(axis=0)
-        logger.warning('end center')
-
         v.set_ligand_from_file(f"{out_dir}/lig_h.pdbqt")
-        # v.set_ligand_from_file(f"/work/gd43/a97003/cplm/reinforce/results/250308_coord_test/eval_vina/0/0/lig_h.pdbqt")
-        # v.set_ligand_from_file(f"/work/gd43/a97003/cplm/reinforce/results/250314_coord_test_base/eval_vina/0/7/lig_h.pdbqt")
-        logger.warning('end set_ligand')
-
 
         v.compute_vina_maps(center=center.tolist(), box_size=[20, 20, 20])
-        logger.warning('end compute_vina_maps')
         score = v.score()[0]
-        logger.warning('end score')
         min_score = v.optimize()[0]
-        logger.warning('end min_score')
+
     except Exception as e:
-        logger.warning(f"Error in Vina {lig_path=}, {rec_path=}: {e}")
+        logger.warning(f"Error in {lig_path=}, {rec_path=}: {e}")
         score = min_score = None
-    logger.warning('end func eval_vina')
     return score, min_score

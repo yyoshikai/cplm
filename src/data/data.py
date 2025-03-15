@@ -1,15 +1,36 @@
 import pickle
 from functools import lru_cache
 from logging import getLogger
+from typing import Generic, TypeVar
+from collections.abc import Callable
 
 import numpy as np
-import torch
 from torch.utils.data import Dataset
 import lmdb
 
 from ..utils import logtime
+T = TypeVar('T')
+T_co = TypeVar('T_co', covariant=True)
 
-class LMDB(Dataset):
+class WrapDataset(Dataset[T_co]):
+    def __init__(self, dataset: Dataset):
+        self.dataset = dataset
+    def __getitem__(self, idx: int) -> T_co:
+        raise NotImplementedError
+    def __len__(self):
+        return len(self.dataset)
+    def __getattr__(self, name):
+        return self.dataset.__getattribute__(name)
+
+class ApplyDataset(WrapDataset[T_co]):
+    def __init__(self, dataset: Dataset[T], func: Callable[[T], T_co]):
+        super().__init__(dataset)
+        self.func = func
+    def __getitem__(self, idx: int):
+        return self.func(self.dataset[idx])
+
+
+class LMDB(Dataset[T_co]):
     logger = getLogger(f"{__module__}.{__qualname__}")
 
     def __init__(self, path, keep_env=False, keep_txn=False):
@@ -20,7 +41,7 @@ class LMDB(Dataset):
         self._lazy_env = self._lazy_txn = None
         self._lazy_keys = None
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> T_co:
         with logtime(self.logger, f"({self.path})[{key.decode('ascii')}]:"): #?
             return pickle.loads(self.txn().get(key))
 
@@ -47,11 +68,11 @@ class LMDB(Dataset):
     def __len__(self):
         return self.env().stat()['entries']
 
-class LMDBDataset(Dataset):
+class LMDBDataset(Dataset[T_co]):
     logger = getLogger(f"{__module__}.{__qualname__}")
 
     def __init__(self, lmdb_path, key_is_indexed=False, keep_env=False, keep_txn=False):
-        self.lmdb = LMDB(lmdb_path, keep_env, keep_txn)
+        self.lmdb = LMDB[T_co](lmdb_path, keep_env, keep_txn)
         self.key_is_indexed = key_is_indexed
         self._lazy_keys = None
 
@@ -71,6 +92,7 @@ class LMDBDataset(Dataset):
     def __len__(self):
         return len(self.lmdb)
 
+# Indexing
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):
         self.net_dataset = net_dataset
@@ -112,9 +134,9 @@ class SampleDataset(Dataset):
     def __len__(self):
         return len(self.idxs)
 
-class CacheDataset(Dataset):
+class CacheDataset(WrapDataset):
     def __init__(self, dataset: Dataset):
-        self.dataset = dataset
+        super().__init__(dataset)
         self.cache_idx = None
         self.cache_item = None
     
@@ -123,9 +145,6 @@ class CacheDataset(Dataset):
             self.cache_idx = idx
             self.cache_item = self.dataset[idx]
         return self.cache_item
-
-    def __len__(self):
-        return len(self.dataset)
 
 class LRUCacheDataset(CacheDataset):
     def __init__(self, dataset: Dataset, maxsize: int=1):
@@ -138,33 +157,29 @@ class LRUCacheDataset(CacheDataset):
     def __getitem__(self, idx: int):
         return self._getitem_cached(idx)
 
-class KeyDataset(Dataset):
+class KeyDataset(WrapDataset):
     def __init__(self, dataset: CacheDataset, key):
         if not isinstance(dataset, CacheDataset):
             raise ValueError(f"KeyDataset not on CacheDataset({type(dataset)}) is slow.")
-        self.dataset = dataset
+        super().__init__(dataset)
         self.key = key
     def __getitem__(self, idx):
         return self.dataset[idx][self.key]
-    def __len__(self):
-        return len(self.dataset)
 
 def untuple_dataset(dataset: Dataset, size: int):
     if not isinstance(dataset, CacheDataset):
         dataset = CacheDataset(dataset)
     return tuple(KeyDataset(dataset, i) for i in range(size))
     
-class IndexDataset(Dataset):
-    def __init__(self, dataset: Dataset):
+class IndexDataset(WrapDataset[tuple[int,T_co]]):
+    def __init__(self, dataset: Dataset[T_co]):
+        super().__init__(dataset)
         self.dataset = dataset
 
     def __getitem__(self, idx: int):
         return idx, self.dataset[idx]
-    
-    def __len__(self): 
-        return len(self.dataset)
 
-def index_dataset(dataset: Dataset):
+def index_dataset(dataset: Dataset[T]) -> tuple[Dataset[int], Dataset[T]]:
     dataset = IndexDataset(dataset)
     return untuple_dataset(dataset, 2)
 
