@@ -21,7 +21,8 @@ from src.utils.path import timestamp, cleardir
 from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
 from src.utils.logger import add_file_handler
-from src.evaluate import parse_mol_tokens, parse_mol, eval_vina
+from src.evaluate import parse_mol_tokens, parse_mol
+from src.evaluate import eval_vina_dummy2 as eval_vina
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 # arguments
 parser = argparse.ArgumentParser()
@@ -108,8 +109,9 @@ if auto_finetune_step:
     logger.info(f"finetune_step was set to {args.finetune_step}")
 log_step = 1 if args.test else 10000
 ## vina evaluation
-for i in range(args.batch_size):
-    os.makedirs(f"{result_dir}/eval_vina/{rank}/{i}", exist_ok=True)
+
+# for i in range(args.batch_size):
+#     os.makedirs(f"{result_dir}/eval_vina/{rank}/{i}", exist_ok=True)
 
 # load state dict(for vocs)
 state_dict = torch.load(f"{finetune_dir}/models/{args.finetune_step}.pth", 
@@ -178,9 +180,9 @@ class ReinforceLoader:
         if self.rank == self.main_rank:
             for dst_rank in range(self.size):
                 dst_idx, dst_batch, dst_centers = next(self.iter)
-                dst_batch = dst_batch.to(self.device)
+                dst_batch = dst_batch.to(torch.long).to(self.device)
                 dst_files = self.df_file.loc[dst_idx]
-                dst_centers = dst_centers.to(self.device)
+                dst_centers = dst_centers.to(self.device).to(torch.float)
                 logger.warning(f"{dst_centers.shape=}, {dst_centers.device=}, {dst_centers.dtype=}")
                 if dst_rank == self.rank:
                     files = dst_files
@@ -321,16 +323,24 @@ for step in range(args.max_step):
             with open(f"{result_dir}/generated/{rank}/{step}.txt", 'w') as fw:
                 for idx in range(len(outputs)):
                     logger.warning(f"get score {idx=}")
-                    eval_dir = f"{result_dir}/eval_vina/{rank}/{idx}"
+                    eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
+                    os.makedirs(eval_dir, exist_ok=True)
+                    center = centers[idx]
+                    info = {**files.iloc[idx].to_dict(), 'center': centers[idx].tolist()}
+                    with open(f"{eval_dir}/info.yaml", 'w') as f:
+                        yaml.dump(info, f)
                     score = args.error_score
                     out_tokens = voc_encoder.decode(outputs[idx].tolist())
                     logger.warning("end decode")
-                    fw.write(','.join(out_tokens)+'\n')
+                    out_tokens_str = ','.join(out_tokens)+'\n'
+                    fw.write(out_tokens_str)
+                    with open(f"{eval_dir}/tokens.txt", 'w') as f:
+                        f.write(out_tokens_str)
                     logger.warning("end write")
                     coord_error, smiles, coords = parse_mol_tokens(out_tokens)
                     logger.warning(f"end parse_mol_tokens; {coord_error=}")
                     if coord_error == '':
-                        coords += centers[idx]
+                        coords += center
                         logger.warning(f"end add center")
                         error, mol = parse_mol(smiles, coords)
                         logger.warning(f"end parse_mol; {error=}")
