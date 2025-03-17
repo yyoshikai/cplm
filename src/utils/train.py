@@ -123,7 +123,6 @@ def get_train_logger(result_dir):
     add_stream_handler(logger, logging.INFO, fmt=fmt)
     add_file_handler(logger, f"{result_dir}/debug.log", logging.DEBUG, fmt=fmt, mode='a')
     add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
-    add_file_handler(logger, f"{result_dir}/warning.log", logging.WARNING, fmt=fmt, mode='a')
     logger.setLevel(logging.NOTSET if rank == MAIN_RANK else INFO_WORKER)
     set_rdkit_logger()
     return logger

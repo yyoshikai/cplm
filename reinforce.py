@@ -20,7 +20,6 @@ from src.utils.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train
 from src.utils.path import timestamp, cleardir
 from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
-from src.utils.logger import add_file_handler
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.evaluate import eval_vina
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
@@ -40,7 +39,7 @@ parser.add_argument('--scheduler', default='constant') # same as BindGPT
 parser.add_argument('--lr', type=float, default=1.4e-5) # same as BindGPT
 parser.add_argument('--alpha', type=float, default=0.05) # same as BindGPT
 parser.add_argument("--loss-scale")
-parser.add_argument("--max-step", type=int, default=1000000)
+parser.add_argument("--max-step", type=int, default=1000)
 parser.add_argument("--max-opt-step", type=int, default=float('inf'))
 ## data
 parser.add_argument('--finetune-save-dir', required=True)
@@ -59,7 +58,7 @@ parser.add_argument("--gc", action='store_true')
 parser.add_argument("--record-opt-step", type=int)
 parser.add_argument("--tokenizer-log-interval", type=int)
 ## not classified
-parser.add_argument('--error-score', type=float, default=300)
+parser.add_argument('--error-score', type=float, default=50)
 parser.add_argument('--test', action='store_true')
 args = parser.parse_args()
 
@@ -103,7 +102,6 @@ if is_main:
 os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
 ## logger
 logger = get_train_logger(result_dir)
-add_file_handler(logger, f"{result_dir}/debug{rank}.log", fmt="[{asctime}.{msecs}][{name}][{levelname}]{message}")
 logger.info(f"num_workers={args.num_workers}")
 if auto_finetune_step:
     logger.info(f"finetune_step was set to {args.finetune_step}")
@@ -350,8 +348,6 @@ for step in range(args.max_step):
             scores = torch.tensor(scores, device=device, dtype=dtype)
             if args.scale_reward:
                 scores = (scores -torch.mean(scores))/(torch.std(scores)+1.0e-8)
-            steps['n_valid'] = n_valid
-            steps['valid_score'] = valid_score / n_valid if n_valid > 0 else 0
             errorss.append(errors)
             ## Get prob & reward loss
             model.train()
