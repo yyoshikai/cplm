@@ -15,7 +15,7 @@ from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import set_logtime
 from src.utils.path import timestamp
-from src.utils.train import CELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
+from src.train import CELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
 
 # arguments
 parser = argparse.ArgumentParser()

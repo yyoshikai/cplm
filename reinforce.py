@@ -16,7 +16,7 @@ from src.data.sampler import InfiniteRandomSampler
 from src.model import Model
 from src.data import CDDataset, untuple_dataset, index_dataset
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, VocEncoder, TokenEncodeDataset
-from src.utils.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train_logger, get_scheduler
+from src.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train_logger, get_scheduler
 from src.utils.path import timestamp, cleardir
 from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
