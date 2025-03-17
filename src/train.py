@@ -9,11 +9,11 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR, ConstantLR
-from ..data.tokenizer import VocEncoder
-from ..utils.logger import INFO_WORKER, add_stream_handler, add_file_handler
-from ..utils.rdkit import set_rdkit_logger
-from ..model import Model
-from ..utils.path import cleardir
+from .data.tokenizer import VocEncoder
+from .utils.logger import INFO_WORKER, add_stream_handler, add_file_handler
+from .utils.rdkit import set_rdkit_logger
+from .model import Model
+from .utils.path import cleardir
 from src.utils import RANDOM_STATE, rectime
 from torch.optim import Optimizer
 MAIN_RANK = 0
@@ -109,7 +109,7 @@ def sync_train_dir(result_dir):
 
 def set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:
-        assert sdp_kernel in ['FLASH', 'CUDNN', ]
+        assert sdp_kernel in ['FLASH', 'CUDNN', 'MATH', 'EFFICIENT']
         torch.backends.cuda.enable_flash_sdp(sdp_kernel == 'FLASH')
         torch.backends.cuda.enable_cudnn_sdp(sdp_kernel == 'CUDNN')
         torch.backends.cuda.enable_math_sdp(sdp_kernel == 'MATH')
@@ -156,14 +156,15 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
 
-def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int):
+def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int, 
+        warmup_step: int=2000):
     match scheduler:
         case 'warmup':
             def schedule(step: int):
-                if step <= 2000:
-                    return step / 2000
+                if step <= warmup_step:
+                    return step / warmup_step
                 elif step <= epoch_step:
-                    return math.cos(math.pi*((step-2000)/(epoch_step-2000)))*0.49+0.51
+                    return math.cos(math.pi*((step-warmup_step)/(epoch_step-warmup_step)))*0.49+0.51
                 else:
                     return 0.02
         case 'step':
@@ -199,7 +200,12 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
 
     ## scaled dot product attention kernel
     set_sdp_kernel(args.sdp_kernel)
-
+    logger.info(f"{torch.backends.cuda.cudnn_sdp_enabled()=}")
+    logger.info(f"{torch.backends.cuda.flash_sdp_enabled()=}")
+    logger.info(f"{torch.backends.cuda.math_sdp_enabled()=}")
+    logger.info(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
+    logger.info(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
+    
     ## optimizer
     optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
     optimizer.zero_grad()
