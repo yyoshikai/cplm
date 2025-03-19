@@ -1,4 +1,4 @@
-import random, struct, logging
+import random, struct, logging, psutil
 from functools import partial
 from bisect import bisect_right
 from time import time
@@ -114,3 +114,7 @@ class CompressedArray:
 
     def __len__(self):
         return self.size
+
+def get_mem():
+    mem = psutil.virtual_memory()
+    return f"{mem.used/2**30:.03f}GB/{mem.total/2**30:.03f}GB"

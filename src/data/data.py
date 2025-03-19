@@ -9,6 +9,8 @@ from torch.utils.data import Dataset
 import lmdb
 
 from ..utils import logtime
+from ..utils.lmdb import load_lmdb
+
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
 
@@ -91,6 +93,21 @@ class LMDBDataset(Dataset[T_co]):
 
     def __len__(self):
         return len(self.lmdb)
+    
+class AsciiLMDBDataset(Dataset[str]):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+
+    def __init__(self, lmdb_path, key_is_indexed=False, keep_env=False, keep_txn=False):
+        self.lmdb_path = lmdb_path
+
+    def __getitem__(self, idx):
+        env, txn = load_lmdb(self.lmdb_path)
+        return txn.get(str(idx).encode('ascii')).decode('ascii')
+    
+    def __len__(self):
+        env, _ = load_lmdb(self.lmdb_path)
+        return env.stat()['entries']
+    
 
 # Indexing
 class RepeatDataset(Dataset):

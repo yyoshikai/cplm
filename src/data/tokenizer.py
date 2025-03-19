@@ -39,8 +39,7 @@ class TokenEncodeDataset(Dataset):
     
     def __getitem__(self, idx):
         data = self.dataset[idx]
-        with logtime(self.logger, f"[{idx}]"):
-            data = torch.tensor(self.encoder.encode(data), dtype=torch.long)
+        data = torch.tensor(self.encoder.encode(data), dtype=torch.long)
         return data
 
     def __len__(self):
