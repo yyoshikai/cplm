@@ -9,8 +9,10 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import Dataset, DataLoader, BatchSampler, StackDataset
 from torch.nn.utils.rnn import pad_sequence
+
 
 from src.data.sampler import InfiniteRandomSampler
 from src.model import Model
@@ -44,6 +46,7 @@ parser.add_argument("--max-opt-step", type=int, default=float('inf'))
 ## data
 parser.add_argument('--finetune-save-dir', required=True)
 parser.add_argument("--pocket-coord-heavy", action='store_true')
+parser.add_argument("--target", choices=['min_vina', 'vina', 'mw_max', 'logp'], default='min_vina')
 ## finetune
 parser.add_argument("--finetune-name", required=True)
 parser.add_argument("--finetune-step", type=int)
@@ -58,7 +61,7 @@ parser.add_argument("--gc", action='store_true')
 parser.add_argument("--record-opt-step", type=int)
 parser.add_argument("--tokenizer-log-interval", type=int)
 ## not classified
-parser.add_argument('--error-score', type=float, default=50)
+parser.add_argument('--error-score', type=float, default=None)
 parser.add_argument('--test', action='store_true')
 args = parser.parse_args()
 
@@ -206,6 +209,26 @@ train_loader = ReinforceLoader(train_data, args.num_workers,
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
     voc_encoder.pad_token, device, MAIN_RANK)
 
+## Scoring function
+match args.target:
+    case 'min_vina':
+        def get_score(lig_path: str, rec_path: str, out_dir: str):
+            score, min_score = eval_vina(lig_path, rec_path, out_dir)
+            return min_score
+        error_score = 50
+    case 'vina':
+        def get_score(lig_path: str, rec_path: str, out_dir: str):
+            score, min_score = eval_vina(lig_path, rec_path, out_dir)
+            return score
+        error_score = 50
+    case 'mw_max':
+        def get_score(lig_path: str, rec_path: str, out_dir: str):
+            mol = Chem.SDMolSupplier(lig_path).__next__()
+            return -rdMolDescriptors.CalcExactMolWt(mol)
+        error_score = 0
+if args.error_score is not None:
+    error_score = args.error_score
+
 # model
 net_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 init_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
@@ -316,7 +339,7 @@ for step in range(args.max_step):
                 else:
                     eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
 
-                score = args.error_score
+                score = error_score
                 out_tokens = voc_encoder.decode(outputs[idx].tolist())
                 coord_error, smiles, coords = parse_mol_tokens(out_tokens)
                 if coord_error == '':
