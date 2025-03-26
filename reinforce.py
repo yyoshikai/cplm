@@ -349,12 +349,12 @@ for step in range(args.max_step):
                         with open(f"{eval_dir}/lig.sdf", 'w') as f:
                             f.write(Chem.MolToMolBlock(mol))
                         dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
-                        _, min_score = eval_vina(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
-                        if min_score is None:
+                        score0 = get_score(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
+                        if score0 is None:
                             error = 'VINA'
                         else:
                             n_valid += 1
-                            score = min_score
+                            score = score0
                             valid_score += score
                 else:
                     error = 'COORD_'+coord_error
