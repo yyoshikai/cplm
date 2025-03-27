@@ -15,7 +15,7 @@ T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
 
 class WrapDataset(Dataset[T_co]):
-    def __init__(self, dataset: Dataset):
+    def __init__(self, dataset: Dataset[T]):
         self.dataset = dataset
     def __getitem__(self, idx: int) -> T_co:
         raise NotImplementedError

@@ -80,7 +80,7 @@ if args.finetune_step is None:
 # set default args
 if args.test: args.studyname+='_test'
 if args.record_opt_step is None:
-    args.record_opt_step = 1 if args.test else 50
+    args.record_opt_step = 1 if args.test else 100
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e7)
 batch_first = False
@@ -381,7 +381,7 @@ for step in range(args.max_step):
 
             ## KL loss
             init_temps = init_model(out_batch[:-1]) # [L, B, N]
-            init_log_probs = F.log_softmax(temps, dim=-1) # [Lo-1, B, N]
+            init_log_probs = F.log_softmax(init_temps, dim=-1) # [Lo-1, B, N]
             kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs, reduction='none', 
                 log_target=True) # [Lo-1, B, N]
             kl_loss = kl_loss.sum(dim=-1) # [Lo-1, B]
@@ -392,6 +392,14 @@ for step in range(args.max_step):
         loss.backward()
         steps['reward_loss'].append(reward_loss.item())
         steps['kl_loss'].append(kl_loss.item())
+
+        # Save step data
+        if (step+1) % args.record_opt_step == 0:
+            sdir = f"{result_dir}/step_data/{step}"
+            os.makedirs(sdir, exist_ok=True)
+            torch.save(log_probs_all.cpu(), f"{sdir}/log_probs_all.pt")
+            torch.save(log_probs.cpu(), f"{sdir}/log_probs.pt")
+
 
         # check nan
         if args.reset_nan_grad:

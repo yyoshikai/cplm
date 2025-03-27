@@ -1,6 +1,6 @@
 # 241025 若干argumentを変更した。
 import sys, os, shutil
-import argparse, logging
+import argparse
 from glob import glob
 
 import yaml

@@ -1,4 +1,4 @@
-import itertools, math
+import itertools, math, re
 from collections.abc import Iterable
 from collections import defaultdict
 from logging import getLogger
@@ -108,6 +108,29 @@ class StringTokenizer(Tokenizer):
         return tokens
     def vocs(self):
         return set(self.vocs_+[self.unk_voc])
+
+class StringTokenizer2(Tokenizer):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, voc_dir: str, unk_voc: str='[UNK]'):
+        with open(f"{voc_dir}/re.txt") as f:
+            re_str = f.readline().strip()
+        self.pattern = re.compile(re_str)
+        self.unk_voc = unk_voc
+        with open(f"{voc_dir}/tokens.txt") as f:
+            vocs = f.read().splitlines()
+        self.tokenizer = StringTokenizer(vocs, unk_voc)
+
+
+    def tokenize(self, string: str):
+        tokens = self.pattern.findall(string)
+        if len(''.join(tokens)) != len(string):
+            self.logger.info("Unknown token; fall back to StringTokenizer")
+            return self.tokenizer.tokenize(string)
+        return tokens
+
+    def vocs(self):
+        return self.tokenizer.vocs()
+
 
 class FloatTokenizer(Tokenizer):
     logger = getLogger(f"{__module__}.{__qualname__}")

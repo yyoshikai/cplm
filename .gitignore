@@ -130,18 +130,21 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+results
+command.sh
+
 /experiments
 /training/*
 /finetune
 /.vscode
-/preprocess/results
 /preprocess/pjs
 *.ent
 todo.md
 /generate
 /README2.md
 /graph
-command.sh
 !/training/generate.py
-/projects
+/projects/*
 /reinforce
+!/projects/predict
+!/projects/predict/predict.py
