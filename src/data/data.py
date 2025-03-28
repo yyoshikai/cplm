@@ -1,14 +1,10 @@
 import pickle
 from functools import lru_cache
-from logging import getLogger
-from typing import Generic, TypeVar
+from typing import TypeVar
 from collections.abc import Callable
 
 import numpy as np
 from torch.utils.data import Dataset
-import lmdb
-
-from ..utils import logtime
 from ..utils.lmdb import load_lmdb
 
 T = TypeVar('T')
@@ -31,83 +27,36 @@ class ApplyDataset(WrapDataset[T_co]):
     def __getitem__(self, idx: int):
         return self.func(self.dataset[idx])
 
-
-class LMDB(Dataset[T_co]):
-    logger = getLogger(f"{__module__}.{__qualname__}")
-
-    def __init__(self, path, keep_env=False, keep_txn=False):
-        self.path = path
-        self.keep_env = keep_env
-        self.keep_txn = keep_txn
-        
-        self._lazy_env = self._lazy_txn = None
-        self._lazy_keys = None
-
-    def __getitem__(self, key) -> T_co:
-        with logtime(self.logger, f"({self.path})[{key.decode('ascii')}]:"): #?
-            return pickle.loads(self.txn().get(key))
-
-    def env(self) -> lmdb.Environment:
-        if self._lazy_env is not None:
-            return self._lazy_env
-        env = lmdb.open(self.path, subdir=False, readonly=True,
-                lock=False, readahead=False, meminit=False, max_readers=256)
-        if self.keep_env:
-            self._lazy_env = env
-        return env
-
-    def txn(self) -> lmdb.Transaction:
-        if self._lazy_txn is not None:
-            return self._lazy_txn
-        txn = self.env().begin()
-        if self.keep_txn:
-            self._lazy_txn = txn
-        return txn
-    
-    def keys(self):
-        return list(self.txn().cursor().iternext(values=False))
-
-    def __len__(self):
-        return self.env().stat()['entries']
-
 class LMDBDataset(Dataset[T_co]):
-    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, lmdb_path: str, idx_to_key: str='byte'):
+        self.path = lmdb_path
+        match idx_to_key:
+            case 'byte':
+                blen = ((len(self)-1).bit_length()+7) // 8
+                self.idx_to_key = lambda idx: idx.to_bytes(blen)
+            case 'str':
+                self.idx_to_key = lambda idx: str(idx).encode('ascii')
+            case _:
+                raise ValueError(f"Unsupported {idx_to_key=}")
 
-    def __init__(self, lmdb_path, key_is_indexed=False, keep_env=False, keep_txn=False):
-        self.lmdb = LMDB[T_co](lmdb_path, keep_env, keep_txn)
-        self.key_is_indexed = key_is_indexed
-        self._lazy_keys = None
-
-    def __getitem__(self, idx):
-        return self.lmdb[self.key(idx)]
-    
-    def key(self, idx):
-        if self.key_is_indexed:
-            return str(idx).encode('ascii')
-        else:
-            if self._lazy_keys is None:
-                self.logger.info("Getting all key list...")
-                self._lazy_keys = self.lmdb.keys()
-                self.logger.info("Done.")
-            return self._lazy_keys[idx]
+    def __getitem__(self, idx: int) -> bytes:
+        env, txn = load_lmdb(self.path)
+        item = txn.get(self.idx_to_key(idx))
+        if item is None:
+            raise ValueError(f"Key not found: {idx}, {self.idx_to_key(idx)}, {self.path}")
+        return item
 
     def __len__(self):
-        return len(self.lmdb)
-    
-class AsciiLMDBDataset(Dataset[str]):
-    logger = getLogger(f"{__module__}.{__qualname__}")
-
-    def __init__(self, lmdb_path, key_is_indexed=False, keep_env=False, keep_txn=False):
-        self.lmdb_path = lmdb_path
-
-    def __getitem__(self, idx):
-        env, txn = load_lmdb(self.lmdb_path)
-        return txn.get(str(idx).encode('ascii')).decode('ascii')
-    
-    def __len__(self):
-        env, _ = load_lmdb(self.lmdb_path)
+        env, txn = load_lmdb(self.path)
         return env.stat()['entries']
     
+class StringLMDBDataset(LMDBDataset[str]):
+    def __getitem__(self, idx: int) -> str:
+        return super().__getitem__(idx).decode('ascii')
+
+class IntLMDBDataset(LMDBDataset[int]):
+    def __getitem__(self, idx: int) -> int:
+        return int.from_bytes(super().__getitem__(idx))
 
 # Indexing
 class RepeatDataset(Dataset):

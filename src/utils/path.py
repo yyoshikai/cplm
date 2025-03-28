@@ -33,6 +33,9 @@ def make_dir(path=None, duplicate='ask'):
                 return
         elif duplicate in {'overwrite', 'merge'}:
             pass
+        elif duplicate == 'exit':
+            print(f"{path} already exists. process finished.")
+            sys.exit()
         else:
             raise ValueError(f"Unsupported duplicate: {duplicate}")
     if duplicate == 'merge':
