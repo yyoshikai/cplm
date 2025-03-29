@@ -1,8 +1,6 @@
 from bisect import bisect_right
-from functools import partial
 import torch
-from torch import Tensor
-from torch.utils.data import Dataset, DataLoader, BatchSampler
+from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
 import torch.distributed as dist

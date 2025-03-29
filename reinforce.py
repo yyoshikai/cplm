@@ -22,6 +22,7 @@ from src.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train_logge
 from src.utils.path import timestamp, cleardir
 from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
+from src.utils.logger import INFO_WORKER
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.evaluate import eval_vina
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
@@ -323,6 +324,17 @@ for step in range(args.max_step):
             weight[lig_count[:-1] > 0] = 1.0
             end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
             weight[end_count[:-1] > 0] = 0.0
+
+            ## Log output
+            if step < 5:
+                idxs = np.arange(B)
+                if B > 5: idxs = np.random.default_rng(step).choice(idxs, 5, replace=False)
+                for idx in idxs:
+                    context = voc_encoder.decode(batch[:,idx])
+                    logger.log(INFO_WORKER, f"step {step}[{idx}]context={' '.join(context)}")
+                    output = voc_encoder.decode(outputs[idx])
+                    logger.log(INFO_WORKER, f"step {step}[{idx}]generated={' '.join(output)}")
+                    logger.log(INFO_WORKER, f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
 
             ## Get score
             do_save = step < 5 or step % 50 == 0

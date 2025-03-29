@@ -49,7 +49,11 @@ class LMDBDataset(Dataset[T_co]):
     def __len__(self):
         env, txn = load_lmdb(self.path)
         return env.stat()['entries']
-    
+
+class PickleLMDBDataset(LMDBDataset[T_co]):
+    def __getitem__(self, idx: int) -> T_co:
+        return pickle.loads(super().__getitem__(idx))
+
 class StringLMDBDataset(LMDBDataset[str]):
     def __getitem__(self, idx: int) -> str:
         return super().__getitem__(idx).decode('ascii')

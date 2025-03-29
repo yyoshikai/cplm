@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 from time import time
 from prody import parsePDB, parsePDBStream, confProDy, Contacts
 from ..utils.lmdb import new_lmdb
-from .data import LMDBDataset, get_random_rotation_matrix, untuple_dataset
+from .data import PickleLMDBDataset, get_random_rotation_matrix, untuple_dataset
 from ..utils import logtime, slice_str
 from rdkit import Chem
 from .tokenizer import ProteinAtomTokenizer, FloatTokenizer, StringTokenizer, \
@@ -33,7 +33,7 @@ class CDDataset(Dataset):
                 coord_heavy: bool=False, coord_h: bool = False
         BindGPTも↑と同じ。
         """
-        self.lmdb_dataset = LMDBDataset(f"{save_dir}/main.lmdb", key_is_indexed=True)
+        self.lmdb_dataset = PickleLMDBDataset(f"{save_dir}/main.lmdb", idx_to_key='str')
 
         self.rstate = np.random.RandomState(seed)
         self.coord_center = coord_center
