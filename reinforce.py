@@ -8,7 +8,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
-from rdkit import Chem
+from rdkit import Chem, RDLogger
 from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import Dataset, DataLoader, BatchSampler, StackDataset
 from torch.nn.utils.rnn import pad_sequence
@@ -86,6 +86,8 @@ if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e7)
 batch_first = False
 
+# Environment
+RDLogger.DisableLog("rdApp.*")
 
 # DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
@@ -225,6 +227,7 @@ match args.target:
     case 'mw_max':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             mol = Chem.SDMolSupplier(lig_path).__next__()
+            if mol is None: return None
             return -rdMolDescriptors.CalcExactMolWt(mol)
         error_score = 0
 if args.error_score is not None:
