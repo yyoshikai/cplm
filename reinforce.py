@@ -13,7 +13,6 @@ from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import Dataset, DataLoader, BatchSampler, StackDataset
 from torch.nn.utils.rnn import pad_sequence
 
-
 from src.data.sampler import InfiniteRandomSampler
 from src.model import Model
 from src.data import CDDataset, untuple_dataset, index_dataset
@@ -26,6 +25,7 @@ from src.utils.logger import INFO_WORKER
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.evaluate import eval_vina
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
+
 # arguments
 parser = argparse.ArgumentParser()
 parser.add_argument('--studyname', required=True)
@@ -212,23 +212,23 @@ train_loader = ReinforceLoader(train_data, args.num_workers,
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
     voc_encoder.pad_token, device, MAIN_RANK)
 
-## Scoring function
+## Scoring function 最大化したいものとする
 match args.target:
     case 'min_vina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             score, min_score = eval_vina(lig_path, rec_path, out_dir)
-            return min_score
-        error_score = 50
+            return -min_score
+        error_score = -50
     case 'vina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             score, min_score = eval_vina(lig_path, rec_path, out_dir)
-            return score
-        error_score = 50
+            return -score
+        error_score = -50
     case 'mw_max':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             mol = Chem.SDMolSupplier(lig_path).__next__()
             if mol is None: return None
-            return -rdMolDescriptors.CalcExactMolWt(mol)
+            return rdMolDescriptors.CalcExactMolWt(mol)
         error_score = 0
 if args.error_score is not None:
     error_score = args.error_score

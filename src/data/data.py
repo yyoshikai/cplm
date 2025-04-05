@@ -4,6 +4,8 @@ from typing import TypeVar
 from collections.abc import Callable
 
 import numpy as np
+import torch
+from torch import Tensor
 from torch.utils.data import Dataset
 from ..utils.lmdb import load_lmdb
 
@@ -193,3 +195,14 @@ def get_random_rotation_matrix(rng: np.random.Generator):
     axis2 = np.cross(axis0, axis1)
     axis2 = axis2 / np.linalg.norm(axis2)
     return np.array([axis0, axis1, axis2])
+
+class TensorDataset(Dataset[Tensor]):
+    def __init__(self, tensor: Tensor|np.ndarray) -> None:
+        self.tensor = torch.tensor(tensor)
+    
+    def __getitem__(self, idx: int):
+        return self.tensor[idx]
+
+    def __len__(self):
+        return self.tensor.size(0)
+    
