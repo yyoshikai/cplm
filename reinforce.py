@@ -12,6 +12,7 @@ from rdkit import Chem, RDLogger
 from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import Dataset, DataLoader, BatchSampler, StackDataset
 from torch.nn.utils.rnn import pad_sequence
+from torch.distributions import Categorical
 
 from src.data.sampler import InfiniteRandomSampler
 from src.model import Model
@@ -396,15 +397,16 @@ for step in range(args.max_step):
 
             ## Get prob & reward loss
             model.train()
-            temps = model(out_batch[:-1]) # [Lo-1, B, N]
-            log_probs_all = F.log_softmax(temps, dim=-1) # [Lo-1, B, N]
-            log_probs = torch.gather(log_probs_all, dim=-1, index=out_batch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
+            logits = model(out_batch[:-1]) # [Lo-1, B, T]
+            cat = Categorical(logits=logits) # ~[Lo-1, B]
+            log_probs = cat.log_prob(out_batch[1:]) # [Lo-1, B]
             reward_loss = torch.sum(-scores*(log_probs*weight).sum(dim=0)/weight.sum(dim=0))
 
             ## KL loss
-            init_temps = init_model(out_batch[:-1]) # [L, B, N]
-            init_log_probs = F.log_softmax(init_temps, dim=-1) # [Lo-1, B, N]
-            kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs, reduction='none', 
+            log_probs_all = F.log_softmax(logits)
+            init_logits = init_model(out_batch[:-1]) # [L, B, N]
+            init_log_probs_all = F.log_softmax(init_logits, dim=-1) # [Lo-1, B, N]
+            kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
                 log_target=True) # [Lo-1, B, N]
             kl_loss = kl_loss.sum(dim=-1) # [Lo-1, B]
             kl_loss = torch.sum(kl_loss*weight)
