@@ -268,7 +268,7 @@ class Model(nn.Module):
 
     def make_pos_buffer(self, length):
         if self.pos_buffer_len is not None:
-            self.logger.warning(f"Length of positional buffers will be reset to {length}.")
+            self.logger.info(f"Length of positional buffers will be reset to {length}.")
         position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
                 for pos in range(length)])
         device = self.embedding.weight.device

@@ -33,7 +33,9 @@ parser.add_argument('--studyname', required=True)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--batch-size", type=int, default=32)
 parser.add_argument('--max-len', type=int, default=2500)
+parser.add_argument('--mean-reward', action='store_true')
 parser.add_argument('--scale-reward', action='store_true')
+
 ## optimizer
 parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
 parser.add_argument("--clip-grad-norm", type=float, default=1.0) # same as BindGPT
@@ -384,9 +386,14 @@ for step in range(args.max_step):
                 scores.append(score)
             scoress.append(scores)
             scores = torch.tensor(scores, device=device, dtype=dtype)
-            if args.scale_reward:
-                scores = (scores -torch.mean(scores))/(torch.std(scores)+1.0e-8)
+            if args.mean_reward or args.scale_reward:
+                scores = scores - torch.mean(scores)
+                if args.scale_reward:
+                    scores = scores/(torch.std(scores)+1.0e-8)
             errorss.append(errors)
+            if step < 5:
+                logger.info(f"step {step} scores={scores.cpu().tolist()}")
+
             ## Get prob & reward loss
             model.train()
             temps = model(out_batch[:-1]) # [Lo-1, B, N]
