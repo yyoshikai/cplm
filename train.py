@@ -56,7 +56,7 @@ if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e7)
-
+log_step = 1 if args.test else 10000
 
 batch_first = False
 set_logtime(args.logtime)
@@ -96,7 +96,7 @@ if args.mol_repeat > 0:
 
 ## pocket data
 if args.pocket_repeat > 0:
-    pocket_data = UniMolPocketDataset(args.pocket_data, key_is_indexed=True)
+    pocket_data = UniMolPocketDataset(args.pocket_data, idx_to_key='str')
     pocket_data = ProteinDataset(pocket_data, protein_atom_tokenizer, coord_tokenizer, coord_transform, 
         atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, 
         atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, )
@@ -113,7 +113,7 @@ if args.frag_repeat > 0:
         case '2':
             frag_data = PDBFragment2Dataset(args.frag_data)
         case '3':
-            frag_data = LMDBDataset(args.frag_data, key_is_indexed=True)
+            frag_data = LMDBDataset(args.frag_data, idx_to_key='str')
         case _:
             raise ValueError(f'Unsupported args.frag_class: {args.frag_type}')
     frag_data = ProteinDataset(frag_data, protein_atom_tokenizer, coord_tokenizer, coord_transform, 
@@ -143,6 +143,6 @@ model = DistributedDataParallel(model)
 
 criterion = CELoss(voc_encoder, args.seed)
 
-train(args, train_loader, model, criterion, result_dir, is_main)
+train(args, train_loader, model, criterion, result_dir, is_main, device, log_step)
 
 dist.destroy_process_group()

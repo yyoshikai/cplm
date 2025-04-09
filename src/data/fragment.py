@@ -11,7 +11,7 @@ from tqdm import tqdm as _tqdm
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from .data import LMDB, LMDBDataset
+from .data import LMDBDataset
 from ..utils import logtime, slice_str
 from ..utils.lmdb import new_lmdb, load_lmdb
 try:

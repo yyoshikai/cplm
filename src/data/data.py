@@ -1,7 +1,7 @@
 import pickle
 from functools import lru_cache
 from typing import TypeVar
-from collections.abc import Callable
+from collections.abc import Callable, Sized
 
 import numpy as np
 import torch
@@ -28,13 +28,19 @@ class ApplyDataset(WrapDataset[T_co]):
         self.func = func
     def __getitem__(self, idx: int):
         return self.func(self.dataset[idx])
+    
+def data_len_to_blen(l: int|Sized):
+    if isinstance(l, int):
+        return ((l-1).bit_length()+7) // 8
+    return data_len_to_blen(len(l))
 
+from typing import Literal
 class LMDBDataset(Dataset[T_co]):
-    def __init__(self, lmdb_path: str, idx_to_key: str='byte'):
+    def __init__(self, lmdb_path: str, idx_to_key: Literal['byte', 'str']='byte'):
         self.path = lmdb_path
         match idx_to_key:
             case 'byte':
-                blen = ((len(self)-1).bit_length()+7) // 8
+                blen = data_len_to_blen(self)
                 self.idx_to_key = lambda idx: idx.to_bytes(blen)
             case 'str':
                 self.idx_to_key = lambda idx: str(idx).encode('ascii')

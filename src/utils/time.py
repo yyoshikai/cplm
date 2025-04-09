@@ -8,7 +8,7 @@ class _Watch:
     def add_time(self, name: str, start: float, end: float):
         raise NotImplementedError
 
-class Watch:
+class Watch(_Watch):
     def __init__(self):
         self.name2time = {}
     def add_time(self, name: str, start: float, end: float):

@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
-from .data import LMDBDataset, CoordTransform
+from .data import PickleLMDBDataset, CoordTransform
 from .tokenizer import FloatTokenizer, StringTokenizer
 from ..utils import logtime
 
@@ -50,7 +50,7 @@ class UniMolLigandDataset(Dataset):
 
         atom_h=True, coord_h=True とするとBindGPT
         """
-        self.net_dataset = LMDBDataset(lmdb_path, key_is_indexed=True)
+        self.net_dataset = PickleLMDBDataset(lmdb_path, idx_to_key='str')
         self.n_conformer = n_conformer
         self.atom_h = atom_h
         self.coord_h = coord_h

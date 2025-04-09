@@ -4,7 +4,7 @@ import numpy as np
 from torch.utils.data import Dataset
  
 from .tokenizer import ProteinAtomTokenizer, FloatTokenizer
-from .data import CoordTransform, LMDBDataset
+from .data import CoordTransform, PickleLMDBDataset
 from ..utils import logtime, slice_str
 
 # net_datasetは {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
@@ -63,7 +63,7 @@ class ProteinDataset(Dataset):
 class UniMolPocketDataset(Dataset):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, lmdb_path, **kwargs):
-        self.dataset = LMDBDataset(lmdb_path, **kwargs)
+        self.dataset = PickleLMDBDataset(lmdb_path, **kwargs)
     
     def __getitem__(self, idx):
         data = self.dataset[idx]
