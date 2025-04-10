@@ -1,4 +1,5 @@
 import sys, os, argparse, yaml, shutil, psutil, gc
+import itertools as itr
 from logging import getLogger
 from collections import defaultdict
 import numpy as np, pandas as pd
@@ -7,6 +8,7 @@ from glob import glob
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdMolDescriptors
@@ -34,8 +36,10 @@ parser.add_argument('--studyname', required=True)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--batch-size", type=int, default=32)
 parser.add_argument('--max-len', type=int, default=2500)
-parser.add_argument('--mean-reward', action='store_true')
-parser.add_argument('--scale-reward', action='store_true')
+parser.add_argument('--reward-scale', choices=['none', 'all_mean', 'sample_mean', 
+        'rank_mean', 'rank_mean_std'], default='none')
+# parser.add_argument('--mean-reward', action='store_true') = --reward-scale rank_mean
+# parser.add_argument('--scale-reward', action='store_true') = --reward-scale rank_mean_std
 
 ## optimizer
 parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
@@ -51,6 +55,7 @@ parser.add_argument("--max-opt-step", type=int, default=float('inf'))
 parser.add_argument('--finetune-save-dir', required=True)
 parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--target", choices=['min_vina', 'vina', 'mw_max', 'logp'], default='min_vina')
+parser.add_argument('--generate-per-sample', type=int, default=1)
 ## finetune
 parser.add_argument("--finetune-name", required=True)
 parser.add_argument("--finetune-step", type=int)
@@ -88,6 +93,7 @@ if args.record_opt_step is None:
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e7)
 batch_first = False
+log_sample_step = 3
 
 # Environment
 RDLogger.DisableLog("rdApp.*")
@@ -95,10 +101,12 @@ RDLogger.DisableLog("rdApp.*")
 # DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
 rank = dist.get_rank()
-size = dist.get_world_size()
+dist_size = dist.get_world_size()
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 is_main = rank == MAIN_RANK
+## check generate_per_sample
+assert (dist_size * args.batch_size) % args.generate_per_sample == 0
 ## make&sync result dir
 result_dir = sync_train_dir(f"reinforce/results/{timestamp()}_{args.studyname}")
 if is_main:
@@ -152,68 +160,73 @@ if not is_main:
     train_data = None
 
 ## Make dataloader
-class ReinforceLoader:
-    """
-
-    """
+class ReinforceIter:
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, dataset: Dataset, num_workers:int, pin_memory: bool, prefetch_factor: int, 
-            batch_size: int, batch_first: bool, padding_value: int,
+            batch_size: int, batch_first: bool, padding_value: int, repeat_per_sample: int,
             device: torch.device, main_rank: int=0):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
+        self.batch_size = batch_size
+        self.repeat_per_sample = repeat_per_sample
+        self.batch_first = batch_first
+        self.padding_value = padding_value
+        assert self.batch_size * self.size % self.repeat_per_sample == 0
+
         self.device = device
 
         if self.rank == self.main_rank:
-            def collate_fn(datas: list[tuple[int, str, np.ndarray]]):
-                idxs, datas, centers = list(zip(*datas))
-                idxs = np.array(idxs)
-                datas = pad_sequence(datas, batch_first=batch_first, padding_value=padding_value)
-                centers = torch.tensor(np.array(centers))
-                return idxs, datas, centers
-            loader = DataLoader(dataset, 
-                batch_sampler=BatchSampler(InfiniteRandomSampler(dataset), batch_size, drop_last=True), collate_fn=collate_fn,
-                num_workers=num_workers, pin_memory=pin_memory, persistent_workers=True, prefetch_factor=prefetch_factor)
-            self.logger.info(f"Loading filenames.csv ...")
+            loader = DataLoader(dataset, batch_size=None, 
+                sampler=InfiniteRandomSampler(dataset),
+                num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
+            self.logger.info(f"Loading filenames.csv.gz ...")
             self.df_file = pd.read_csv(f"{args.finetune_save_dir}/filenames.csv.gz", index_col=0)
             self.logger.info("Loaded.")
             self.iter = loader.__iter__()
             self.next_item = None
             self.step = 0
 
-    def __next__(self) -> tuple[pd.DataFrame, torch.Tensor, torch.Tensor]:
+    def __next__(self) -> tuple[Tensor, pd.DataFrame, Tensor, Tensor]:
         if self.rank == self.main_rank:
-            for dst_rank in range(self.size):
-                dst_idx, dst_batch, dst_centers = next(self.iter)
-                dst_batch = dst_batch.to(torch.long).to(self.device)
-                dst_files = self.df_file.loc[dst_idx]
-                dst_centers = dst_centers.to(self.device).to(torch.float)
-                if dst_rank == self.rank:
-                    files = dst_files
-                    batch = dst_batch
-                    centers = dst_centers
-                else:
-                    dist.send(torch.tensor(dst_batch.shape, dtype=torch.int, device=self.device), dst=dst_rank)
-                    dist.send(dst_batch, dst=dst_rank)
-                    dist.send_object_list([files], dst=dst_rank)
-                    dist.send(dst_centers, dst=dst_rank)
+            all_idxs = []
+            all_datas = []
+            all_centers = []
+            for _ in range(self.batch_size*self.size // self.repeat_per_sample):
+                idx, data, center = self.iter.__next__()
+                all_idxs.append(idx)
+                all_datas += [data]*self.repeat_per_sample
+                all_centers.append(center)
+            all_idxs = np.array(all_idxs).repeat(self.repeat_per_sample)
+            all_files = [self.df_file.loc[all_idxs[rank*self.batch_size:(rank+1)*self.batch_size]]
+                    for rank in range(self.size)]
+            all_idxs = torch.tensor(all_idxs, dtype=torch.int, device=self.device)
+            all_centers = torch.stack(all_centers).to(torch.float).to(self.device).repeat_interleave(self.repeat_per_sample, dim=0)
+            all_centers = list(torch.chunk(all_centers, chunks=self.size, dim=0))
+            all_batches = [pad_sequence(all_datas[rank*self.batch_size:(rank+1)*self.batch_size], 
+                    self.batch_first, self.padding_value).to(torch.long).to(self.device) 
+                    for rank in range(self.size)]
+            all_shapes = [torch.tensor(batch.shape, dtype=torch.int, device=self.device)
+                    for batch in all_batches]
         else:
-            batch_shape = torch.zeros(2, dtype=torch.int, device=self.device)
-            dist.recv(batch_shape, src=self.main_rank)
-            L, B = batch_shape.cpu().tolist()
-            batch = torch.zeros(L, B, dtype=torch.long, device=self.device)
-            dist.recv(batch, src=self.main_rank)
-            files = [None]
-            dist.recv_object_list(files, src=self.main_rank)
-            files = files[0]
-            centers = torch.zeros((B, 3), dtype=torch.float, device=self.device)
-            dist.recv(centers, src=self.main_rank)
-        return files, batch, centers
+            all_idxs = torch.zeros(self.batch_size*self.size, dtype=torch.int, device=self.device)
+            all_files = all_centers = all_shapes = all_batches = None
 
-train_loader = ReinforceLoader(train_data, args.num_workers, 
+        dist.broadcast(all_idxs, src=self.main_rank)
+        files = [None]
+        dist.scatter_object_list(files, all_files, src=self.main_rank)
+        files = files[0]
+        centers = torch.zeros((self.batch_size, 3), dtype=torch.float, device=self.device)
+        dist.scatter(centers, all_centers, src=self.main_rank)
+        shape = torch.zeros((2,), device=self.device, dtype=torch.int)
+        dist.scatter(shape, all_shapes, src=self.main_rank)
+        batch = torch.zeros(shape.tolist(), dtype=torch.long, device=self.device)
+        dist.scatter(batch, all_batches, src=self.main_rank)
+        return all_idxs, files, centers, batch
+
+train_iter = ReinforceIter(train_data, args.num_workers, 
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
-    voc_encoder.pad_token, device, MAIN_RANK)
+    voc_encoder.pad_token, args.generate_per_sample, device, MAIN_RANK)
 
 ## Scoring function 最大化したいものとする
 match args.target:
@@ -308,7 +321,7 @@ for step in range(args.max_step):
 
     # get batch
     with watch.hold('data'):
-        files, batch, centers = train_loader.__next__()
+        all_idxs, files, centers, batch = train_iter.__next__()
         batch = batch.to(device)
         centers = centers.cpu().numpy()
         steps['batch_size'].append(batch.shape[1])
@@ -332,15 +345,19 @@ for step in range(args.max_step):
             weight[end_count[:-1] > 0] = 0.0
 
             ## Log output
-            if step < 5:
-                idxs = np.arange(B)
-                if B > 5: idxs = np.random.default_rng(step).choice(idxs, 5, replace=False)
-                for idx in idxs:
+            if step < log_sample_step:
+                for idx in np.arange(B):
                     context = voc_encoder.decode(batch[:,idx])
                     logger.log(INFO_WORKER, f"step {step}[{idx}]context={' '.join(context)}")
                     output = voc_encoder.decode(outputs[idx])
                     logger.log(INFO_WORKER, f"step {step}[{idx}]generated={' '.join(output)}")
-                    logger.log(INFO_WORKER, f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
+                    logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
+                ## check distribution
+                if rank == dist_size-1:
+                    logger.log(INFO_WORKER, f"step {step}{all_idxs=}")
+                    logger.log(INFO_WORKER, f"step {step}{files=}")
+                    logger.log(INFO_WORKER, f"step {step}{centers=}")
+                    
 
             ## Get score
             do_save = step < 5 or step % 50 == 0
@@ -386,11 +403,27 @@ for step in range(args.max_step):
                 errors.append(error)
                 scores.append(score)
             scoress.append(scores)
-            scores = torch.tensor(scores, device=device, dtype=dtype)
-            if args.mean_reward or args.scale_reward:
-                scores = scores - torch.mean(scores)
-                if args.scale_reward:
-                    scores = scores/(torch.std(scores)+1.0e-8)
+            scores = torch.tensor(scores, device=device, dtype=torch.float)
+
+            ## gather & normalize score
+            all_scores = [torch.zeros(args.batch_size, dtype=torch.float, device=device)
+                    for _ in range(dist_size)]
+            dist.all_gather(all_scores, scores)
+            all_scores = torch.cat(all_scores)
+            match args.reward_scale:
+                case 'none': 
+                    pass
+                case 'all_mean':
+                    scores = scores - torch.mean(all_scores)
+                case 'sample_mean':
+                    idxs = all_idxs[rank*args.batch_size:(rank+1)*args.batch_size]
+                    unique_idxs = idxs.unique()
+                    for uidx in unique_idxs:
+                        scores[idxs == uidx] -= torch.mean(all_scores[all_idxs == uidx])
+                case 'rank_mean':
+                    scores = scores - torch.mean(scores)
+                case 'rank_mean_std':
+                    scores = (scores - torch.mean(scores)) / (torch.std(scores)+1.0e-8)
             errorss.append(errors)
             if step < 5:
                 logger.info(f"step {step} scores={scores.cpu().tolist()}")
@@ -423,7 +456,6 @@ for step in range(args.max_step):
             os.makedirs(sdir, exist_ok=True)
             torch.save(log_probs_all.cpu(), f"{sdir}/log_probs_all.pt")
             torch.save(log_probs.cpu(), f"{sdir}/log_probs.pt")
-
 
         # check nan
         if args.reset_nan_grad:
@@ -477,6 +509,10 @@ for step in range(args.max_step):
         break
     if step % log_step == 0:
         logger.info(f"{step=} finished.")
+
+    if step == log_sample_step:
+        logger.info("RDKit logger will be disabled.")
+        getLogger('rdkit').propagate = False
 logger.info("Training finished!")
 
 dist.destroy_process_group()
