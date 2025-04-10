@@ -66,6 +66,7 @@ parser.add_argument("--prefetch-factor", type=int)
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
 parser.add_argument("--reset-nan-grad", action='store_true')
 parser.add_argument("--gc", action='store_true')
+parser.add_argument("--use-categorical", action='store_true')
 ## record
 parser.add_argument("--record-opt-step", type=int)
 parser.add_argument("--tokenizer-log-interval", type=int)
@@ -431,8 +432,12 @@ for step in range(args.max_step):
             ## Get prob & reward loss
             model.train()
             logits = model(out_batch[:-1]) # [Lo-1, B, T]
-            cat = Categorical(logits=logits) # ~[Lo-1, B]
-            log_probs = cat.log_prob(out_batch[1:]) # [Lo-1, B]
+            if args.use_categorical:
+                cat = Categorical(logits=logits) # ~[Lo-1, B]
+                log_probs = cat.log_prob(out_batch[1:]) # [Lo-1, B]
+            else:
+                log_probs_all = F.log_softmax(logits, dim=-1) # [Lo-1, B, N]
+                log_probs = torch.gather(log_probs_all, dim=-1, index=out_batch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
             reward_loss = torch.sum(-scores*(log_probs*weight).sum(dim=0)/weight.sum(dim=0))
 
             ## KL loss
