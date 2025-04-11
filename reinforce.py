@@ -206,15 +206,11 @@ class ReinforceIter:
             all_idxs = torch.tensor(all_idxs, dtype=torch.int, device=self.device)
             all_centers = torch.stack(all_centers).to(torch.float).to(self.device).repeat_interleave(self.repeat_per_sample, dim=0)
             all_centers = list(torch.chunk(all_centers, chunks=self.size, dim=0))
-            all_batches = [pad_sequence(all_datas[rank*self.batch_size:(rank+1)*self.batch_size], 
-                    self.batch_first, self.padding_value).to(torch.long).to(self.device) 
+            all_datas = [all_datas[rank*self.batch_size:(rank+1)*self.batch_size]
                     for rank in range(self.size)]
-            all_shapes = [torch.tensor(batch.shape, dtype=torch.int, device=self.device)
-                    for batch in all_batches]
-            logger.info(f"{all_shapes=}")
         else:
             all_idxs = torch.zeros(self.batch_size*self.size, dtype=torch.int, device=self.device)
-            all_files = all_centers = all_shapes = all_batches = None
+            all_files = all_centers = all_datas = None
 
         dist.broadcast(all_idxs, src=self.main_rank)
         files = [None]
@@ -222,11 +218,10 @@ class ReinforceIter:
         files = files[0]
         centers = torch.zeros((self.batch_size, 3), dtype=torch.float, device=self.device)
         dist.scatter(centers, all_centers, src=self.main_rank)
-        shape = torch.zeros((2,), device=self.device, dtype=torch.int)
-        dist.scatter(shape, all_shapes, src=self.main_rank)
-        logger.info(f"{shape=}")
-        batch = torch.zeros(shape.tolist(), dtype=torch.long, device=self.device)
-        dist.scatter(batch, all_batches, src=self.main_rank)
+        datas = [None]
+        dist.scatter_object_list(datas, all_datas, src=self.main_rank)
+        datas = datas[0]
+        batch = pad_sequence(datas, self.batch_first, self.padding_value).to(torch.long).to(self.device) 
         return all_idxs, files, centers, batch
 
 train_iter = ReinforceIter(train_data, args.num_workers, 
