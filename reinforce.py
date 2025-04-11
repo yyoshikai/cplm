@@ -95,6 +95,8 @@ if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e7)
 batch_first = False
 log_sample_step = 3
+do_save_steps = [0, 1, 2, 3, 4, 50, 100]+list(range(200, 1000, 200)) \
+        +list(range(1000, args.max_step, 1000))
 
 # Environment
 RDLogger.DisableLog("rdApp.*")
@@ -209,6 +211,7 @@ class ReinforceIter:
                     for rank in range(self.size)]
             all_shapes = [torch.tensor(batch.shape, dtype=torch.int, device=self.device)
                     for batch in all_batches]
+            logger.info(f"{all_shapes=}")
         else:
             all_idxs = torch.zeros(self.batch_size*self.size, dtype=torch.int, device=self.device)
             all_files = all_centers = all_shapes = all_batches = None
@@ -221,6 +224,7 @@ class ReinforceIter:
         dist.scatter(centers, all_centers, src=self.main_rank)
         shape = torch.zeros((2,), device=self.device, dtype=torch.int)
         dist.scatter(shape, all_shapes, src=self.main_rank)
+        logger.info(f"{shape=}")
         batch = torch.zeros(shape.tolist(), dtype=torch.long, device=self.device)
         dist.scatter(batch, all_batches, src=self.main_rank)
         return all_idxs, files, centers, batch
@@ -361,7 +365,7 @@ for step in range(args.max_step):
                     
 
             ## Get score
-            do_save = step < 5 or step % 50 == 0
+            do_save = step in do_save_steps
             scores = []
             errors = []
             valid_score = 0.0
