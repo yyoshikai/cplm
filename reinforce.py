@@ -1,4 +1,4 @@
-import sys, os, argparse, yaml, shutil, psutil, gc
+import sys, os, argparse, yaml, shutil, psutil, gc, math
 import itertools as itr
 from logging import getLogger
 from collections import defaultdict
@@ -33,45 +33,47 @@ WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 parser = argparse.ArgumentParser()
 parser.add_argument('--studyname', required=True)
 ## trainings
-parser.add_argument("--seed", type=int, default=0)
-parser.add_argument("--batch-size", type=int, default=32)
+parser.add_argument('--seed', type=int, default=0)
+parser.add_argument('--batch-size', type=int, default=32)
 parser.add_argument('--max-len', type=int, default=2500)
 parser.add_argument('--reward-scale', choices=['none', 'all_mean', 'sample_mean', 
         'rank_mean', 'rank_mean_std'], default='none')
+parser.add_argument('--ignore-invalid', action='store_true')
 # parser.add_argument('--mean-reward', action='store_true') = --reward-scale rank_mean
 # parser.add_argument('--scale-reward', action='store_true') = --reward-scale rank_mean_std
 
 ## optimizer
 parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
-parser.add_argument("--clip-grad-norm", type=float, default=1.0) # same as BindGPT
-parser.add_argument("--clip-grad-value", type=float, default=None)
+parser.add_argument('--clip-grad-norm', type=float, default=1.0) # same as BindGPT
+parser.add_argument('--clip-grad-value', type=float, default=None)
 parser.add_argument('--scheduler', default='constant') # same as BindGPT
 parser.add_argument('--lr', type=float, default=1.4e-5) # same as BindGPT
 parser.add_argument('--alpha', type=float, default=0.05) # same as BindGPT
-parser.add_argument("--loss-scale")
-parser.add_argument("--max-step", type=int, default=1000)
-parser.add_argument("--max-opt-step", type=int, default=float('inf'))
+parser.add_argument('--loss-scale')
+parser.add_argument('--max-step', type=int, default=1000)
+parser.add_argument('--max-opt-step', type=int, default=float('inf'))
 ## data
 parser.add_argument('--finetune-save-dir', required=True)
-parser.add_argument("--pocket-coord-heavy", action='store_true')
-parser.add_argument("--target", choices=['min_vina', 'vina', 'mw_max', 'logp'], default='min_vina')
+parser.add_argument('--pocket-coord-heavy', action='store_true')
+parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp'], default='min_vina')
 parser.add_argument('--generate-per-sample', type=int, default=1)
 ## finetune
-parser.add_argument("--finetune-name", required=True)
-parser.add_argument("--finetune-step", type=int)
+parser.add_argument('--finetune-name', required=True)
+parser.add_argument('--finetune-step', type=int)
 ## environment
-parser.add_argument("--num-workers", type=int, default=0)
-parser.add_argument("--pin-memory", action='store_true')
-parser.add_argument("--prefetch-factor", type=int)
-parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
-parser.add_argument("--reset-nan-grad", action='store_true')
-parser.add_argument("--gc", action='store_true')
-parser.add_argument("--use-categorical", action='store_true')
+parser.add_argument('--num-workers', type=int, default=0)
+parser.add_argument('--pin-memory', action='store_true')
+parser.add_argument('--prefetch-factor', type=int)
+parser.add_argument('--sdp-kernel', choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
+parser.add_argument('--reset-nan-grad', action='store_true')
+parser.add_argument('--gc', action='store_true')
+parser.add_argument('--use-categorical', action='store_true')
 ## record
-parser.add_argument("--record-opt-step", type=int)
-parser.add_argument("--tokenizer-log-interval", type=int)
+parser.add_argument('--record-opt-step', type=int)
+parser.add_argument('--tokenizer-log-interval', type=int)
 ## not classified
 parser.add_argument('--error-score', type=float, default=None)
+parser.add_argument('--min-score', type=float, default=-math.inf)
 parser.add_argument('--test', action='store_true')
 args = parser.parse_args()
 
@@ -249,6 +251,7 @@ match args.target:
 if args.error_score is not None:
     error_score = args.error_score
 
+
 # model
 net_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 init_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
@@ -400,6 +403,7 @@ for step in range(args.max_step):
                     with open(f"{eval_dir}/tokens.txt", 'w') as f:
                         f.write(','.join(out_tokens)+'\n')
 
+                score = max(args.min_score, score)
                 errors.append(error)
                 scores.append(score)
             scoress.append(scores)
