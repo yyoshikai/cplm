@@ -74,6 +74,7 @@ parser.add_argument('--tokenizer-log-interval', type=int)
 ## not classified
 parser.add_argument('--error-score', type=float, default=None)
 parser.add_argument('--min-score', type=float, default=-math.inf)
+parser.add_argument('--ignore-error', action='store_true')
 parser.add_argument('--test', action='store_true')
 args = parser.parse_args()
 
@@ -377,7 +378,7 @@ for step in range(args.max_step):
                 else:
                     eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
 
-                score = error_score
+                score = np.nan
                 out_tokens = voc_encoder.decode(outputs[idx].tolist())
                 coord_error, smiles, coords = parse_mol_tokens(out_tokens)
                 if coord_error == '':
@@ -403,32 +404,44 @@ for step in range(args.max_step):
                     with open(f"{eval_dir}/tokens.txt", 'w') as f:
                         f.write(','.join(out_tokens)+'\n')
 
-                score = max(args.min_score, score)
                 errors.append(error)
                 scores.append(score)
-            scoress.append(scores)
+            errorss.append(errors)
             scores = torch.tensor(scores, device=device, dtype=torch.float)
+            if not args.ignore_error:
+                scores[torch.isnan(scores)] = error_score
+            torch.clamp_(scores, min=args.min_score)
+            scoress.append(scores.cpu().tolist())
 
             ## gather & normalize score
             all_scores = [torch.zeros(args.batch_size, dtype=torch.float, device=device)
                     for _ in range(dist_size)]
             dist.all_gather(all_scores, scores)
             all_scores = torch.cat(all_scores)
+            
             match args.reward_scale:
                 case 'none': 
                     pass
                 case 'all_mean':
-                    scores = scores - torch.mean(all_scores)
+                    if torch.any(torch.isfinite(all_scores)):
+                        scores = scores - torch.nanmean(all_scores)
                 case 'sample_mean':
                     idxs = all_idxs[rank*args.batch_size:(rank+1)*args.batch_size]
                     unique_idxs = idxs.unique()
                     for uidx in unique_idxs:
-                        scores[idxs == uidx] -= torch.mean(all_scores[all_idxs == uidx])
+                        if torch.any(torch.isfinite(all_scores[all_idxs == idxs])):
+                            scores[idxs == uidx] -= torch.nanmean(all_scores[all_idxs == uidx])
                 case 'rank_mean':
-                    scores = scores - torch.mean(scores)
+                    if torch.any(torch.isfinite(scores)):
+                        scores = scores - torch.nanmean(scores)
                 case 'rank_mean_std':
-                    scores = (scores - torch.mean(scores)) / (torch.std(scores)+1.0e-8)
-            errorss.append(errors)
+                    if torch.any(torch.isfinite(scores)):
+                        scores = scores - torch.nanmean(scores)
+                        if torch.sum(torch.isfinite(scores)) >= 2:
+                            scores = scores / (torch.std(scores[torch.isfinite(scores)])+1.0e-8)
+            if args.ignore_error:
+                scores[torch.isnan(scores)] = 0.0
+
             if step < 5:
                 logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
@@ -444,7 +457,7 @@ for step in range(args.max_step):
             reward_loss = torch.sum(-scores*(log_probs*weight).sum(dim=0)/weight.sum(dim=0))
 
             ## KL loss
-            log_probs_all = F.log_softmax(logits)
+            log_probs_all = F.log_softmax(logits, dim=-1)
             init_logits = init_model(out_batch[:-1]) # [L, B, N]
             init_log_probs_all = F.log_softmax(init_logits, dim=-1) # [Lo-1, B, N]
             kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
