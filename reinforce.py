@@ -429,7 +429,7 @@ for step in range(args.max_step):
                     idxs = all_idxs[rank*args.batch_size:(rank+1)*args.batch_size]
                     unique_idxs = idxs.unique()
                     for uidx in unique_idxs:
-                        if torch.any(torch.isfinite(all_scores[all_idxs == idxs])):
+                        if torch.any(torch.isfinite(all_scores[all_idxs == uidx])):
                             scores[idxs == uidx] -= torch.nanmean(all_scores[all_idxs == uidx])
                 case 'rank_mean':
                     if torch.any(torch.isfinite(scores)):
