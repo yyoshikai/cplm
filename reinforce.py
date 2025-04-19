@@ -1,5 +1,6 @@
 import sys, os, argparse, yaml, shutil, psutil, gc, math
 import itertools as itr
+import concurrent.futures as cf
 from logging import getLogger
 from collections import defaultdict
 import numpy as np, pandas as pd
@@ -62,6 +63,7 @@ parser.add_argument('--finetune-name', required=True)
 parser.add_argument('--finetune-step', type=int)
 ## environment
 parser.add_argument('--num-workers', type=int, default=0)
+parser.add_argument('--num-score-workers', type=int, default=1)
 parser.add_argument('--pin-memory', action='store_true')
 parser.add_argument('--prefetch-factor', type=int)
 parser.add_argument('--sdp-kernel', choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
@@ -236,17 +238,22 @@ match args.target:
     case 'min_vina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             score, min_score = eval_vina(lig_path, rec_path, out_dir)
+            if min_score is None:
+                return np.nan
             return -min_score
         error_score = -50
     case 'vina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             score, min_score = eval_vina(lig_path, rec_path, out_dir)
+            if score is None:
+                return np.nan
             return -score
         error_score = -50
     case 'mw_max':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             mol = Chem.SDMolSupplier(lig_path).__next__()
-            if mol is None: return None
+            if mol is None: 
+                return np.nan
             return rdMolDescriptors.CalcExactMolWt(mol)
         error_score = 0
 if args.error_score is not None:
@@ -332,10 +339,10 @@ for step in range(args.max_step):
         steps['max_len'].append(batch.shape[0])
 
     # forward
-    with watch.hold('loss'):
-        with torch.autocast('cuda', dtype=torch.bfloat16):
+    with torch.autocast('cuda', dtype=torch.bfloat16):
 
-            ## generate sample
+        ## generate sample
+        with watch.hold('generate'):
             model.eval()
             with torch.inference_mode():
                 outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, tqdm=False) # [B, L]
@@ -348,64 +355,76 @@ for step in range(args.max_step):
             end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
             weight[end_count[:-1] > 0] = 0.0
 
-            ## Log output
-            if step < log_sample_step:
-                for idx in np.arange(B):
-                    context = voc_encoder.decode(batch[:,idx])
-                    logger.log(INFO_WORKER, f"step {step}[{idx}]context={' '.join(context)}")
-                    output = voc_encoder.decode(outputs[idx])
-                    logger.log(INFO_WORKER, f"step {step}[{idx}]generated={' '.join(output)}")
-                    logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
-                ## check distribution
-                if rank == dist_size-1:
-                    logger.log(INFO_WORKER, f"step {step}{all_idxs=}")
-                    logger.log(INFO_WORKER, f"step {step}{files=}")
-                    logger.log(INFO_WORKER, f"step {step}{centers=}")
-                    
-
-            ## Get score
-            do_save = step in do_save_steps
-            scores = []
-            errors = []
-            valid_score = 0.0
-            n_valid = 0
-            for idx in range(len(outputs)):
-                center = centers[idx]
+        ## Log output
+        if step < log_sample_step:
+            for idx in np.arange(B):
+                context = voc_encoder.decode(batch[:,idx])
+                logger.log(INFO_WORKER, f"step {step}[{idx}]context={' '.join(context)}")
+                output = voc_encoder.decode(outputs[idx])
+                logger.log(INFO_WORKER, f"step {step}[{idx}]generated={' '.join(output)}")
+                logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
+            ## check distribution
+            if rank == dist_size-1:
+                logger.log(INFO_WORKER, f"step {step}{all_idxs=}")
+                logger.log(INFO_WORKER, f"step {step}{files=}")
+                logger.log(INFO_WORKER, f"step {step}{centers=}")
                 
-                if do_save:
-                    eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
-                    os.makedirs(eval_dir, exist_ok=True)
-                else:
-                    eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
 
-                score = np.nan
-                out_tokens = voc_encoder.decode(outputs[idx].tolist())
-                coord_error, smiles, coords = parse_mol_tokens(out_tokens)
-                if coord_error == '':
+        ## Get score
+        do_save = step in do_save_steps
+        errors = []
+        with cf.ProcessPoolExecutor(args.num_score_workers) as e:
+            futures = []
+            for idx in range(len(outputs)):
+
+                with watch.hold('prepare_score'):
+                    center = centers[idx]
+                    if do_save:
+                        eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
+                        os.makedirs(eval_dir, exist_ok=True)
+                    else:
+                        eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
+
+                    score = np.nan
+                    out_tokens = voc_encoder.decode(outputs[idx].tolist())
+
+                    if do_save:
+                        info = {**files.iloc[idx].to_dict(), 'center': center.tolist()}
+                        with open(f"{eval_dir}/info.yaml", 'w') as f:
+                            yaml.dump(info, f)
+                        with open(f"{eval_dir}/tokens.txt", 'w') as f:
+                            f.write(','.join(out_tokens)+'\n')
+                    coord_error, smiles, coords = parse_mol_tokens(out_tokens)
+                    
+                    if coord_error != '':
+                        errors.append('COORD_'+coord_error)
+                        continue
+                    
                     coords += center
                     error, mol = parse_mol(smiles, coords)
-                    if error == '':
-                        with open(f"{eval_dir}/lig.sdf", 'w') as f:
-                            f.write(Chem.MolToMolBlock(mol))
-                        dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
-                        score0 = get_score(f"{eval_dir}/lig.sdf", f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", eval_dir)
-                        if score0 is None:
-                            error = 'VINA'
-                        else:
-                            n_valid += 1
-                            score = score0
-                            valid_score += score
-                else:
-                    error = 'COORD_'+coord_error
-                if do_save:
-                    info = {**files.iloc[idx].to_dict(), 'center': center.tolist()}
-                    with open(f"{eval_dir}/info.yaml", 'w') as f:
-                        yaml.dump(info, f)
-                    with open(f"{eval_dir}/tokens.txt", 'w') as f:
-                        f.write(','.join(out_tokens)+'\n')
 
-                errors.append(error)
-                scores.append(score)
+                    if error != '':
+                        errors.append(error)
+                        continue
+                    
+                    with open(f"{eval_dir}/lig.sdf", 'w') as f:
+                        f.write(Chem.MolToMolBlock(mol))
+                    dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
+                    
+                    
+                    futures.append(e.submit(get_score, 
+                            lig_path=f"{eval_dir}/lig.sdf", 
+                            rec_path=f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", out_dir=eval_dir))
+                    errors.append('')
+            with watch.hold('wait_score'):
+                valid_scores = np.array([f.result() for f in futures])
+
+        with watch.hold('modify_score'):
+            errors = np.array(errors)
+            scores = np.full(len(errors), np.nan)
+            scores[errors == ""] = valid_scores
+            errors[errors == ""][np.isnan(valid_scores)] = 'VINA'
+
             errorss.append(errors)
             scores = torch.tensor(scores, device=device, dtype=torch.float)
             if not args.ignore_error:
@@ -442,10 +461,11 @@ for step in range(args.max_step):
             if args.ignore_error:
                 scores[torch.isnan(scores)] = 0.0
 
-            if step < 5:
-                logger.info(f"step {step} scores={scores.cpu().tolist()}")
+        if step < 5:
+            logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
-            ## Get prob & reward loss
+        ## Get prob & reward loss
+        with watch.hold('loss'):
             model.train()
             logits = model(out_batch[:-1]) # [Lo-1, B, T]
             if args.use_categorical:
@@ -459,7 +479,7 @@ for step in range(args.max_step):
             ## KL loss
             log_probs_all = F.log_softmax(logits, dim=-1)
             init_logits = init_model(out_batch[:-1]) # [L, B, N]
-            init_log_probs_all = F.log_softmax(init_logits, dim=-1) # [Lo-1, B, N]
+            init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
             kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
                 log_target=True) # [Lo-1, B, N]
             kl_loss = kl_loss.sum(dim=-1) # [Lo-1, B]
@@ -467,40 +487,41 @@ for step in range(args.max_step):
             
             loss = (reward_loss + kl_loss * args.alpha) * loss_scale
 
+    with watch.hold('backward'):
         loss.backward()
-        steps['reward_loss'].append(reward_loss.item())
-        steps['kl_loss'].append(kl_loss.item())
+    steps['reward_loss'].append(reward_loss.item())
+    steps['kl_loss'].append(kl_loss.item())
 
-        # Save step data
-        if (step+1) % args.record_opt_step == 0:
-            sdir = f"{result_dir}/step_data/{step}"
-            os.makedirs(sdir, exist_ok=True)
-            torch.save(log_probs_all.cpu(), f"{sdir}/log_probs_all.pt")
-            torch.save(log_probs.cpu(), f"{sdir}/log_probs.pt")
+    # Save step data
+    if (step+1) % args.record_opt_step == 0:
+        sdir = f"{result_dir}/step_data/{step}"
+        os.makedirs(sdir, exist_ok=True)
+        torch.save(log_probs_all.cpu(), f"{sdir}/log_probs_all.pt")
+        torch.save(log_probs.cpu(), f"{sdir}/log_probs.pt")
 
-        # check nan
-        if args.reset_nan_grad:
-            grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
-            if not grad_is_finite:
-                if is_main:
-                    logger.warning("nan or infinite value in gradient. Gradient is reset.")
-                    for name, param in model.module.named_parameters():
-                        n_nan = torch.sum(torch.isnan(param.grad)).item()
-                        n_inf = torch.sum(torch.isinf(param.grad)).item()
-                        if n_nan > 0 or n_inf > 0:
-                            logger.warning(f"{name}: {n_nan=}, {n_inf=}")
+    # check nan
+    if args.reset_nan_grad:
+        grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
+        if not grad_is_finite:
+            if is_main:
+                logger.warning("nan or infinite value in gradient. Gradient is reset.")
+                for name, param in model.module.named_parameters():
+                    n_nan = torch.sum(torch.isnan(param.grad)).item()
+                    n_inf = torch.sum(torch.isinf(param.grad)).item()
+                    if n_nan > 0 or n_inf > 0:
+                        logger.warning(f"{name}: {n_nan=}, {n_inf=}")
 
-                ## save situation
-                if is_main and not nan_grad_step_saved:
-                    nan_dir = f"{result_dir}/nan_step_{step}/{rank}"
-                    os.makedirs(nan_dir, exist_ok=True)
-                    torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
-                    torch.save(model.state_dict(), f"{nan_dir}/model.pth")
-                    nan_grad_step_saved = True
-                
-                ## reset grad
-                optimizer.zero_grad()
-    
+            ## save situation
+            if is_main and not nan_grad_step_saved:
+                nan_dir = f"{result_dir}/nan_step_{step}/{rank}"
+                os.makedirs(nan_dir, exist_ok=True)
+                torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
+                torch.save(model.state_dict(), f"{nan_dir}/model.pth")
+                nan_grad_step_saved = True
+            
+            ## reset grad
+            optimizer.zero_grad()
+
     with watch.hold('optimize'):
         if args.clip_grad_value is not None:
             torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
