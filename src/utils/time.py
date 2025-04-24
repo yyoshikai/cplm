@@ -44,7 +44,7 @@ class FileWatch(_Watch):
         self.starts = []
         self.ends = []
         with open(self.path, 'w') as f:
-            f.write("name,start,end\n")
+            f.write("name,start,time\n")
 
     def hold(self, name: str):
         return _WatchHolder(name, self)
@@ -60,7 +60,7 @@ class FileWatch(_Watch):
         self.logger.info(f"Writing times...")
         with open(self.path, 'a') as f:
             for name, start, end in zip(self.names, self.starts, self.ends):
-                f.write(f"{name},{start},{end}\n")
+                f.write(f"{name},{start},{end-start}\n")
         self.names = []
         self.starts = []
         self.ends = []

@@ -40,8 +40,7 @@ parser.add_argument('--max-len', type=int, default=2500)
 parser.add_argument('--reward-scale', choices=['none', 'all_mean', 'sample_mean', 
         'rank_mean', 'rank_mean_std'], default='none')
 parser.add_argument('--ignore-invalid', action='store_true')
-# parser.add_argument('--mean-reward', action='store_true') = --reward-scale rank_mean
-# parser.add_argument('--scale-reward', action='store_true') = --reward-scale rank_mean_std
+parser.add_argument('--fix-pocket', action='store_true')
 
 ## optimizer
 parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
@@ -172,7 +171,7 @@ class ReinforceIter:
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, dataset: Dataset, num_workers:int, pin_memory: bool, prefetch_factor: int, 
             batch_size: int, batch_first: bool, padding_value: int, repeat_per_sample: int,
-            device: torch.device, main_rank: int=0):
+            fix_pocket: bool, device: torch.device, main_rank: int=0):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
@@ -181,6 +180,7 @@ class ReinforceIter:
         self.batch_first = batch_first
         self.padding_value = padding_value
         assert self.batch_size * self.size % self.repeat_per_sample == 0
+        self.fix_pocket = fix_pocket
 
         self.device = device
 
@@ -195,13 +195,20 @@ class ReinforceIter:
             self.next_item = None
             self.step = 0
 
+            if self.fix_pocket:
+                self.idx, self.data, self.center = self.iter.__next__()
+                del self.iter
+
     def __next__(self) -> tuple[Tensor, pd.DataFrame, Tensor, Tensor]:
         if self.rank == self.main_rank:
             all_idxs = []
             all_datas = []
             all_centers = []
             for _ in range(self.batch_size*self.size // self.repeat_per_sample):
-                idx, data, center = self.iter.__next__()
+                if self.fix_pocket:
+                    idx, data, center = self.idx, self.data, self.center
+                else:
+                    idx, data, center = self.iter.__next__()
                 all_idxs.append(idx)
                 all_datas += [data]*self.repeat_per_sample
                 all_centers.append(center)
@@ -231,7 +238,7 @@ class ReinforceIter:
 
 train_iter = ReinforceIter(train_data, args.num_workers, 
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
-    voc_encoder.pad_token, args.generate_per_sample, device, MAIN_RANK)
+    voc_encoder.pad_token, args.generate_per_sample, args.fix_pocket, device, MAIN_RANK)
 
 ## Scoring function 最大化したいものとする
 match args.target:

@@ -46,6 +46,7 @@ parser.add_argument("--no-pocket-atom-heavy", action='store_true')
 parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--pocket-atom-h", action='store_true')
 parser.add_argument("--pocket-coord-h", action='store_true')
+parser.add_argument("--coord-follow-atom", action='store_true')
 parser.add_argument("--frag-type", default='1')
 
 args = parser.parse_args()
@@ -99,7 +100,7 @@ if args.pocket_repeat > 0:
     pocket_data = UniMolPocketDataset(args.pocket_data, idx_to_key='str')
     pocket_data = ProteinDataset(pocket_data, protein_atom_tokenizer, coord_tokenizer, coord_transform, 
         atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, 
-        atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, )
+        atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, coord_follow_atom=args.coord_follow_atom)
     vocs |= pocket_data.vocs()
     pocket_data = RepeatDataset(pocket_data, args.pocket_repeat)
     logger.info(f"pocket data: {len(pocket_data)}")

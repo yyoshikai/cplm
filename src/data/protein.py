@@ -15,7 +15,8 @@ class ProteinDataset(Dataset):
             coord_tokenizer: FloatTokenizer,
             coord_transform: CoordTransform, 
             atom_heavy: bool = True, atom_h: bool = False,
-            coord_heavy: bool=False, coord_h: bool = False):
+            coord_heavy: bool=False, coord_h: bool = False, 
+            coord_follow_atom: bool=False):
         """
         Pretrain用のポケットデータを生成する。
         coord_heavy: ca, heavy, h のうちheavyのcoordを抽出するかどうか。
@@ -28,6 +29,7 @@ class ProteinDataset(Dataset):
         self.atom_h = atom_h
         self.coord_heavy = coord_heavy
         self.coord_h = coord_h
+        self.coord_follow_atom = coord_follow_atom
 
     def __getitem__(self, idx):
         data = self.net_dataset[idx]
@@ -49,10 +51,26 @@ class ProteinDataset(Dataset):
             if self.coord_heavy: coord_mask |= is_heavy
             if self.coord_h: coord_mask |= is_h
             coords = coords[coord_mask]
-
+            
             coords = self.coord_transform(coords)
-            return ['[POCKET]']+self.atom_tokenizer.tokenize(atoms) \
-                +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords.ravel())+['[END]']
+
+            # tokenize
+            atom_tokens = self.atom_tokenizer.tokenize(atoms)
+            coord_tokens = self.coord_tokenizer.tokenize_array(coords.ravel())
+
+            if self.coord_follow_atom:
+                coord_mask = coord_mask[atom_mask]
+                tokens = ['[POCKET]']
+                for atom_token, has_coord in zip(atom_tokens, coord_mask):
+                    tokens.append(atom_token)
+                    if has_coord:
+                        tokens += coord_tokens[:6]
+                        coord_tokens = coord_tokens[6:]
+                assert len(coord_tokens) == 0
+                tokens.append('[END]')
+                return tokens
+            else:
+                return ['[POCKET]']+atom_tokens+['[XYZ]']+coord_tokens+['[END]']
 
     def vocs(self) -> set[str]:
         return self.atom_tokenizer.vocs()|self.coord_tokenizer.vocs()|{'[POCKET]', '[XYZ]', '[END]'}
