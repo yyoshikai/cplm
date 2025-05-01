@@ -100,13 +100,8 @@ class CDDataset(Dataset):
             pocket_coord = pocket_coord[coord_mask]
 
             # normalize coords
-            ## random rotation
-            if self.random_rotate:
-                rotation_matrix = get_random_rotation_matrix(self.rstate)
-                lig_coord = np.matmul(lig_coord, rotation_matrix)
-                pocket_coord = np.matmul(pocket_coord, rotation_matrix)
             
-            ## set center
+            ## centerize
             if self.coord_center == 'ligand':
                 center = np.mean(lig_coord, axis=0)
             elif self.coord_center == 'pocket':
@@ -116,7 +111,13 @@ class CDDataset(Dataset):
             lig_coord -= center
             pocket_coord -= center
 
-            output = (pocket_atoms, pocket_coord, lig_smi, lig_coord, score, center)
+            ## random rotation 250501 centerizeと順番を入れ替えた
+            if self.random_rotate:
+                rotation_matrix = get_random_rotation_matrix(self.rstate)
+                lig_coord = np.matmul(lig_coord, rotation_matrix)
+                pocket_coord = np.matmul(pocket_coord, rotation_matrix)
+
+            output = (pocket_atoms, pocket_coord, lig_smi, lig_coord, score, center, rotation_matrix)
             if self.out_filename:
                 output += ({key: self.df[key][idx] for key in self.df}, )
             return output
@@ -243,8 +244,8 @@ class FinetuneDataset(SentenceDataset):
             float_tokenizer: FloatTokenizer,
             smiles_tokenizer: StringTokenizer, out_score):
         
-        pocket_atom, pocket_coord, lig_smi, lig_coord, score, _ \
-            = untuple_dataset(cddataset, 6)
+        pocket_atom, pocket_coord, lig_smi, lig_coord, score, _center, _rotatoin_matrix \
+            = untuple_dataset(cddataset, 7)
         pocket_atom = TokenizeDataset(pocket_atom, protein_atom_tokenizer)
         pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
         score = TokenizeDataset(score, float_tokenizer)

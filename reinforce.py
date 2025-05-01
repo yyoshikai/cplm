@@ -143,8 +143,8 @@ voc_encoder = VocEncoder(vocs[1:]) # remove '[PAD]'
 # data
 cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
         mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
-pocket_atom_data, pocket_coord_data, _, _, _, center_data = \
-    untuple_dataset(cddata, 6)
+pocket_atom_data, pocket_coord_data, _lig_smi, _lig_coord, _score, center_data, \
+    rotation_data = untuple_dataset(cddata, 7)
 from src.data import SentenceDataset
 class ReinforceDataset(SentenceDataset):
     def __init__(self, pocket_atom_data, pocket_coord_data,
@@ -161,7 +161,7 @@ train_data = ReinforceDataset(
 assert train_data.vocs() < set(vocs)
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 index_data, token_data = index_dataset(train_data)
-train_data = StackDataset(index_data, token_data, center_data)
+train_data = StackDataset(index_data, token_data, center_data, rotation_data)
 if not is_main:
     del train_data
     train_data = None
@@ -196,7 +196,7 @@ class ReinforceIter:
             self.step = 0
 
             if self.fix_pocket:
-                self.idx, self.data, self.center = self.iter.__next__()
+                self.idx, self.data, self.center, self.rotation = self.iter.__next__()
                 del self.iter
 
     def __next__(self) -> tuple[Tensor, pd.DataFrame, Tensor, Tensor]:
@@ -204,25 +204,29 @@ class ReinforceIter:
             all_idxs = []
             all_datas = []
             all_centers = []
+            all_rotations = []
             for _ in range(self.batch_size*self.size // self.repeat_per_sample):
                 if self.fix_pocket:
-                    idx, data, center = self.idx, self.data, self.center
+                    idx, data, center, rotation = self.idx, self.data, self.center, self.rotation
                 else:
-                    idx, data, center = self.iter.__next__()
+                    idx, data, center, rotation = self.iter.__next__()
                 all_idxs.append(idx)
                 all_datas += [data]*self.repeat_per_sample
                 all_centers.append(center)
+                all_rotations.append(rotation)
             all_idxs = np.array(all_idxs).repeat(self.repeat_per_sample)
             all_files = [self.df_file.loc[all_idxs[rank*self.batch_size:(rank+1)*self.batch_size]]
                     for rank in range(self.size)]
             all_idxs = torch.tensor(all_idxs, dtype=torch.int, device=self.device)
             all_centers = torch.stack(all_centers).to(torch.float).to(self.device).repeat_interleave(self.repeat_per_sample, dim=0)
+            all_rotations = torch.stack(all_rotations).to(torch.float).to(self.device).repeat_interleave(self.repeat_per_sample, dim=0)
             all_centers = list(torch.chunk(all_centers, chunks=self.size, dim=0))
+            all_rotations = list(torch.chunk(all_rotations, chunks=self.size, dim=0))
             all_datas = [all_datas[rank*self.batch_size:(rank+1)*self.batch_size]
                     for rank in range(self.size)]
         else:
             all_idxs = torch.zeros(self.batch_size*self.size, dtype=torch.int, device=self.device)
-            all_files = all_centers = all_datas = None
+            all_files = all_centers = all_rotations = all_datas = None
 
         dist.broadcast(all_idxs, src=self.main_rank)
         files = [None]
@@ -230,11 +234,13 @@ class ReinforceIter:
         files = files[0]
         centers = torch.zeros((self.batch_size, 3), dtype=torch.float, device=self.device)
         dist.scatter(centers, all_centers, src=self.main_rank)
+        rotations = torch.zeros((self.batch_size, 3, 3), dtype=torch.float, device=self.device)
+        dist.scatter(rotations, all_rotations, src=self.main_rank)
         datas = [None]
         dist.scatter_object_list(datas, all_datas, src=self.main_rank)
         datas = datas[0]
         batch = pad_sequence(datas, self.batch_first, self.padding_value).to(torch.long).to(self.device) 
-        return all_idxs, files, centers, batch
+        return all_idxs, files, centers, rotations, batch
 
 train_iter = ReinforceIter(train_data, args.num_workers, 
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
@@ -339,9 +345,10 @@ for step in range(args.max_step):
 
     # get batch
     with watch.hold('data'):
-        all_idxs, files, centers, batch = train_iter.__next__()
+        all_idxs, files, centers, rotations, batch = train_iter.__next__()
         batch = batch.to(device)
         centers = centers.cpu().numpy()
+        rotations = rotations.cpu().numpy()
         steps['batch_size'].append(batch.shape[1])
         steps['max_len'].append(batch.shape[0])
 
@@ -386,6 +393,7 @@ for step in range(args.max_step):
 
                 with watch.hold('prepare_score'):
                     center = centers[idx]
+                    rotation = rotations[idx]
                     if do_save:
                         eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
                         os.makedirs(eval_dir, exist_ok=True)
@@ -396,7 +404,8 @@ for step in range(args.max_step):
                     out_tokens = voc_encoder.decode(outputs[idx].tolist())
 
                     if do_save:
-                        info = {**files.iloc[idx].to_dict(), 'center': center.tolist()}
+                        info = {**files.iloc[idx].to_dict(), 'idx': idx, 
+                                'center': center.tolist(), 'rotation': rotation.tolist()}
                         with open(f"{eval_dir}/info.yaml", 'w') as f:
                             yaml.dump(info, f)
                         with open(f"{eval_dir}/tokens.txt", 'w') as f:
@@ -407,7 +416,8 @@ for step in range(args.max_step):
                         errors.append('COORD_'+coord_error)
                         continue
                     
-                    coords += center
+                    rotation_inv = np.linalg.inv(rotation)
+                    coords = np.matmul(coords, rotation_inv) + center
                     error, mol = parse_mol(smiles, coords)
 
                     if error != '':
