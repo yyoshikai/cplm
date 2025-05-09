@@ -93,8 +93,6 @@ def remove_module(state: dict):
         new_state[key[7:]] = value
     return new_state
 
-
-
 class CompressedArray:
     logger = get_logger(f'{__module__}.{__qualname__}')
     def __init__(self, array: np.ndarray):

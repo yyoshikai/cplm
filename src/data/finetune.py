@@ -238,27 +238,53 @@ class CDDataset(Dataset):
         logger.info(f"# of invalid mols: {n_invalid}")
         logger.info(f"# of far away ligand: {n_far}")
 
+class CoordFollowDataset(Dataset):
+    def __init__(self, pocket_atom: TokenizeDataset, pocket_coord: ArrayTokenizeDataset):
+        self.pocket_atom = pocket_atom
+        self.pocket_coord = pocket_coord
+        assert len(self.pocket_atom) == len(self.pocket_coord)
+    
+    def __getitem__(self, idx: int):
+        pocket_atom = self.pocket_atom[idx]
+        pocket_coord = self.pocket_coord[idx]
+        assert len(pocket_atom)*6 == len(pocket_coord)
+        return np.concatenate([
+            np.array(pocket_atom).reshape(-1, 1),
+            np.array(pocket_coord, dtype=object).reshape(-1, 6),
+        ], axis=1).ravel().tolist()
+
+    def __len__(self):
+        return len(self.pocket_atom)
+    
+    def vocs(self):
+        return self.pocket_atom.vocs()|self.pocket_coord.vocs()
+
 class FinetuneDataset(SentenceDataset):
     def __init__(self, cddataset: CDDataset, 
             protein_atom_tokenizer: ProteinAtomTokenizer, 
             float_tokenizer: FloatTokenizer,
-            smiles_tokenizer: StringTokenizer, out_score):
+            smiles_tokenizer: StringTokenizer, out_score: bool, 
+            coord_follow_atom: bool=False):
         
         pocket_atom, pocket_coord, lig_smi, lig_coord, score, _center, _rotatoin_matrix \
             = untuple_dataset(cddataset, 7)
+        
+        sentence = ['[POCKET]']
         pocket_atom = TokenizeDataset(pocket_atom, protein_atom_tokenizer)
         pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
-        score = TokenizeDataset(score, float_tokenizer)
+        if coord_follow_atom:
+            sentence.append(CoordFollowDataset(pocket_atom, pocket_coord))
+        else:
+            sentence += [pocket_atom, '[XYZ]', pocket_coord]
+        
+        if out_score:
+            score = TokenizeDataset(score, float_tokenizer)
+            sentence += ['[SCORE]', score]
+
         lig_smi = TokenizeDataset(lig_smi, smiles_tokenizer)
         lig_coord = ArrayTokenizeDataset(lig_coord, float_tokenizer)
-
-        if out_score:
-            super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
-                '[SCORE]', score, '[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]')
-        else:
-            super().__init__('[POCKET]', pocket_atom, '[XYZ]', pocket_coord, 
-                '[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]')
-
+        sentence += ['[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]']
+        super().__init__(*sentence)
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):

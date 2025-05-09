@@ -226,8 +226,6 @@ class SentenceDataset(Dataset[list[str]]):
         for word in self.sentence:
             if isinstance(word, str):
                 vocs.add(word)
-            elif isinstance(word, TokenizeDataset):
-                    vocs |= word.vocs()
             else:
-                raise NotImplementedError(f"Unknown word when gathering vocs: {word}")
+                    vocs |= word.vocs()
         return vocs

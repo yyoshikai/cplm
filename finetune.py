@@ -16,7 +16,7 @@ from src.data import *
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import set_logtime
-from src.utils.path import timestamp2
+from src.utils.path import timestamp
 from src.train import WeightedCELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
 
 # arguments
@@ -28,6 +28,10 @@ parser.add_argument("--test", action='store_true')
 
 ## training
 add_train_args(parser)
+parser.add_argument('--pocket-atom-weight', type=float, default=0.0)
+parser.add_argument('--pocket-coord-weight', type=float, default=0.0)
+parser.add_argument('--lig-smiles-weight', type=float, default=1.0)
+parser.add_argument('--lig-coord-weight', type=float, default=5.0)
 
 ## data
 parser.add_argument("--coord-range", type=float, help='Defaults to value in training')
@@ -44,7 +48,7 @@ args = parser.parse_args()
 
 # get finetune info
 pretrain_dir = f"training/results/{args.pretrain_name}"
-pretrain_config = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
+targs = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
 
 ## get last pretrain step
 auto_pretrain_step = False
@@ -61,7 +65,7 @@ if args.record_opt_step is None:
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e7)
 if args.coord_range is None:
-    args.coord_range = pretrain_config.coord_range
+    args.coord_range = targs.coord_range
 
 batch_first = False
 set_logtime(args.logtime)
@@ -75,7 +79,7 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
 is_main = rank == MAIN_RANK
 
 ## make&sync result dir
-result_dir = sync_train_dir(f"finetune/results/{timestamp2()}_{args.studyname}")
+result_dir = sync_train_dir(f"finetune/results/{timestamp()}_{args.studyname}")
 
 
 if is_main:
@@ -93,13 +97,13 @@ if auto_pretrain_step:
 cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
         mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
 if args.index_lmdb is not None:
-    index_data = LMDBDataset(args.index_lmdb, key_is_indexed=True)
+    index_data = PickleLMDBDataset(args.index_lmdb, idx_to_key='str')
     cddata = Subset(cddata, index_data)
 train_data = FinetuneDataset(cddata, 
     ProteinAtomTokenizer(), 
     FloatTokenizer(-args.coord_range, args.coord_range), 
     StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()),
-    not args.no_score)
+    not args.no_score, coord_follow_atom=targs.get('coord_follow_atom', False))
 
 vocs = train_data.vocs()
 voc_encoder = VocEncoder(vocs)
@@ -123,9 +127,11 @@ state_dict = torch.load(f"{pretrain_dir}/models/{args.pretrain_step}.pth",
     map_location=device, weights_only=True)
 model.load_state_dict(state_dict)
 
-criterion = WeightedCELoss(voc_encoder, args.seed)
+criterion = WeightedCELoss(voc_encoder, args.seed, 
+        args.pocket_atom_weight, args.pocket_coord_weight, 
+        args.lig_smiles_weight, args.lig_coord_weight)
 
 train(args, train_loader, model, criterion, result_dir, voc_encoder.pad_token, device, 
-    1 if args.test else 10000)
+        1 if args.test else 10000)
 
 dist.destroy_process_group()

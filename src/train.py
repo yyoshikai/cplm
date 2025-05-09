@@ -52,11 +52,17 @@ class CELoss(nn.Module):
 
 class WeightedCELoss(nn.Module):
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, voc_encoder: VocEncoder, seed: int):
+    def __init__(self, voc_encoder: VocEncoder, seed: int, 
+                pocket_atom_weight: float, pocket_coord_weight: float, 
+                lig_smiles_weight: float, lig_coord_weight: float):
         super().__init__()
         self.step = 0
         self.voc_encoder = voc_encoder
         self.seed = seed
+        self.pocket_atom_weight = pocket_atom_weight
+        self.pocket_coord_weight = pocket_coord_weight
+        self.lig_smiles_weight = lig_smiles_weight
+        self.lig_coord_weight = lig_coord_weight
 
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         """
@@ -67,18 +73,22 @@ class WeightedCELoss(nn.Module):
         
         # make weight
         L, B = target.shape
-        weight = torch.zeros_like(target, dtype=torch.float) # [L, B]
-        smi_count = torch.cumsum(target == self.voc_encoder.voc2i['[LIGAND]'], dim=0)
-        weight[smi_count >= 1] = 1
+        weight = torch.full_like(target, fill_value=self.pocket_atom_weight, 
+                dtype=torch.float, device=target.device) # [L, B]
         coord_count = torch.cumsum(target == self.voc_encoder.voc2i['[XYZ]'], dim=0)
-        weight[coord_count >= 2] = 5
+        lig_count = torch.cumsum(target == self.voc_encoder.voc2i['[LIGAND]'], dim=0)
         end_count = torch.cumsum(target == self.voc_encoder.voc2i['[END]'], dim=0)
+        
+        weight[coord_count >= 1] = self.pocket_coord_weight
+        weight[lig_count >= 1] = self.lig_smiles_weight
+        weight[coord_count >= 2] = self.lig_coord_weight
         weight[end_count >= 1] = 0
         weight = torch.cat([
-            torch.zeros(1, B, dtype=torch.float, device=weight.device), weight[:-1]
+            torch.full((1, B), fill_value=self.pocket_atom_weight, dtype=torch.float, 
+                    device=target.device), 
+            weight[:-1]
         ], dim=0)
         
-
         # log tokens in initial few steps
         if self.step < 5:
             rstate = np.random.RandomState(self.seed+self.step)
