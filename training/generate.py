@@ -20,13 +20,18 @@ parser.add_argument("--end-voc", default='[END]')
 parser.add_argument("--token-per-batch", type=int, help='defaults to same as training')
 parser.add_argument("--n", type=int, default=25)
 parser.add_argument("--max-len", type=int, default=1000)
+parser.add_argument('--finetune', action='store_true')
 args = parser.parse_args()
 sname = args.studyname
 step = args.step
 
 # directories
-train_dir = f"./training/results/{args.studyname}"
-rdir = f"./training/generate/results/{args.studyname}/{args.step}/{args.genname}"
+if args.finetune:
+    train_dir = f"./finetune/results/{args.studyname}"
+    rdir = f"./finetune/generate/results/{args.genname}/{args.studyname}/{args.step}"
+else:
+    train_dir = f"./training/results/{args.studyname}"
+    rdir = f"./training/generate/results/{args.studyname}/{args.step}/{args.genname}"
 os.makedirs(rdir, exist_ok=True)
 
 # save args
@@ -69,6 +74,7 @@ max_len = args.max_len
 batch_size = token_per_batch // max_len
 nbatch = math.ceil(float(args.n)/float(batch_size))
 outputs = []
+logger.info(f"{batch_size=}, {nbatch=}")
 for ibatch in range(nbatch):
     bsz0 = min(batch_size, args.n-batch_size*ibatch)
     context = torch.full((1, bsz0), dtype=torch.long, device=device, 

@@ -318,7 +318,7 @@ class Model(nn.Module):
         input = context[:1] # [1, B]
         cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
         outputs = [input.squeeze(0)]
-        for pos in _tqdm(range(max_len)):
+        for pos in _tqdm(range(max_len), dynamic_ncols=True):
 
             x = self.embedding(input)
 
