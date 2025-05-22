@@ -1,5 +1,4 @@
-import sys, os, pickle, io, psutil, logging, yaml, random
-from tqdm import tqdm
+import os, pickle, io, logging, yaml, random
 from logging import getLogger
 import numpy as np
 import pandas as pd
@@ -8,7 +7,8 @@ from torch.utils.data import Dataset
 from time import time
 from prody import parsePDB, parsePDBStream, confProDy, Contacts
 from ..utils.lmdb import new_lmdb
-from .data import PickleLMDBDataset, get_random_rotation_matrix, untuple_dataset
+from .data import get_random_rotation_matrix, untuple_dataset
+from .lmdb import PickleLMDBDataset
 from ..utils import logtime, slice_str
 from rdkit import Chem
 from .tokenizer import ProteinAtomTokenizer, FloatTokenizer, StringTokenizer, \
@@ -17,6 +17,7 @@ confProDy(verbosity='none')
 from ..utils.logger import add_file_handler, get_logger
 from ..utils.rdkit import ignore_warning
 from ..utils.utils import logtime, CompressedArray
+from .pretrain.protein import CoordFollowDataset
 
 
 class CDDataset(Dataset):
@@ -237,27 +238,6 @@ class CDDataset(Dataset):
         logger.info(f"# of data: {idx}")
         logger.info(f"# of invalid mols: {n_invalid}")
         logger.info(f"# of far away ligand: {n_far}")
-
-class CoordFollowDataset(Dataset):
-    def __init__(self, pocket_atom: TokenizeDataset, pocket_coord: ArrayTokenizeDataset):
-        self.pocket_atom = pocket_atom
-        self.pocket_coord = pocket_coord
-        assert len(self.pocket_atom) == len(self.pocket_coord)
-    
-    def __getitem__(self, idx: int):
-        pocket_atom = self.pocket_atom[idx]
-        pocket_coord = self.pocket_coord[idx]
-        assert len(pocket_atom)*6 == len(pocket_coord)
-        return np.concatenate([
-            np.array(pocket_atom).reshape(-1, 1),
-            np.array(pocket_coord, dtype=object).reshape(-1, 6),
-        ], axis=1).ravel().tolist()
-
-    def __len__(self):
-        return len(self.pocket_atom)
-    
-    def vocs(self):
-        return self.pocket_atom.vocs()|self.pocket_coord.vocs()
 
 class FinetuneDataset(SentenceDataset):
     def __init__(self, cddataset: CDDataset, 

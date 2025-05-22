@@ -11,14 +11,14 @@ from tqdm import tqdm as _tqdm
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from .data import LMDBDataset
-from ..utils import logtime, slice_str
-from ..utils.lmdb import new_lmdb, load_lmdb
+from ..lmdb import LMDBDataset
+from ...utils import logtime, slice_str
+from ...utils.lmdb import new_lmdb, load_lmdb
 try:
     from Bio.PDB import FastMMCIFParser, PPBuilder
 except ModuleNotFoundError:
     FastMMCIFParser = PPBuilder = None
-from ..utils.logger import get_logger, add_file_handler
+from ...utils.logger import get_logger, add_file_handler
 
 def _process0_init(radius_mean_i, radius_std_i, max_n_atom_i, logger_i: logging.Logger):
     global parser, ppbuilder, amino_resnames, radius_mean, radius_std, max_n_atom, logger

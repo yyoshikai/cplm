@@ -19,14 +19,16 @@ from torch.distributions import Categorical
 
 from src.data.sampler import InfiniteRandomSampler
 from src.model import Model
-from src.data import CDDataset, untuple_dataset, index_dataset
+from src.data.finetune import CDDataset
+from src.data import untuple_dataset, index_dataset
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, VocEncoder, TokenEncodeDataset
+from src.data.pretrain.protein import CoordFollowDataset
 from src.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train_logger, get_scheduler
 from src.utils.path import timestamp, cleardir
 from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
 from src.utils.logger import INFO_WORKER
-from src.evaluate import parse_mol_tokens, parse_mol
+from src.evaluate import parse_mol
 from src.evaluate import eval_vina
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
@@ -81,7 +83,11 @@ args = parser.parse_args()
 
 # get finetune info
 finetune_dir = f"finetune/results/{args.finetune_name}"
-finetune_config = Dict(yaml.safe_load(open(f"{finetune_dir}/config.yaml")))
+fargs = Dict(yaml.safe_load(open(f"{finetune_dir}/config.yaml")))
+pname = fargs.pretrain_name
+pretrain_dir = f"training/results/{pname}"
+pargs = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
+coord_follow_atom = pargs.get('coord_follow_atom', False)
 
 ## get last finetune step
 auto_finetune_step = False
@@ -145,19 +151,23 @@ cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
         mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
 pocket_atom_data, pocket_coord_data, _lig_smi, _lig_coord, _score, center_data, \
     rotation_data = untuple_dataset(cddata, 7)
-from src.data import SentenceDataset
+from src.data.tokenizer import SentenceDataset
 class ReinforceDataset(SentenceDataset):
     def __init__(self, pocket_atom_data, pocket_coord_data,
         protein_atom_tokenizer: ProteinAtomTokenizer, 
-        float_tokenizer: FloatTokenizer):
+        float_tokenizer: FloatTokenizer, 
+        coord_follow_atom: bool):
         pocket_atom_data = TokenizeDataset(pocket_atom_data, protein_atom_tokenizer)
         pocket_coord_data = ArrayTokenizeDataset(pocket_coord_data, float_tokenizer)
-
-        super().__init__('[POCKET]', pocket_atom_data, '[XYZ]', pocket_coord_data, '[LIGAND]')
+        if coord_follow_atom:
+            super().__init__('[POCKET]', CoordFollowDataset(pocket_atom_data, pocket_coord_data))
+        else:
+            super().__init__('[POCKET]', pocket_atom_data, '[XYZ]', pocket_coord_data, '[LIGAND]')
 train_data = ReinforceDataset(
     pocket_atom_data, pocket_coord_data,
     ProteinAtomTokenizer(), 
-    FloatTokenizer(-finetune_config.coord_range, finetune_config.coord_range))
+    FloatTokenizer(-fargs.coord_range, fargs.coord_range), 
+    coord_follow_atom)
 assert train_data.vocs() < set(vocs)
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 index_data, token_data = index_dataset(train_data)
@@ -410,29 +420,27 @@ for step in range(args.max_step):
                             yaml.dump(info, f)
                         with open(f"{eval_dir}/tokens.txt", 'w') as f:
                             f.write(','.join(out_tokens)+'\n')
-                    coord_error, smiles, coords = parse_mol_tokens(out_tokens)
+                    error, smiles, mol = parse_mol(out_tokens)
                     
-                    if coord_error != '':
-                        errors.append('COORD_'+coord_error)
+                    if error != '':
+                        errors.append(error)
                         continue
                     
                     rotation_inv = np.linalg.inv(rotation)
                     coords = np.matmul(coords, rotation_inv) + center
                     error, mol = parse_mol(smiles, coords)
+                    errors.append(error)
 
                     if error != '':
-                        errors.append(error)
                         continue
                     
                     with open(f"{eval_dir}/lig.sdf", 'w') as f:
                         f.write(Chem.MolToMolBlock(mol))
                     dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
                     
-                    
                     futures.append(e.submit(get_score, 
                             lig_path=f"{eval_dir}/lig.sdf", 
                             rec_path=f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", out_dir=eval_dir))
-                    errors.append('')
             with watch.hold('wait_score'):
                 valid_scores = np.array([f.result() for f in futures])
 

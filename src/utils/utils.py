@@ -71,7 +71,7 @@ class logend:
         self.thres = thres
     def __enter__(self):
         self.start = time()
-        self.logger.log(self.level, f"{self.process_name} started.")
+        self.logger.log(self.level, f"{self.process_name}...")
     def __exit__(self, exc_type, exc_value, traceback):
         t = time() - self.start
         if t >= self.thres:

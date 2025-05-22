@@ -3,9 +3,10 @@ from logging import getLogger
 import numpy as np
 from torch.utils.data import Dataset
  
-from .tokenizer import ProteinAtomTokenizer, FloatTokenizer
-from .data import CoordTransform, PickleLMDBDataset
-from ..utils import logtime, slice_str
+from ..tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset
+from ..data import CoordTransform
+from ..lmdb import PickleLMDBDataset
+from ...utils import logtime, slice_str
 
 # net_datasetは {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
@@ -91,3 +92,24 @@ class UniMolPocketDataset(Dataset):
 
     def __len__(self):
         return len(self.dataset)
+
+class CoordFollowDataset(Dataset):
+    def __init__(self, pocket_atom: TokenizeDataset, pocket_coord: ArrayTokenizeDataset):
+        self.pocket_atom = pocket_atom
+        self.pocket_coord = pocket_coord
+        assert len(self.pocket_atom) == len(self.pocket_coord)
+    
+    def __getitem__(self, idx: int):
+        pocket_atom = self.pocket_atom[idx]
+        pocket_coord = self.pocket_coord[idx]
+        assert len(pocket_atom)*6 == len(pocket_coord)
+        return np.concatenate([
+            np.array(pocket_atom).reshape(-1, 1),
+            np.array(pocket_coord, dtype=object).reshape(-1, 6),
+        ], axis=1).ravel().tolist()
+
+    def __len__(self):
+        return len(self.pocket_atom)
+    
+    def vocs(self):
+        return self.pocket_atom.vocs()|self.pocket_coord.vocs()

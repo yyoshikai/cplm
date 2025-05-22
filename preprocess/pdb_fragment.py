@@ -2,7 +2,7 @@ import sys, os
 import argparse
 sys.path.append(os.environ.get('WORKDIR', "/workspace"))
 sys.path.append(".")
-from src.data.fragment import PDBFragmentDataset
+from src.data.pretrain.fragment import PDBFragmentDataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--root-dir", required=True)

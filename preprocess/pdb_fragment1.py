@@ -9,7 +9,7 @@ import numpy as np, pandas as pd
 import concurrent.futures as cf
 sys.path.append(os.environ.get('WORKDIR', "/workspace"))
 sys.path.append(".")
-from src.data.protein import PDBFragmentDataset
+from src.data.pretrain.protein import PDBFragmentDataset
 from tools.logger import add_stream_handler
 
 parser = argparse.ArgumentParser()

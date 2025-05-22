@@ -1,13 +1,15 @@
 import sys, os
+from typing import Optional
 from logging import getLogger
 import numpy as np, pandas as pd
 from torch.utils.data import Dataset
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
-from .data import PickleLMDBDataset, CoordTransform
-from .tokenizer import FloatTokenizer, StringTokenizer
-from ..utils import logtime
+from ..data import CoordTransform
+from ..lmdb import PickleLMDBDataset
+from ..tokenizer import FloatTokenizer, StringTokenizer
+from ...utils import logtime
 
 # Pretrain時, 分子の処理用のデータセット
 class MoleculeDataset(Dataset):
@@ -38,7 +40,7 @@ class UniMolLigandDataset(Dataset):
     logger = getLogger(f'{__module__}.{__qualname__}')
     def __init__(self, lmdb_path, n_conformer, seed: int, 
             atom_h: bool=True, coord_h: bool=True, randomize: bool=False, 
-            sample_save_dir: str=None):
+            sample_save_dir: Optional[str]=None):
         """
         ややdata specificな処理を行っている。
         本当はもう少し上の段階でランダム化を行った方がよいかもしれない。

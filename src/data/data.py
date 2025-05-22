@@ -1,13 +1,11 @@
-import pickle
 from functools import lru_cache
 from typing import TypeVar
-from collections.abc import Callable, Sized
+from collections.abc import Callable
 
 import numpy as np
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
-from ..utils.lmdb import load_lmdb
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -29,47 +27,6 @@ class ApplyDataset(WrapDataset[T_co]):
     def __getitem__(self, idx: int):
         return self.func(self.dataset[idx])
     
-def data_len_to_blen(l: int|Sized):
-    if isinstance(l, int):
-        return ((l-1).bit_length()+7) // 8
-    return data_len_to_blen(len(l))
-
-from typing import Literal
-class LMDBDataset(Dataset[T_co]):
-    def __init__(self, lmdb_path: str, idx_to_key: Literal['byte', 'str']='byte'):
-        self.path = lmdb_path
-        match idx_to_key:
-            case 'byte':
-                blen = data_len_to_blen(self)
-                self.idx_to_key = lambda idx: int(idx).to_bytes(blen)
-            case 'str':
-                self.idx_to_key = lambda idx: str(idx).encode('ascii')
-            case _:
-                raise ValueError(f"Unsupported {idx_to_key=}")
-
-    def __getitem__(self, idx: int) -> bytes:
-        env, txn = load_lmdb(self.path)
-        item = txn.get(self.idx_to_key(idx))
-        if item is None:
-            raise ValueError(f"Key not found: {idx}, {self.idx_to_key(idx)}, {self.path}")
-        return item
-
-    def __len__(self):
-        env, txn = load_lmdb(self.path)
-        return env.stat()['entries']
-
-class PickleLMDBDataset(LMDBDataset[T_co]):
-    def __getitem__(self, idx: int) -> T_co:
-        return pickle.loads(super().__getitem__(idx))
-
-class StringLMDBDataset(LMDBDataset[str]):
-    def __getitem__(self, idx: int) -> str:
-        return super().__getitem__(idx).decode('ascii')
-
-class IntLMDBDataset(LMDBDataset[int]):
-    def __getitem__(self, idx: int) -> int:
-        return int.from_bytes(super().__getitem__(idx))
-
 # Indexing
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):

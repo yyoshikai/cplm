@@ -3,7 +3,7 @@ import argparse
 import torch
 sys.path.append(os.environ.get('WORKDIR', "/workspace"))
 sys.path.append(".")
-from src.data.fragment import process_fragment3, LognormalSampler
+from src.data.pretrain.fragment import process_fragment3, LognormalSampler
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--root-dir", required=True)

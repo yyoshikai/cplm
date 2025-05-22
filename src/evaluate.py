@@ -44,7 +44,7 @@ def parse_mol_tokens(tokens: list[str]) -> tuple[str, str, np.ndarray|None]:
     tokens = itr.dropwhile(lambda x: x != '[LIGAND]', tokens)
     clauses = split_list(tokens, '[LIGAND]')
     if len(clauses) <= 1:
-        return 'LONG_PREFIX', '', None
+        return 'COORD_LONG_PREFIX', '', None
     tokens = split_list(clauses[1], '[END]')[0].__iter__()
 
     smiles = ''.join(itr.takewhile(lambda x: x != '[XYZ]', tokens))
@@ -57,10 +57,10 @@ def parse_mol_tokens(tokens: list[str]) -> tuple[str, str, np.ndarray|None]:
         except StopIteration:
             break
         except ValueError:
-            return 'NOT_FLOAT', smiles, None
+            return 'COORD_NOT_FLOAT', smiles, None
     coords = np.array(coords)
     if len(coords) % 3 != 0:
-        return 'SIZE', smiles, None
+        return 'COORD_SIZE', smiles, None
     coords = coords.reshape(-1, 3)
     return '', smiles, coords
 
@@ -145,7 +145,7 @@ def parse_pocket_tokens(tokens: list[str], end_token: str,
                 coord_v = float(coord_str)
                 coord_str = None
             except ValueError:
-                error = 'coord_format'
+                error = 'COORD_FORMAT'
                 break
             coord.append(coord_v)
             if len(coord) == 3:
@@ -156,9 +156,9 @@ def parse_pocket_tokens(tokens: list[str], end_token: str,
         if not set(atoms) <= pocket_tokens:
             error = 'atom'
         elif coord_str is not None:
-            error = 'coord_format'
+            error = 'COORD_FORMAT'
         elif atom is not None:
-            error = 'coord_count'
+            error = 'COORD_COUNT'
         if error != "":
             return error, atoms, None
         else:
@@ -184,13 +184,13 @@ def parse_pocket_tokens(tokens: list[str], end_token: str,
                 coord_str = t
             else:
                 if t[0] != '.':
-                    error = 'coord_format'
+                    error = 'COORD_FORMAT'
                     break
                 coord_str += t
                 try:
                     coord = float(coord_str)
                 except ValueError:
-                    error = 'coord_format'
+                    error = 'COORD_FORMAT'
                     break
                 coords.append(coord)
                 coord_str = ''
@@ -203,8 +203,8 @@ def parse_pocket_tokens(tokens: list[str], end_token: str,
         else:
             n_coord = np.sum(np.array(atoms) == 'CA')
         if len(coords) != n_coord*3:
-            error = 'coord_count'
-            return 'coord_count', atoms, None
+            error = 'COORD_COUNT'
+            return 'COORD_COUNT', atoms, None
         return '', atoms, coords.reshape(-1, 3)
 
 def parse_pocket(atoms: list[str], coords: np.ndarray) -> str:

@@ -10,7 +10,7 @@ WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
 from src.data import *
-from src.data.fragment import PDBFragmentDataset, PDBFragment2Dataset
+from src.data.pretrain.fragment import PDBFragmentDataset, PDBFragment2Dataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder
 from src.model import Model
 from src.utils import set_logtime
