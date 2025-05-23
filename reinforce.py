@@ -13,7 +13,7 @@ from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdMolDescriptors
-from torch.utils.data import Dataset, DataLoader, BatchSampler, StackDataset
+from torch.utils.data import Dataset, DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence
 from torch.distributions import Categorical
 

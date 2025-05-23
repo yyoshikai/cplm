@@ -9,9 +9,12 @@ from torch.nn.parallel import DistributedDataParallel
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data import *
-from src.data.pretrain.fragment import PDBFragmentDataset, PDBFragment2Dataset
-from src.data.tokenizer import TokenEncodeDataset, VocEncoder
+from src.data import RepeatDataset
+from src.data.lmdb import LMDBDataset
+from src.data.collator import DDPStringCollateLoader
+from src.data.coord_transform import CoordTransform
+from src.data.pretrain import *
+from src.data.tokenizer import *
 from src.model import Model
 from src.utils import set_logtime
 from src.utils.path import timestamp

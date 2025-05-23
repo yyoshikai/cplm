@@ -1,7 +1,7 @@
 import sys, os, logging
 import argparse
 sys.path.append(".")
-from src.data.finetune import FinetuneDataset
+from src.data.finetune import CDDataset
 from src.utils.logger import get_logger, add_stream_handler
 from src.utils.utils import set_logtime
 add_stream_handler(get_logger(), level=logging.ERROR)
@@ -27,11 +27,11 @@ args0 = [vars(args), "/workspace/cheminfodata/crossdocked/CrossDocked2020",
     f'./preprocess/results/finetune/{output}', args.radius, args.ends, args.map_size, args.test]
 
 if args.cf_size is None:
-    FinetuneDataset.preprocess(*args0)
+    CDDataset.preprocess(*args0)
 else:
     import concurrent.futures as cf
     with cf.ProcessPoolExecutor(args.cf_size) as e:
         futures = []
         for rank in range(args.cf_size):
-            futures.append(e.submit(FinetuneDataset.preprocess, *args0, rank=rank, size=args.cf_size))
+            futures.append(e.submit(CDDataset.preprocess, *args0, rank=rank, size=args.cf_size))
         [f.result() for f in futures]

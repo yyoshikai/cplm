@@ -124,7 +124,7 @@ class StringTokenizer2(Tokenizer):
     def tokenize(self, string: str):
         tokens = self.pattern.findall(string)
         if len(''.join(tokens)) != len(string):
-            self.logger.info("Unknown token; fall back to StringTokenizer")
+            self.logger.info(f"Unknown token; fall back to StringTokenizer: {string}")
             return self.tokenizer.tokenize(string)
         return tokens
 
