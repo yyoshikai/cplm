@@ -12,7 +12,15 @@ from torch.nn.parallel import DistributedDataParallel
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data.tokenizer import TokenEncodeDataset, VocEncoder
+from src.data.finetune import CDDataset
+from src.data import untuple_dataset
+from src.data.lmdb import IntLMDBDataset
+from src.data.tokenizer import TokenEncodeDataset, VocEncoder, \
+        ProteinAtomTokenizer, FloatTokenizer, StringTokenizer
+from src.data.collator import DDPStringCollateLoader
+from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, StringTokenizer, \
+    TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
+from src.data.pretrain.protein import CoordFollowDataset
 from src.model import Model
 from src.utils import set_logtime
 from src.utils.path import timestamp
@@ -93,19 +101,37 @@ if auto_pretrain_step:
     logger.info(f"pretrain_step was set to {args.pretrain_step}")
 
 # data
+## pocket and ligands
 cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
         mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
 if args.index_lmdb is not None:
-    index_data = PickleLMDBDataset(args.index_lmdb, idx_to_key='str')
+    index_data = IntLMDBDataset(args.index_lmdb)
     cddata = Subset(cddata, index_data)
-train_data = FinetuneDataset(cddata, 
-    ProteinAtomTokenizer(), 
-    FloatTokenizer(-args.coord_range, args.coord_range), 
-    StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()),
-    not args.no_score, coord_follow_atom=targs.get('coord_follow_atom', False))
+pocket_atom, pocket_coord, lig_smi, lig_coord, score, _center, _rotatoin_matrix \
+    = untuple_dataset(cddata, 7)
 
+## sentence
+sentence = ['[POCKET]']
+pocket_atom = TokenizeDataset(pocket_atom, ProteinAtomTokenizer())
+float_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
+pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
+if targs.get('coord_follow_atom', False):
+    sentence.append(CoordFollowDataset(pocket_atom, pocket_coord))
+else:
+    sentence += [pocket_atom, '[XYZ]', pocket_coord]
+
+if not args.no_score:
+    score = TokenizeDataset(score, float_tokenizer)
+    sentence += ['[SCORE]', score]
+lig_smi = TokenizeDataset(lig_smi, StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()))
+lig_coord = ArrayTokenizeDataset(lig_coord, float_tokenizer)
+sentence += ['[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]']
+train_data = SentenceDataset(*sentence)
+
+## vocs
 vocs = train_data.vocs()
 voc_encoder = VocEncoder(vocs)
+
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 if not is_main:
     del train_data

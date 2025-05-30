@@ -4,7 +4,7 @@ import numpy as np
 from torch.utils.data import Dataset
  
 from ..tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset
-from ..data import CoordTransform
+from ..coord_transform import CoordTransform
 from ..lmdb import PickleLMDBDataset
 from ...utils import logtime, slice_str
 

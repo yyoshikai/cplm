@@ -1,6 +1,10 @@
 from collections import defaultdict
+from collections.abc import Iterable
+from typing import TypeVar
 from logging import getLogger
 from time import time
+from tqdm import tqdm
+T_co = TypeVar('T_co', covariant=True)
 
 class _Watch:
     def hold(self, name: str):
@@ -90,3 +94,26 @@ class PrintHolder:
     def __exit__(self, exc_type, exc_value, traceback):
         end = time()
         print(f"{self.name}: {end-self.start:.05f}s")
+
+class wtqdm(Iterable[T_co]):
+    def __init__(self, iterable: Iterable):
+        self.iterable = iterable
+        self.name2time = defaultdict(float)
+        self.cur_job = None
+
+    def __iter__(self):
+        pbar = tqdm(self.iterable)
+        self.cur_job = 'iter_data'
+        self.start_ = time()
+        for item in pbar:
+            self.start('after_iter')
+            yield item
+            if pbar.n % 10 == 0:
+                pbar.set_postfix_str(', '.join([f"{key}={value:.02f}" for key, value in sorted(self.name2time.items(), key=lambda x: x[1])]))
+            self.start('iter_data')
+
+    def start(self, name):
+        t = time()
+        self.name2time[self.cur_job] += t - self.start_
+        self.cur_job = name
+        self.start_ = t

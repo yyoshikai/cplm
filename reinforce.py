@@ -21,15 +21,15 @@ from src.data.sampler import InfiniteRandomSampler
 from src.model import Model
 from src.data.finetune import CDDataset
 from src.data import untuple_dataset, index_dataset
-from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, VocEncoder, TokenEncodeDataset
+from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, VocEncoder, TokenEncodeDataset, SentenceDataset
 from src.data.pretrain.protein import CoordFollowDataset
 from src.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train_logger, get_scheduler
 from src.utils.path import timestamp, cleardir
 from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
 from src.utils.logger import INFO_WORKER
-from src.evaluate import parse_mol
-from src.evaluate import eval_vina
+from src.evaluate import parse_mol_tokens, parse_mol
+from src.evaluate import eval_vina, eval_qvina
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 # arguments
@@ -57,7 +57,7 @@ parser.add_argument('--max-opt-step', type=int, default=float('inf'))
 ## data
 parser.add_argument('--finetune-save-dir', required=True)
 parser.add_argument('--pocket-coord-heavy', action='store_true')
-parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp'], default='min_vina')
+parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', 'qvina'], default='min_vina')
 parser.add_argument('--generate-per-sample', type=int, default=1)
 ## finetune
 parser.add_argument('--finetune-name', required=True)
@@ -151,23 +151,13 @@ cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
         mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
 pocket_atom_data, pocket_coord_data, _lig_smi, _lig_coord, _score, center_data, \
     rotation_data = untuple_dataset(cddata, 7)
-from src.data.tokenizer import SentenceDataset
-class ReinforceDataset(SentenceDataset):
-    def __init__(self, pocket_atom_data, pocket_coord_data,
-        protein_atom_tokenizer: ProteinAtomTokenizer, 
-        float_tokenizer: FloatTokenizer, 
-        coord_follow_atom: bool):
-        pocket_atom_data = TokenizeDataset(pocket_atom_data, protein_atom_tokenizer)
-        pocket_coord_data = ArrayTokenizeDataset(pocket_coord_data, float_tokenizer)
-        if coord_follow_atom:
-            super().__init__('[POCKET]', CoordFollowDataset(pocket_atom_data, pocket_coord_data))
-        else:
-            super().__init__('[POCKET]', pocket_atom_data, '[XYZ]', pocket_coord_data, '[LIGAND]')
-train_data = ReinforceDataset(
-    pocket_atom_data, pocket_coord_data,
-    ProteinAtomTokenizer(), 
-    FloatTokenizer(-fargs.coord_range, fargs.coord_range), 
-    coord_follow_atom)
+pocket_atom_data = TokenizeDataset(pocket_atom_data, ProteinAtomTokenizer())
+pocket_coord_data = ArrayTokenizeDataset(pocket_coord_data, FloatTokenizer(-fargs.coord_range, fargs.coord_range))
+if coord_follow_atom:
+    train_data = SentenceDataset('[POCKET]', CoordFollowDataset(pocket_atom_data, pocket_coord_data))
+else:
+    train_data = SentenceDataset('[POCKET]', pocket_atom_data, '[XYZ]', pocket_coord_data, '[LIGAND]')
+
 assert train_data.vocs() < set(vocs)
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 index_data, token_data = index_dataset(train_data)
@@ -279,6 +269,14 @@ match args.target:
                 return np.nan
             return rdMolDescriptors.CalcExactMolWt(mol)
         error_score = 0
+    case 'qvina':
+        def get_score(lig_path: str, rec_path: str, out_dir: str):
+            score = eval_qvina(lig_path, rec_path, out_dir, timeout=60)
+            if score is None:
+                return np.nan
+            return -score
+        error_score = -50
+
 if args.error_score is not None:
     error_score = args.error_score
 
@@ -420,7 +418,7 @@ for step in range(args.max_step):
                             yaml.dump(info, f)
                         with open(f"{eval_dir}/tokens.txt", 'w') as f:
                             f.write(','.join(out_tokens)+'\n')
-                    error, smiles, mol = parse_mol(out_tokens)
+                    error, smiles, coords = parse_mol_tokens(out_tokens)
                     
                     if error != '':
                         errors.append(error)

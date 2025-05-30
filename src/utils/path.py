@@ -1,13 +1,9 @@
-import sys, os
-import re
-import shutil
+import sys, os, shutil, stat
 from glob import glob
-import subprocess
-import pickle
 from datetime import datetime
-import pandas as pd
+from addict import Dict
 
-def cleardir(path, exist_ok=None):
+def cleardir(path):
     _cleardir(path)
     os.makedirs(path)
 
@@ -51,3 +47,18 @@ def timestamp():
 def timestamp2():
     dt_now = datetime.now()
     return f"{dt_now.year%100:02}{dt_now.month:02}{dt_now.day:02}_{dt_now.hour:02}{dt_now.minute:02}{dt_now.second:02}"
+
+
+def subs_vars(config, vars):
+    if isinstance(config, str):
+        if config in vars:
+            return vars[config]
+        for key, value in vars.items():
+            config = config.replace(key, str(value))
+        return config
+    elif isinstance(config, dict):
+        return Dict({label: subs_vars(child, vars) for label, child in config.items()})
+    elif isinstance(config, list):
+        return [subs_vars(child, vars) for child in config]
+    else:
+        return config

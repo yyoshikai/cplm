@@ -7,18 +7,14 @@ from torch.utils.data import Dataset
 from time import time
 from prody import parsePDB, parsePDBStream, confProDy, Contacts
 from ..utils.lmdb import new_lmdb
-from .data import untuple_dataset
 from .coord_transform import get_random_rotation_matrix
 from .lmdb import PickleLMDBDataset
 from ..utils import logtime, slice_str
 from rdkit import Chem
-from .tokenizer import ProteinAtomTokenizer, FloatTokenizer, StringTokenizer, \
-    TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
 confProDy(verbosity='none')
 from ..utils.logger import add_file_handler, get_logger
 from ..utils.rdkit import ignore_warning
 from ..utils.utils import logtime, CompressedArray
-from .pretrain.protein import CoordFollowDataset
 
 
 class CDDataset(Dataset):
@@ -118,6 +114,8 @@ class CDDataset(Dataset):
                 rotation_matrix = get_random_rotation_matrix(self.rstate)
                 lig_coord = np.matmul(lig_coord, rotation_matrix)
                 pocket_coord = np.matmul(pocket_coord, rotation_matrix)
+            else:
+                rotation_matrix = np.eye(3, dtype=float)
 
             output = (pocket_atoms, pocket_coord, lig_smi, lig_coord, score, center, rotation_matrix)
             if self.out_filename:
@@ -239,33 +237,6 @@ class CDDataset(Dataset):
         logger.info(f"# of data: {idx}")
         logger.info(f"# of invalid mols: {n_invalid}")
         logger.info(f"# of far away ligand: {n_far}")
-
-class FinetuneDataset(SentenceDataset):
-    def __init__(self, cddataset: CDDataset, 
-            protein_atom_tokenizer: ProteinAtomTokenizer, 
-            float_tokenizer: FloatTokenizer,
-            smiles_tokenizer: StringTokenizer, out_score: bool, 
-            coord_follow_atom: bool=False):
-        
-        pocket_atom, pocket_coord, lig_smi, lig_coord, score, _center, _rotatoin_matrix \
-            = untuple_dataset(cddataset, 7)
-        
-        sentence = ['[POCKET]']
-        pocket_atom = TokenizeDataset(pocket_atom, protein_atom_tokenizer)
-        pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
-        if coord_follow_atom:
-            sentence.append(CoordFollowDataset(pocket_atom, pocket_coord))
-        else:
-            sentence += [pocket_atom, '[XYZ]', pocket_coord]
-        
-        if out_score:
-            score = TokenizeDataset(score, float_tokenizer)
-            sentence += ['[SCORE]', score]
-
-        lig_smi = TokenizeDataset(lig_smi, smiles_tokenizer)
-        lig_coord = ArrayTokenizeDataset(lig_coord, float_tokenizer)
-        sentence += ['[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]']
-        super().__init__(*sentence)
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):

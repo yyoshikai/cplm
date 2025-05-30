@@ -148,3 +148,6 @@ todo.md
 /reinforce
 !/projects/predict
 !/projects/predict/predict.py
+/pocket_conditioned_generation/*
+/pocket_conditioned_generation_old/*
+!/pocket_conditioned_generation/*.py

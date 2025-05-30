@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
-from ..data import CoordTransform
+from ..coord_transform import CoordTransform
 from ..lmdb import PickleLMDBDataset
 from ..tokenizer import FloatTokenizer, StringTokenizer
 from ...utils import logtime

@@ -1,10 +1,12 @@
-import pickle
+import os, pickle
 import math
 from typing import TypeVar, Literal
 from collections.abc import Sized, Generator
-from ..utils.lmdb import load_lmdb
+import numpy as np
+from tqdm import tqdm
 from torch.utils.data import Dataset, IterableDataset
 from torch.utils.data import get_worker_info
+from ..utils.lmdb import load_lmdb, new_lmdb
 
 T_co = TypeVar('T_co', covariant=True)
 
@@ -47,6 +49,25 @@ class StringLMDBDataset(LMDBDataset):
 class IntLMDBDataset(LMDBDataset):
     def __getitem__(self, idx: int) -> int:
         return int.from_bytes(super().__getitem__(idx))
+
+def npy_to_lmdb(npy_path: str):
+    assert npy_path.endswith('.npy')
+    out_path = npy_path.replace('.npy', '.lmdb')
+    assert not os.path.exists(out_path)
+
+    idxs = np.load(npy_path)
+    idxs = np.sort(idxs)
+    N = len(idxs)
+    key_blen = ((N-1).bit_length()+7) // 8
+    value_blen = (int(np.max(idxs)).bit_length()+7) // 8
+
+    env, txn = new_lmdb(out_path)
+    for i, idx in enumerate(tqdm(idxs)):
+        key = i.to_bytes(key_blen)
+        value = int(idx).to_bytes(value_blen)
+        txn.put(key, value)
+    txn.commit()
+    env.close()
 
 class IterLMDBSubset(IterableDataset[bytes]):
     def __init__(self, smi_path: str, index_path: str):
