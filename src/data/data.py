@@ -17,8 +17,6 @@ class WrapDataset(Dataset[T_co]):
         raise NotImplementedError
     def __len__(self):
         return len(self.dataset)
-    def __getattr__(self, name):
-        return self.dataset.__getattribute__(name)
 
 class ApplyDataset(WrapDataset[T_co]):
     def __init__(self, dataset: Dataset[T], func: Callable[[T], T_co]):
