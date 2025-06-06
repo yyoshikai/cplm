@@ -29,7 +29,7 @@ from src.utils import RANDOM_STATE
 from src.utils.time import FileWatch
 from src.utils.logger import INFO_WORKER
 from src.evaluate import parse_mol_tokens, parse_mol
-from src.evaluate import eval_vina, eval_qvina
+from src.evaluate import eval_vina, eval_qvina2
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 # arguments
@@ -271,7 +271,7 @@ match args.target:
         error_score = 0
     case 'qvina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
-            score = eval_qvina(lig_path, rec_path, out_dir, timeout=60)
+            score = eval_qvina2(lig_path, rec_path, out_dir, timeout=60)
             if score is None:
                 return np.nan
             return -score
