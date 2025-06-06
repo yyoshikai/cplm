@@ -11,7 +11,9 @@ from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule
 from rdkit.Chem.rdMolAlign import CalcRMS
 from vina import Vina
 from openbabel import pybel
+from AutoDockTools.Utilities24 import prepare_receptor4
 logger = getLogger(__name__)
+WORKDIR = os.environ.get('WORKDIR', "/workspace")
 
 T = TypeVar('T')
 
@@ -393,7 +395,7 @@ prepare_receptor4.py -r {rec_path} -o rec.pdbqt
         return None
 
 
-def eval_qvina2(lig_path, rec_path, out_dir, lig_idx=0, conda_env='adt', use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None):
+def eval_qvina2(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, path_to_qvina=f"{WORKDIR}/github/qvina/bin/qvina02"):
     """
     Pocket2Molの実装から変更
     """
@@ -436,12 +438,11 @@ def eval_qvina2(lig_path, rec_path, out_dir, lig_idx=0, conda_env='adt', use_uff
 
 
         commands = f"""
-source /workspace/envs/cu124/3.11.9/conda/.bashrc
-conda activate {conda_env}
 cd {out_dir}
+echo $PATH
 # Prepare receptor (PDB->PDBQT)
-prepare_receptor4.py -r {rec_path} -o rec.pdbqt
-/workspace/github/Pocket2Mol/experiments/qvina/qvina02 \
+python {prepare_receptor4.__file__} -r {rec_path} -o rec.pdbqt
+{path_to_qvina} \
 --receptor rec.pdbqt \
 --ligand lig.pdbqt \
 --center_x {center[0]:.4f} \
@@ -464,10 +465,6 @@ prepare_receptor4.py -r {rec_path} -o rec.pdbqt
         proc.stdin.write(commands.encode('utf-8'))
         proc.stdin.close()
         start = time()
-        while proc is None:
-            if timeout is not None and time()-start > timeout:
-                print(f"qvina subprocess reached timeout({timeout})", flush=True)
-                return None
         while proc.poll() is None:
             if timeout is not None and time()-start > timeout:
                 print(f"qvina subprocess reached timeout({timeout})", flush=True)
