@@ -116,6 +116,15 @@ def index_dataset(dataset: Dataset[T]) -> tuple[Dataset[int], Dataset[T]]:
     dataset = IndexDataset(dataset)
     return untuple_dataset(dataset, 2)
 
+class ConstantDataset(Dataset[T_co]):
+    def __init__(self, value: T_co, size: int):
+        self.size = size
+        self.value = value
+    def __getitem__(self, idx: int):
+        return self.value
+    def __len__(self):
+        return self.size
+
 class TensorDataset(Dataset[Tensor]):
     def __init__(self, tensor: Tensor|np.ndarray) -> None:
         self.tensor = torch.tensor(tensor)
