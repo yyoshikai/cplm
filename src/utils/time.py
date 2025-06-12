@@ -109,7 +109,7 @@ class wtqdm(Iterable[T_co]):
             self.start('after_iter')
             yield item
             if pbar.n % 10 == 0:
-                pbar.set_postfix_str(', '.join([f"{key}={value:.02f}" for key, value in sorted(self.name2time.items(), key=lambda x: x[1])]))
+                pbar.set_postfix_str(', '.join([f"{key}={value:.03f}" for key, value in sorted(self.name2time.items(), key=lambda x: x[1], reverse=True)]))
             self.start('iter_data')
 
     def start(self, name):

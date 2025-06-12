@@ -16,6 +16,7 @@ from src.data.coord_transform import CoordTransform
 from src.data.pretrain import *
 from src.data.tokenizer import *
 from src.model import Model
+from src.model.mamba import MambaModel
 from src.utils import set_logtime
 from src.utils.path import timestamp
 from src.train import CELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
@@ -51,6 +52,7 @@ parser.add_argument("--pocket-atom-h", action='store_true')
 parser.add_argument("--pocket-coord-h", action='store_true')
 parser.add_argument("--coord-follow-atom", action='store_true')
 parser.add_argument("--frag-type", default='1')
+parser.add_argument('--mamba', action='store_true')
 
 args = parser.parse_args()
 
@@ -140,7 +142,10 @@ train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_mem
     args.token_per_batch, batch_first, voc_encoder.pad_token, device, MAIN_RANK)
 
 # model
-model = Model(args.n_layer, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+if args.mamba:
+    model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
+else:
+    model = Model(args.n_layer, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)

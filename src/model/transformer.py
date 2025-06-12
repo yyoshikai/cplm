@@ -208,8 +208,8 @@ class TransformerEncoderLayer(nn.Module):
 class Model(nn.Module):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
     __constants__ = ['norm']
-    def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, activation, norm: bool, 
-                vocs: list, padding_idx: int, pos_buffer_len: int=100):
+    def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, 
+            activation, norm: bool, vocs: list, padding_idx: int, pos_buffer_len: int=100):
         if norm:
             norm = nn.LayerNorm(d_model ,elementwise_affine=False)
         else:

@@ -1,4 +1,5 @@
-import logging
+import logging, gzip
+from collections.abc import Iterator
 from rdkit import Chem, rdBase, RDLogger
 import numpy as np
 
@@ -29,3 +30,8 @@ def randomize(can, mol, rstate: np.random.RandomState):
     else:
         raise ValueError("Randomization failed.")
     return ran
+
+def load_sdf_gz(path: str) -> list[Chem.Mol]:
+    with gzip.open(path) as f:
+        return list(Chem.ForwardSDMolSupplier(f))
+
