@@ -1,4 +1,4 @@
-device# 241025 若干argumentを変更した。
+# 241025 若干argumentを変更した。
 import sys, os
 import argparse
 
