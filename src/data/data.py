@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import TypeVar
 from collections.abc import Callable
+from logging import getLogger
 
 import numpy as np
 import torch
@@ -54,18 +55,40 @@ class SliceDataset(Dataset):
     def __len__(self):
         return self.size
 
-class SampleDataset(Dataset):
-    def __init__(self, dataset: Dataset, size: int, seed: int=0):
-        rstate = np.random.RandomState(seed)
-        assert size <= len(dataset)
-        self.idxs = rstate.choice(len(dataset), size=size, replace=False)
-        self.dataset = dataset
-
-    def __getitem__(self, idx: int):
-        return self.dataset[self.idxs[idx]]
+class SampleDataset(Dataset[T_co]):
+    epoch: int = 0
+    logger = getLogger(f'{__module__}.{__qualname__}')
     
+    def __init__(self, dataset: Dataset[T_co], size: int=None, r: float=None, seed: int=0):
+        assert (size is None) ^ (r is None), f"Either size({size}) xor r({r}) must be specified."
+        if size is None: size = round(len(dataset)*r)
+        assert (0 <= size <= len(dataset)), f"size({size}) must be in [0, {len(dataset)}]"
+        self.size = size
+
+        self.dataset = dataset
+        self._lazy_sample_idxs: np.ndarray[int] = None
+        self._lazy_sample_idxs_epoch: int = None
+        self.seed = seed
+
+    @property
+    def sample_idxs(self) -> np.ndarray[int]:
+        if self.epoch != self._lazy_sample_idxs_epoch:
+            self.logger.info("Calculating sample_idxs...")
+            rng = np.random.default_rng(self.seed+self.epoch)
+            self._lazy_sample_idxs = rng.choice(len(self.dataset), size=self.size, replace=False)
+            self._lazy_sample_idxs_epoch = self.epoch
+            self.logger.info("Calculated.")
+        return self._lazy_sample_idxs
+    
+    def __getitem__(self, idx: int) -> T_co:
+        return self.dataset[self.sample_idxs[idx]]
+
     def __len__(self):
-        return len(self.idxs)
+        return self.size
+
+    @classmethod
+    def set_epoch(cls, epoch: int):
+        cls.epoch = epoch
 
 class CacheDataset(WrapDataset):
     def __init__(self, dataset: Dataset):
