@@ -74,7 +74,7 @@ rank = dist.get_rank()
 size = dist.get_world_size()
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
-logger.log(INFO_WORKER, f"{device=}")
+logger.log(INFO_WORKER, f"{device=}, {torch.cuda.device_count()=}")
 is_main = rank == MAIN_RANK
 
 ## make result dir
