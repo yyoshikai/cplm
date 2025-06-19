@@ -1,4 +1,4 @@
-# 241025 若干argumentを変更した。
+device# 241025 若干argumentを変更した。
 import sys, os
 import argparse
 
@@ -20,6 +20,7 @@ from src.model.mamba import MambaModel
 from src.utils import set_logtime
 from src.utils.path import timestamp
 from src.train import CELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
+from src.utils.logger import INFO_WORKER
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -73,6 +74,7 @@ rank = dist.get_rank()
 size = dist.get_world_size()
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
+logger.log(INFO_WORKER, f"{device=}")
 is_main = rank == MAIN_RANK
 
 ## make result dir
