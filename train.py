@@ -69,12 +69,12 @@ batch_first = False
 set_logtime(args.logtime)
 
 ## DDP
-dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
+dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo', )
 rank = dist.get_rank()
 size = dist.get_world_size()
+torch.cuda.set_device(rank % torch.cuda.device_count())
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
-logger.log(INFO_WORKER, f"{device=}, {torch.cuda.device_count()=}")
 is_main = rank == MAIN_RANK
 
 ## make result dir
@@ -83,6 +83,7 @@ result_dir = sync_train_dir(f"training/results/{timestamp()}_{args.studyname}")
 ## logger
 logger = get_train_logger(result_dir)
 logger.info(f"num_workers={args.num_workers}")
+logger.log(INFO_WORKER, f"{device=}, {torch.cuda.device_count()=}")
 
 # data
 coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
