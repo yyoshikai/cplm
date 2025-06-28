@@ -21,7 +21,7 @@ class LMDBDataset(Dataset[bytes]):
         match idx_to_key:
             case 'byte':
                 blen = data_len_to_blen(self)
-                self.idx_to_key = lambda idx: int(idx).to_bytes(blen)
+                self.idx_to_key = lambda idx: int(idx).to_bytes(blen, byteorder='big')
             case 'str':
                 self.idx_to_key = lambda idx: str(idx).encode('ascii')
             case _:
