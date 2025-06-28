@@ -21,7 +21,7 @@ from src.data.collator import DDPStringCollateLoader
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, StringTokenizer, \
     TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
 from src.data.pretrain.protein import CoordFollowDataset
-from src.model import Model
+from src.model import Model, MambaModel
 from src.utils import set_logtime
 from src.utils.path import timestamp
 from src.train import WeightedCELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
@@ -143,7 +143,10 @@ train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_mem
     args.token_per_batch, batch_first, voc_encoder.pad_token, device, MAIN_RANK)
 
 # model
-model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+if targs.get('mamba', False):
+    model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
+else:
+    model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)

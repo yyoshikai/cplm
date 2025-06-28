@@ -31,9 +31,11 @@ class TqdmHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-def get_logger(name=None, level=logging.DEBUG) -> logging.Logger:
+def get_logger(name=None, level=logging.DEBUG, stream=False) -> logging.Logger:
     logger = getLogger(name)
     logger.setLevel(level)
+    if stream:
+        add_stream_handler(logger)
     return logger
 
 def add_file_handler(logger: Logger, path: str, level=logging.DEBUG, mode: str='w', 
