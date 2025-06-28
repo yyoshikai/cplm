@@ -1,8 +1,7 @@
 from typing import Optional, Union, Callable
 from collections.abc import Iterable
-import math
+from functools import partial
 from tqdm import tqdm as _tqdm
-import copy
 import logging
 
 import numpy as np
@@ -205,6 +204,45 @@ class TransformerEncoderLayer(nn.Module):
         x = x + self.dropout2(self.linear2(self.dropout(self.activation(self.linear1(self.norm2(x))))))
         return x, cache
 
+def save_vocs(module, state_dict, prefix, local_metadata):
+    state_dict[prefix+'vocs'] = module.vocs
+def align_embedding(module: nn.Module, state_dict, prefix, local_metadata, 
+        strict, missing_keys, unexpected_keys, error_msgs, 
+        embedding_name, predictor_name) -> None:
+    
+    embedding = module.get_submodule(embedding_name)
+    assert isinstance(embedding, nn.Embedding), \
+            f"{embedding_name=} is incorrect ({type(embedding)})."
+    predictor = module.get_submodule(predictor_name)
+    assert isinstance(predictor, nn.Linear), \
+            f"{predictor_name=} is incorrect ({type(predictor)})."
+
+    # match embedding
+    state_vocs = np.array(state_dict[prefix+'vocs'], dtype=object)
+    module_vocs = np.array(module.vocs, dtype=object)
+    if np.any(state_vocs != module_vocs):
+        module.logger.warning(f"vocs in state_dict does not match current vocs. "
+                "Some weights will be permuted.")
+        module.logger.info(f"Removed from state_dict: {sorted(set(state_vocs)-set(module.vocs))}")
+        module.logger.info(f"New in model: {sorted(set(module.vocs)-set(state_vocs))}")
+        common_vocs = list(set(list(state_vocs))&set(list(module_vocs)))
+        state_idx = np.array([np.where(state_vocs == v)[0][0] for v in common_vocs])
+        self_idx = np.array([np.where(module_vocs == v)[0][0] for v in common_vocs])
+        keys = [f'{embedding_name}.weight', f'{predictor_name}.weight']
+        if predictor.bias: keys.append(f'{predictor_name}.bias')
+        for key in keys:
+            state_param = state_dict[prefix+key]
+            size = list(state_param.shape)
+            size[0] = len(module_vocs)
+            mean = torch.mean(state_param, dim=0, keepdim=True)
+            std = torch.std(state_param, dim=0, keepdim=True)
+            new_param = torch.randn(*size, dtype=state_param.dtype, device=state_param.device)*std+mean
+            new_param[self_idx] = state_param[state_idx]
+            state_dict[prefix+key] = new_param
+    
+    # remove vocs
+    del state_dict[prefix+'vocs']
+
 class Model(nn.Module):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
     __constants__ = ['norm']
@@ -234,37 +272,9 @@ class Model(nn.Module):
         self.pos_buffer_len = None
         self.make_pos_buffer(pos_buffer_len)
 
-        def save_vocs(module, state_dict, prefix, local_metadata):
-            state_dict[prefix+'vocs'] = self.vocs
         self._register_state_dict_hook(save_vocs)
-
-        def load_pre_hook(module, state_dict, prefix, local_metadata, 
-                strict, missing_keys, unexpected_keys, error_msgs) -> None:
-            
-            # match embedding
-            state_vocs = np.array(state_dict[prefix+'vocs'], dtype=object)
-            self_vocs = np.array(self.vocs, dtype=object)
-            if np.any(state_vocs != self_vocs):
-                self.logger.warning(f"vocs in state_dict does not match current vocs. "
-                        "Some weights will be permuted.")
-                self.logger.info(f"Removed from state_dict: {sorted(set(state_vocs)-set(self.vocs))}")
-                self.logger.info(f"New in model: {sorted(set(self.vocs)-set(state_vocs))}")
-                common_vocs = list(set(list(state_vocs))&set(list(self_vocs)))
-                state_idx = np.array([np.where(state_vocs == v)[0][0] for v in common_vocs])
-                self_idx = np.array([np.where(self_vocs == v)[0][0] for v in common_vocs])
-                for key in ['embedding.weight', 'predictor.weight', 'predictor.bias']:
-                    state_param = state_dict[prefix+key]
-                    size = list(state_param.shape)
-                    size[0] = len(self_vocs)
-                    mean = torch.mean(state_param, dim=0, keepdim=True)
-                    std = torch.std(state_param, dim=0, keepdim=True)
-                    new_param = torch.randn(*size, dtype=state_param.dtype, device=state_param.device)*std+mean
-                    new_param[self_idx] = state_param[state_idx]
-                    state_dict[prefix+key] = new_param
-            
-            # remove vocs
-            del state_dict[prefix+'vocs']
-        self._register_load_state_dict_pre_hook(load_pre_hook, with_module=True)
+        self._register_load_state_dict_pre_hook(partial(align_embedding, 
+                embedding_name='embedding', predictor_name='predictor'), with_module=True)
 
     def make_pos_buffer(self, length):
         if self.pos_buffer_len is not None:
