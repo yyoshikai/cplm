@@ -48,7 +48,7 @@ class StringLMDBDataset(LMDBDataset):
 
 class IntLMDBDataset(LMDBDataset):
     def __getitem__(self, idx: int) -> int:
-        return int.from_bytes(super().__getitem__(idx))
+        return int.from_bytes(super().__getitem__(idx), byteorder='big')
 
 def npy_to_lmdb(npy_path: str):
     assert npy_path.endswith('.npy')
