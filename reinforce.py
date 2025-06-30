@@ -18,7 +18,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.distributions import Categorical
 
 from src.data.sampler import InfiniteRandomSampler
-from src.model import Model
+from src.model import Model, MambaModel
 from src.data.finetune import CDDataset
 from src.data import untuple_dataset, index_dataset
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, VocEncoder, TokenEncodeDataset, SentenceDataset
@@ -283,8 +283,12 @@ if args.error_score is not None:
 
 
 # model
-net_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
-init_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+if pargs.mamba:
+    net_model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
+    init_model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
+else:
+    net_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+    init_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 net_model.to(torch.bfloat16)
 init_model.to(torch.bfloat16)
 net_model.to(device)
