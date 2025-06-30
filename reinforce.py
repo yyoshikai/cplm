@@ -115,6 +115,7 @@ RDLogger.DisableLog("rdApp.*")
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
 rank = dist.get_rank()
 dist_size = dist.get_world_size()
+torch.cuda.set_device(rank % torch.cuda.device_count())
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 is_main = rank == MAIN_RANK
