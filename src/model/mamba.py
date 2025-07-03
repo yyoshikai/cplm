@@ -27,7 +27,6 @@ class MambaModel(MambaForCausalLM):
                 embedding_name='backbone.embeddings', predictor_name='lm_head'), with_module=True)
         self.vocs = vocs
 
-    
     def forward(self, src: Tensor):
         """
         src: [L, B]
@@ -35,4 +34,4 @@ class MambaModel(MambaForCausalLM):
         output = super().forward(src.T.contiguous(), )
         x: Tensor = output['logits'] # [B, L, D]
         return x.transpose(0, 1) # [L, B, D]
-        
+

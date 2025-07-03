@@ -4,9 +4,13 @@ from bisect import bisect_right
 from time import time
 import numpy as np
 import torch
+import torch.distributed as dist
 from .logger import get_logger
 
 class RandomState:
+    """
+    微妙
+    """
     def __init__(self, seed: int=None):
         if seed is not None:
             self.seed(seed)
@@ -30,7 +34,29 @@ class RandomState:
         np.random.set_state(state_dict['numpy'])
         torch.set_rng_state(state_dict['torch'])
         torch.cuda.set_rng_state_all(state_dict['cuda'])
+
 RANDOM_STATE = RandomState()
+
+def ddp_set_random_seed(seed: int):
+    """
+    DDPでの挙動について
+    1(x). 各プロセスでmanual_seed(): 
+        set_device()前だと0しか初期化されない
+    2(x). masterのみでmanual_seed_all():
+        node間並列ではmaster nodeしか初期化されない
+    3(採用). 各プロセスでmanual_seed_all()
+        あるプロセスが初期化後処理を行った後別のプロセスが再度初期化しないよう, 処理をブロックする。
+        (masterのみでの初期化を防止することを兼ねる。)
+        init_process_group()前(is_initialized()=False)だと同期できないのでエラー
+    """
+    if not dist.is_initialized():
+        raise ValueError("ddp_set_random_seed() must be called after "
+                "dist.init_process_group() to syncronize.")
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    dist.barrier()
 
 def load_gninatypes(path, struct_fmt='fffi'):
     struct_len = struct.calcsize(struct_fmt)
