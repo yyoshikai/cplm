@@ -16,9 +16,10 @@ from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import Dataset, DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence
 from torch.distributions import Categorical
+import transformers.utils.logging
 
 from src.data.sampler import InfiniteRandomSampler
-from src.model import Model, MambaModel
+from src.model import Model, MambaModel2
 from src.data.finetune import CDDataset
 from src.data import untuple_dataset, index_dataset
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, VocEncoder, TokenEncodeDataset, SentenceDataset
@@ -108,9 +109,6 @@ log_sample_step = 3
 do_save_steps = [0, 1, 2, 3, 4, 50, 100]+list(range(200, 1000, 200)) \
         +list(range(1000, args.max_step, 1000))
 
-# Environment
-RDLogger.DisableLog("rdApp.*")
-
 # DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
 rank = dist.get_rank()
@@ -137,6 +135,13 @@ logger.info(f"num_workers={args.num_workers}")
 if auto_finetune_step:
     logger.info(f"finetune_step was set to {args.finetune_step}")
 log_step = 1 if args.test else 10000
+
+### logging on other libraries
+RDLogger.DisableLog("rdApp.*")
+### logging on other libraries
+transformers.utils.logging.enable_propagation()
+transformers.utils.logging.disable_default_handler()
+
 ## vina evaluation
 for i in range(args.batch_size):
     os.makedirs(f"{result_dir}/eval_vina_tmp/{rank}/{i}", exist_ok=True)
@@ -144,7 +149,29 @@ for i in range(args.batch_size):
 # load state dict(for vocs)
 state_dict = torch.load(f"{finetune_dir}/models/{args.finetune_step}.pth", 
     map_location=device, weights_only=True)
-vocs = state_dict['module.vocs']
+if pargs.mamba:
+    # modlfy from MambaModel to MambaModel2
+    new_state = {}
+    for key, value in state_dict.items():
+        assert key.startswith('module.')
+        key = key[7:]
+        if key == 'vocs':
+            pass
+        else:
+            key = f"model.{key}"
+        new_state[key] = value
+    state_dict = new_state
+else:
+    # modlfy from MambaModel to MambaModel2
+    new_state = {}
+    for key, value in state_dict.items():
+        assert key.startswith('module.')
+        key = key[7:]
+        new_state[key] = value
+    state_dict = new_state
+
+
+vocs = state_dict['vocs']
 voc_encoder = VocEncoder(vocs[1:]) # remove '[PAD]'
 
 # data
@@ -284,8 +311,8 @@ if args.error_score is not None:
 
 # model
 if pargs.mamba:
-    net_model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
-    init_model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
+    net_model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
+    init_model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
 else:
     net_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
     init_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
@@ -293,10 +320,10 @@ net_model.to(torch.bfloat16)
 init_model.to(torch.bfloat16)
 net_model.to(device)
 init_model.to(device)
-model = DistributedDataParallel(net_model)
 ## Load state dict
-model.load_state_dict(state_dict)
-init_model.load_state_dict(model.module.state_dict())
+net_model.load_state_dict(state_dict)
+init_model.load_state_dict(net_model.state_dict())
+model = DistributedDataParallel(net_model)
 
 # training
 

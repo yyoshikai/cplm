@@ -9,6 +9,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import Subset
 from torch.nn.parallel import DistributedDataParallel
+import transformers.utils.logging
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
@@ -100,6 +101,10 @@ logger = get_train_logger(result_dir)
 logger.info(f"num_workers={args.num_workers}")
 if auto_pretrain_step:
     logger.info(f"pretrain_step was set to {args.pretrain_step}")
+
+### logging on other libraries
+transformers.utils.logging.enable_propagation()
+transformers.utils.logging.disable_default_handler()
 
 # data
 ## pocket and ligands

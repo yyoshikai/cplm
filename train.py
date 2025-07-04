@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import ConcatDataset
 from torch.nn.parallel import DistributedDataParallel
+import transformers.utils.logging
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
@@ -84,6 +85,10 @@ result_dir = sync_train_dir(f"training/results/{timestamp()}_{args.studyname}")
 logger = get_train_logger(result_dir)
 logger.info(f"num_workers={args.num_workers}")
 logger.log(INFO_WORKER, f"{device=}, {torch.cuda.device_count()=}")
+
+### logging on other libraries
+transformers.utils.logging.enable_propagation()
+transformers.utils.logging.disable_default_handler()
 
 # data
 coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
