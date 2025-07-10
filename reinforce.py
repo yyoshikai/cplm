@@ -117,6 +117,7 @@ torch.cuda.set_device(rank % torch.cuda.device_count())
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 is_main = rank == MAIN_RANK
+torch.cuda.memory._record_memory_history()
 ## check generate_per_sample
 assert (dist_size * args.batch_size) % args.generate_per_sample == 0
 ## make&sync result dir
@@ -126,6 +127,7 @@ if is_main:
     os.makedirs(f"{result_dir}/errors", exist_ok=True)
     os.makedirs(f"{result_dir}/scores", exist_ok=True)
     os.makedirs(f"{result_dir}/cplm", exist_ok=True)
+    os.makedirs(f"{result_dir}/memory_snapshots", exist_ok=True)
     shutil.copy2('reinforce.py', f"{result_dir}/cplm/reinforce.py")
     shutil.copytree('src', f"{result_dir}/cplm/src")
 os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
@@ -610,6 +612,8 @@ for step in range(args.max_step):
     if step == log_sample_step:
         logger.info("RDKit logger will be disabled.")
         getLogger('rdkit').propagate = False
+    
+    torch.cuda.memory._dump_snapshot(f"{result_dir}/memory_snapshots/{rank}.pkl")
 logger.info("Training finished!")
 
 dist.destroy_process_group()

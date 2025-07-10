@@ -95,21 +95,23 @@ class PrintHolder:
         end = time()
         print(f"{self.name}: {end-self.start:.05f}s")
 
-class wtqdm(Iterable[T_co]):
-    def __init__(self, iterable: Iterable):
-        self.iterable = iterable
+class wtqdm(tqdm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.name2time = defaultdict(float)
         self.cur_job = None
+        self.start_ = None
 
     def __iter__(self):
-        pbar = tqdm(self.iterable)
-        self.cur_job = 'iter_data'
+        if self.disable:
+            yield from self.iterable
+            return
+
+        self.cur_job = 'first_iter_data'
         self.start_ = time()
-        for item in pbar:
+        for item in super().__iter__():
             self.start('after_iter')
             yield item
-            if pbar.n % 10 == 0:
-                pbar.set_postfix_str(', '.join([f"{key}={value:.03f}" for key, value in sorted(self.name2time.items(), key=lambda x: x[1], reverse=True)]))
             self.start('iter_data')
 
     def start(self, name):
@@ -117,3 +119,7 @@ class wtqdm(Iterable[T_co]):
         self.name2time[self.cur_job] += t - self.start_
         self.cur_job = name
         self.start_ = t
+
+    def update(self, n=1):
+        self.set_postfix_str(', '.join([f"{key}={value:.03f}" for key, value in sorted(self.name2time.items(), key=lambda x: x[1], reverse=True)]), refresh=False)
+        super().update(n)
