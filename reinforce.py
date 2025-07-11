@@ -535,8 +535,9 @@ for step in range(args.max_step):
 
             ## KL loss
             log_probs_all = F.log_softmax(logits, dim=-1)
-            init_logits = init_model(out_batch[:-1]) # [L, B, N]
-            init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
+            with torch.inference_mode():
+                init_logits = init_model(out_batch[:-1]) # [L, B, N]
+                init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
             kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
                 log_target=True) # [Lo-1, B, N]
             kl_loss = kl_loss.sum(dim=-1) # [Lo-1, B]
