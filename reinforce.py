@@ -383,8 +383,10 @@ if is_main:
 
 logger.info("Training started.")
 for step in range(args.max_step): 
+    logger.info(f"step {step}")
 
     # get batch
+    logger.info("get batch")
     with watch.hold('data'):
         all_idxs, files, centers, rotations, batch = train_iter.__next__()
         batch = batch.to(device)
@@ -397,6 +399,7 @@ for step in range(args.max_step):
     with torch.autocast('cuda', dtype=torch.bfloat16):
 
         ## generate sample
+        logger.info("generate sample")
         with watch.hold('generate'):
             model.eval()
             with torch.inference_mode():
@@ -411,6 +414,7 @@ for step in range(args.max_step):
             weight[end_count[:-1] > 0] = 0.0
 
         ## Log output
+        logger.info("log output")
         if step < log_sample_step:
             for idx in np.arange(B):
                 context = voc_encoder.decode(batch[:,idx])
@@ -426,6 +430,7 @@ for step in range(args.max_step):
                 
 
         ## Get score
+        logger.info("get score")
         do_save = step in do_save_steps
         errors = []
         with cf.ProcessPoolExecutor(args.num_score_workers) as e:
@@ -475,6 +480,7 @@ for step in range(args.max_step):
             with watch.hold('wait_score'):
                 valid_scores = np.array([f.result() for f in futures])
 
+        logger.info("modify_score")
         with watch.hold('modify_score'):
             errors = np.array(errors)
             scores = np.full(len(errors), np.nan)
@@ -521,6 +527,7 @@ for step in range(args.max_step):
             logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
         ## Get prob & reward loss
+        logger.info("get loss")
         with watch.hold('loss'):
             model.train()
             logits = model(out_batch[:-1]) # [Lo-1, B, T]
@@ -544,12 +551,14 @@ for step in range(args.max_step):
             
             loss = (reward_loss + kl_loss * args.alpha) * loss_scale
 
+    logger.info("backward")
     with watch.hold('backward'):
         loss.backward()
     steps['reward_loss'].append(reward_loss.item())
     steps['kl_loss'].append(kl_loss.item())
 
     # Save step data
+    logger.info("save step data")
     if (step+1) % args.record_opt_step == 0:
         sdir = f"{result_dir}/step_data/{step}"
         os.makedirs(sdir, exist_ok=True)
@@ -557,6 +566,7 @@ for step in range(args.max_step):
         torch.save(log_probs.cpu(), f"{sdir}/log_probs.pt")
 
     # check nan
+    logger.info("check nan")
     if args.reset_nan_grad:
         grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
         if not grad_is_finite:
@@ -579,6 +589,7 @@ for step in range(args.max_step):
             ## reset grad
             optimizer.zero_grad()
 
+    logger.info("optimize")
     with watch.hold('optimize'):
         if args.clip_grad_value is not None:
             torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
@@ -592,6 +603,7 @@ for step in range(args.max_step):
 
     scheduler.step()
     
+    logger.info("record opt step")
     if step % args.record_opt_step == 0:
         pd.DataFrame(steps).to_csv(f"{result_dir}/steps/{rank}.csv")
         pd.DataFrame(scoress).to_csv(f"{result_dir}/scores/{rank}.csv")
