@@ -54,7 +54,6 @@ parser.add_argument('--lr', type=float, default=1.4e-5) # same as BindGPT
 parser.add_argument('--alpha', type=float, default=0.05) # same as BindGPT
 parser.add_argument('--loss-scale')
 parser.add_argument('--max-step', type=int, default=1000)
-parser.add_argument('--max-opt-step', type=int, default=float('inf'))
 ## data
 parser.add_argument('--finetune-save-dir', required=True)
 parser.add_argument('--pocket-coord-heavy', action='store_true')
@@ -136,7 +135,7 @@ logger = get_train_logger(result_dir)
 logger.info(f"num_workers={args.num_workers}")
 if auto_finetune_step:
     logger.info(f"finetune_step was set to {args.finetune_step}")
-log_step = 1 if args.test else 10000
+log_step = 1
 
 ### logging on other libraries
 RDLogger.DisableLog("rdApp.*")
@@ -605,8 +604,6 @@ for step in range(args.max_step):
         if args.gc:
             gc.collect()
 
-    if step >= args.max_opt_step:
-        break
     if step % log_step == 0:
         logger.info(f"{step=} finished.")
 
@@ -614,7 +611,6 @@ for step in range(args.max_step):
         logger.info("RDKit logger will be disabled.")
         getLogger('rdkit').propagate = False
     
-    torch.cuda.memory._dump_snapshot(f"{result_dir}/memory_snapshots/{rank}.pkl")
 logger.info("Training finished!")
 
 dist.destroy_process_group()
