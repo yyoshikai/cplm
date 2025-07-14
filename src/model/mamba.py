@@ -10,6 +10,8 @@ from transformers.models.mamba.modeling_mamba import MambaForCausalLM
 from transformers.generation.streamers import BaseStreamer
 from .transformer import save_vocs, align_embedding
 from ..utils.logger import INFO_WORKER
+from time import time
+import os
 
 
 class MambaModel(MambaForCausalLM):
@@ -70,35 +72,50 @@ class MambaModel2(nn.Module):
         x: Tensor = output['logits'] # [B, L, D]
         return x.transpose(0, 1) # [L, B, D]
     
-    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True) -> list[torch.Tensor]:
+    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True, result_dir=None, step=None, rank=None) -> list[torch.Tensor]:
         """
         context: [L, B]
         """
         assert self.model.config.pad_token_id == pad_token
         assert self.model.config.eos_token_id == self.vocs.index(end_voc)
         output = []
+        log_dir = f"{result_dir}/gen_memories/{step}/{rank}"
+        os.makedirs(log_dir, exist_ok=True)
         for i, item in enumerate(context.T):
             if pad_token in item:
                 item = item[:torch.where(item == pad_token)[0][0]]
-            output.append(self.model.generate(item.unsqueeze(0), do_sample=True, max_new_tokens=max_len, streamer=ProgressStreamer(str(i)) if tqdm else None)[0])
+            output.append(self.model.generate(item.unsqueeze(0), do_sample=True, max_new_tokens=max_len, streamer=ProgressStreamer(str(i), f"{log_dir}/{i}.txt") if tqdm else None)[0])
         return output
 
 class ProgressStreamer(BaseStreamer):
     logger = getLogger(__module__)
 
-    def __init__(self, name):
+    def __init__(self, name, memory_path):
         self.name = name
         self.count = 0
         self.init = True
+        self.memory_path = memory_path
+        mstat = torch.cuda.memory_stats()
+        with open(self.memory_path, 'w') as f:
+            f.write('l,time,'+','.join(mstat.keys())+'\n')
         pass
 
     def put(self, value: torch.Tensor):
         l = value.shape[1] if value.dim() == 2 else value.shape[0]
         self.count += l
+        
+        # Log start
         if self.init:
             self.logger.log(INFO_WORKER, f"Generation {self.name}: started generation.")
+        
+        # Log l
         if self.count % 10 == 0 or self.init:
             self.logger.log(INFO_WORKER, f"Generation {self.name}: generated {self.count} tokens")
+
+        # memory stat
+        mstat = torch.cuda.memory_stats()
+        with open(self.memory_path, 'a') as f:
+            f.write(f"{l},{time()},"+','.join(map(str, mstat.values()))+'\n')
         self.init = False
     def end(self):
         self.logger.log(INFO_WORKER, f'Generation {self.name}: finished. ({self.count}) tokens.')

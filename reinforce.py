@@ -127,7 +127,6 @@ if is_main:
     os.makedirs(f"{result_dir}/errors", exist_ok=True)
     os.makedirs(f"{result_dir}/scores", exist_ok=True)
     os.makedirs(f"{result_dir}/cplm", exist_ok=True)
-    os.makedirs(f"{result_dir}/memory_snapshots", exist_ok=True)
     shutil.copy2('reinforce.py', f"{result_dir}/cplm/reinforce.py")
     shutil.copytree('src', f"{result_dir}/cplm/src")
 os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
@@ -404,7 +403,7 @@ for step in range(args.max_step):
         with watch.hold('generate'):
             model.eval()
             with torch.inference_mode():
-                outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, tqdm=args.tqdm_generate) # [B, L]
+                outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate, result_dir, step, rank) # [B, L]
             out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
             Lo, B = out_batch.shape
             dtype = torch.float
