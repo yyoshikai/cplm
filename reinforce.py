@@ -71,6 +71,7 @@ parser.add_argument('--sdp-kernel', choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIEN
 parser.add_argument('--reset-nan-grad', action='store_true')
 parser.add_argument('--gc', action='store_true')
 parser.add_argument('--use-categorical', action='store_true')
+parser.add_argument('--tqdm-generate', action='store_true')
 ## record
 parser.add_argument('--record-opt-step', type=int)
 parser.add_argument('--tokenizer-log-interval', type=int)
@@ -403,7 +404,7 @@ for step in range(args.max_step):
         with watch.hold('generate'):
             model.eval()
             with torch.inference_mode():
-                outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, tqdm=False) # [B, L]
+                outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, tqdm=args.tqdm_generate) # [B, L]
             out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
             Lo, B = out_batch.shape
             dtype = torch.float

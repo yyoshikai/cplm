@@ -7,7 +7,10 @@ import torch
 from torch import Tensor
 from transformers.models.mamba.configuration_mamba import MambaConfig
 from transformers.models.mamba.modeling_mamba import MambaForCausalLM
+from transformers.generation.streamers import BaseStreamer
 from .transformer import save_vocs, align_embedding
+from ..utils.logger import INFO_WORKER
+
 
 class MambaModel(MambaForCausalLM):
     logger = getLogger(f"{__module__}.{__qualname__}")
@@ -74,8 +77,28 @@ class MambaModel2(nn.Module):
         assert self.model.config.pad_token_id == pad_token
         assert self.model.config.eos_token_id == self.vocs.index(end_voc)
         output = []
-        for item in context.T:
+        for i, item in enumerate(context.T):
             if pad_token in item:
                 item = item[:torch.where(item == pad_token)[0][0]]
-            output.append(self.model.generate(item.unsqueeze(0), do_sample=True, max_new_tokens=max_len)[0])
+            output.append(self.model.generate(item.unsqueeze(0), do_sample=True, max_new_tokens=max_len, streamer=ProgressStreamer(str(i)) if tqdm else None)[0])
         return output
+
+class ProgressStreamer(BaseStreamer):
+    logger = getLogger(__module__)
+
+    def __init__(self, name):
+        self.name = name
+        self.count = 0
+        self.init = True
+        pass
+
+    def put(self, value: torch.Tensor):
+        l = value.shape[1] if value.dim() == 2 else value.shape[0]
+        self.count += l
+        if self.init:
+            self.logger.log(INFO_WORKER, f"Generation {self.name}: started generation.")
+        if self.count % 10 == 0 or self.init:
+            self.logger.log(INFO_WORKER, f"Generation {self.name}: generated {self.count} tokens")
+        self.init = False
+    def end(self):
+        self.logger.log(INFO_WORKER, f'Generation {self.name}: finished. ({self.count}) tokens.')
