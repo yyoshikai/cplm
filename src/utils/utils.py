@@ -7,35 +7,27 @@ import torch
 import torch.distributed as dist
 from .logger import get_logger
 
-class RandomState:
-    """
-    微妙
-    """
-    def __init__(self, seed: int=None):
-        if seed is not None:
-            self.seed(seed)
+# class RandomStateより
+def set_random_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
-    def seed(self, seed: int):
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+def random_state_dict():
+    state_dict = {
+        'random': random.getstate(),
+        'numpy': np.random.get_state(),
+        'torch': torch.get_rng_state(),
+        'cuda': torch.cuda.get_rng_state_all()
+    }
+    return state_dict
 
-    def state_dict(self):
-        state_dict = {
-            'random': random.getstate(),
-            'numpy': np.random.get_state(),
-            'torch': torch.get_rng_state(),
-            'cuda': torch.cuda.get_rng_state_all()
-        }
-        return state_dict
-    def load_state_dict(self, state_dict: dict):
-        random.setstate(state_dict['random'])
-        np.random.set_state(state_dict['numpy'])
-        torch.set_rng_state(state_dict['torch'])
-        torch.cuda.set_rng_state_all(state_dict['cuda'])
-
-RANDOM_STATE = RandomState()
+def load_random_state_dict(state_dict: dict):
+    random.setstate(state_dict['random'])
+    np.random.set_state(state_dict['numpy'])
+    torch.set_rng_state(state_dict['torch'])
+    torch.cuda.set_rng_state_all(state_dict['cuda'])
 
 def ddp_set_random_seed(seed: int):
     """
