@@ -409,11 +409,12 @@ for step in range(args.max_step):
             Lo, B = out_batch.shape
             dtype = torch.float
             weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
-            logger.log(INFO_WORKER, )
+            logger.log(INFO_WORKER, "weight generated")
             lig_count = torch.cumsum(out_batch == voc_encoder.voc2i['[LIGAND]'], dim=0) # [L, B]
             weight[lig_count[:-1] > 0] = 1.0
             end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
             weight[end_count[:-1] > 0] = 0.0
+            logger.log(INFO_WORKER, "weight calculated.")
 
         ## Log output
         logger.log(INFO_WORKER, "log output")
