@@ -26,7 +26,7 @@ from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDat
 from src.data.pretrain.protein import CoordFollowDataset
 from src.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train_logger, get_scheduler
 from src.utils.path import timestamp, cleardir
-from src.utils import RANDOM_STATE
+from src.utils import set_random_seed
 from src.utils.time import FileWatch
 from src.utils.logger import INFO_WORKER
 from src.evaluate import parse_mol_tokens, parse_mol
@@ -339,7 +339,7 @@ if is_main:
         yaml.dump(vars(args), f)
 
 ## fix seed
-RANDOM_STATE.seed(args.seed)
+set_random_seed(args.seed)
 if args.test:
     torch.backends.cudnn.deterministic = True
     torch.use_deterministic_algorithms(True, warn_only=True)
@@ -383,10 +383,10 @@ if is_main:
 
 logger.info("Training started.")
 for step in range(args.max_step): 
-    logger.info(f"step {step}")
+    logger.log(INFO_WORKER,f"step {step}")
 
     # get batch
-    logger.info("get batch")
+    logger.log(INFO_WORKER,"get batch")
     with watch.hold('data'):
         all_idxs, files, centers, rotations, batch = train_iter.__next__()
         batch = batch.to(device)
