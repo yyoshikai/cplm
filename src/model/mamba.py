@@ -85,6 +85,8 @@ class MambaModel2(nn.Module):
             if pad_token in item:
                 item = item[:torch.where(item == pad_token)[0][0]]
             output.append(self.model.generate(item.unsqueeze(0), do_sample=True, max_new_tokens=max_len, streamer=ProgressStreamer(str(i), f"{log_dir}/{i}.txt") if tqdm else None)[0])
+            self.logger.log(INFO_WORKER, f"Generation {i}: finished at generate2.")
+        self.logger.log(INFO_WORKER, "MambaModel2.generate2() finished.")
         return output
 
 class ProgressStreamer(BaseStreamer):
