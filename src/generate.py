@@ -14,7 +14,7 @@ from src.data import untuple_dataset, index_dataset
 from src.data.finetune import  CDDataset, RandomScoreDataset
 from src.data.tokenizer import TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
 from src.model import Model
-from src.utils import RANDOM_STATE, logend
+from src.utils import logend, set_random_seed
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.utils.logger import add_stream_handler, add_file_handler, get_logger
 from src.utils.path import cleardir, subs_vars
@@ -44,7 +44,7 @@ def pocket_conditioned_generate(args: Namespace, rdir: str, fdir: str, model_pat
     
     # Environment
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    RANDOM_STATE.seed(args.seed)
+    set_random_seed(args.seed)
     ## Result dir
     cleardir(rdir)
 

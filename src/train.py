@@ -8,13 +8,13 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import LambdaLR, ConstantLR
+from torch.optim.lr_scheduler import LambdaLR
 from .data.tokenizer import VocEncoder
 from .utils.logger import INFO_WORKER, add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .model import Model
 from .utils.path import cleardir
-from src.utils import RANDOM_STATE, rectime
+from src.utils import rectime, set_random_seed
 from torch.optim import Optimizer
 MAIN_RANK = 0
 
@@ -208,7 +208,7 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
             yaml.dump(vars(args), f)
 
     ## fix seed
-    RANDOM_STATE.seed(args.seed)
+    set_random_seed(args.seed)
     if args.test:
         torch.backends.cudnn.deterministic = True
         torch.use_deterministic_algorithms(True, warn_only=True)
