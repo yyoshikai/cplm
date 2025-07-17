@@ -441,6 +441,7 @@ for step in range(args.max_step):
             futures = []
             valid_scores = []
             for idx in range(len(outputs)):
+                logger.log(INFO_WORKER, f"get score {idx}")
 
                 with watch.hold('prepare_score'):
                     center = centers[idx]
@@ -485,6 +486,7 @@ for step in range(args.max_step):
                         futures.append(e.submit(get_score, 
                                 lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
                     else:
+                        logger.log(INFO_WORKER, f"get_score() {idx}")
                         valid_scores.append(get_score(lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
             with watch.hold('wait_score'):
                 if args.num_score_workers >= 2:
