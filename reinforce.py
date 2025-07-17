@@ -6,6 +6,7 @@ from collections import defaultdict
 import numpy as np, pandas as pd
 from addict import Dict
 from glob import glob
+from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -436,8 +437,9 @@ for step in range(args.max_step):
         logger.log(INFO_WORKER, "get score")
         do_save = step in do_save_steps
         errors = []
-        with cf.ProcessPoolExecutor(args.num_score_workers) as e:
+        with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
             futures = []
+            valid_scores = []
             for idx in range(len(outputs)):
 
                 with watch.hold('prepare_score'):
@@ -477,11 +479,18 @@ for step in range(args.max_step):
                         f.write(Chem.MolToMolBlock(mol))
                     dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
                     
-                    futures.append(e.submit(get_score, 
-                            lig_path=f"{eval_dir}/lig.sdf", 
-                            rec_path=f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}", out_dir=eval_dir))
+                    lig_path = f"{eval_dir}/lig.sdf"
+                    rec_path = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}"
+                    if args.num_score_workers >= 2:
+                        futures.append(e.submit(get_score, 
+                                lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
+                    else:
+                        valid_scores.append(get_score(lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
             with watch.hold('wait_score'):
-                valid_scores = np.array([f.result() for f in futures])
+                if args.num_score_workers >= 2:
+                    valid_scores = np.array([f.result() for f in futures])
+                else:
+                    valid_scores = np.array(valid_scores)
 
         logger.log(INFO_WORKER, "modify_score")
         with watch.hold('modify_score'):
