@@ -388,10 +388,8 @@ if is_main:
 
 logger.info("Training started.")
 for step in range(args.max_step): 
-    logger.log(INFO_WORKER,f"step {step}")
 
     # get batch
-    logger.log(INFO_WORKER,"get batch")
     with watch.hold('data'):
         all_idxs, files, centers, rotations, batch = train_iter.__next__()
         batch = batch.to(device)
@@ -405,32 +403,25 @@ for step in range(args.max_step):
     with torch.autocast('cuda', dtype=torch.bfloat16):
 
         ## generate sample
-        logger.log(INFO_WORKER, "generate sample")
         with watch.hold('generate'):
             model.eval()
             with torch.inference_mode():
                 outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
 
             out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
-            logger.log(INFO_WORKER, "pad_sequence finished.")
             Lo, B = out_batch.shape
             dtype = torch.float
             weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
-            logger.log(INFO_WORKER, "weight generated")
             lig_count = torch.cumsum(out_batch == voc_encoder.voc2i['[LIGAND]'], dim=0) # [L, B]
             weight[lig_count[:-1] > 0] = 1.0
             end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
             weight[end_count[:-1] > 0] = 0.0
-            logger.log(INFO_WORKER, "weight calculated.")
 
         ## Log output
-        logger.log(INFO_WORKER, "log output")
         if step < log_sample_step:
             for idx in np.arange(B):
                 context = voc_encoder.decode(batch[:,idx])
-                logger.log(INFO_WORKER, f"step {step}[{idx}]context={' '.join(context)}")
                 output = voc_encoder.decode(outputs[idx])
-                logger.log(INFO_WORKER, f"step {step}[{idx}]generated={' '.join(output)}")
                 logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
             ## check distribution
             if rank == dist_size-1:
@@ -440,14 +431,12 @@ for step in range(args.max_step):
                 
 
         ## Get score
-        logger.log(INFO_WORKER, "get score")
         do_save = step in do_save_steps
         errors = []
         with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
             futures = []
             valid_scores = []
             for idx in range(len(outputs)):
-                logger.log(INFO_WORKER, f"get score {idx}")
 
                 with watch.hold('prepare_score'):
                     center = centers[idx]
@@ -492,7 +481,6 @@ for step in range(args.max_step):
                         futures.append(e.submit(get_score, 
                                 lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
                     else:
-                        logger.log(INFO_WORKER, f"get_score() {idx}")
                         valid_scores.append(get_score(lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
             with watch.hold('wait_score'):
                 if args.num_score_workers >= 2:
@@ -500,7 +488,6 @@ for step in range(args.max_step):
                 else:
                     valid_scores = np.array(valid_scores)
 
-        logger.log(INFO_WORKER, "modify_score")
         with watch.hold('modify_score'):
             errors = np.array(errors)
             scores = np.full(len(errors), np.nan)
@@ -547,7 +534,6 @@ for step in range(args.max_step):
             logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
         ## Get prob & reward loss
-        logger.log(INFO_WORKER, "get loss")
         with watch.hold('loss'):
             model.train()
             logits = model(out_batch[:-1]) # [Lo-1, B, T]
@@ -571,14 +557,12 @@ for step in range(args.max_step):
             
             loss = (reward_loss + kl_loss * args.alpha) * loss_scale
 
-    logger.log(INFO_WORKER, "backward")
     with watch.hold('backward'):
         loss.backward()
     steps['reward_loss'].append(reward_loss.item())
     steps['kl_loss'].append(kl_loss.item())
 
     # Save step data
-    logger.log(INFO_WORKER, "save step data")
     if (step+1) % args.record_opt_step == 0:
         sdir = f"{result_dir}/step_data/{step}"
         os.makedirs(sdir, exist_ok=True)
@@ -586,7 +570,6 @@ for step in range(args.max_step):
         torch.save(log_probs.cpu(), f"{sdir}/log_probs.pt")
 
     # check nan
-    logger.log(INFO_WORKER, "check nan")
     if args.reset_nan_grad:
         grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
         if not grad_is_finite:
@@ -609,7 +592,6 @@ for step in range(args.max_step):
             ## reset grad
             optimizer.zero_grad()
 
-    logger.log(INFO_WORKER, "optimize")
     with watch.hold('optimize'):
         if args.clip_grad_value is not None:
             torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
@@ -618,12 +600,9 @@ for step in range(args.max_step):
         optimizer.zero_grad()
     step += 1
     steps['lr'].append(scheduler.get_last_lr()[0])
-
     steps['memory'].append(psutil.virtual_memory().used/(2**30))
-
     scheduler.step()
     
-    logger.log(INFO_WORKER, "record opt step")
     if step % args.record_opt_step == 0:
         pd.DataFrame(steps).to_csv(f"{result_dir}/steps/{rank}.csv")
         pd.DataFrame(scoress).to_csv(f"{result_dir}/scores/{rank}.csv")
@@ -640,7 +619,6 @@ for step in range(args.max_step):
         logger.info(f"{step=} finished.")
 
     if step == log_sample_step:
-        logger.info("RDKit logger will be disabled.")
         getLogger('rdkit').propagate = False
     
 logger.info("Training finished!")
