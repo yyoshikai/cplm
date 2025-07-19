@@ -408,7 +408,11 @@ for step in range(args.max_step):
         with watch.hold('generate'):
             model.eval()
             with torch.inference_mode():
-                outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate, result_dir, step, rank) # [B, L]
+                if pargs.mamba:
+                    outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate, result_dir, step, rank) # [B, L]
+                else:
+                    outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
+
             out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
             logger.log(INFO_WORKER, "pad_sequence finished.")
             Lo, B = out_batch.shape
