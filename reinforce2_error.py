@@ -1,37 +1,32 @@
 import sys, os, argparse, yaml, shutil, psutil, gc, math, random
-import itertools as itr
-import concurrent.futures as cf
 from logging import getLogger
 from collections import defaultdict
 import numpy as np, pandas as pd
 from addict import Dict
 from glob import glob
-from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel
 from rdkit import Chem, RDLogger
-from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import Dataset, DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence
 from torch.distributions import Categorical
 import transformers.utils.logging
 
 from src.data.sampler import InfiniteRandomSampler
-from src.model import Model, MambaModel2
+from src.model import MambaModel2
 from src.data.finetune import CDDataset
 from src.data import untuple_dataset, index_dataset
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, VocEncoder, TokenEncodeDataset, SentenceDataset
 from src.data.pretrain.protein import CoordFollowDataset
 from src.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train_logger, get_scheduler
-from src.utils.path import timestamp, cleardir
+from src.utils.path import timestamp
 from src.utils import set_random_seed
 from src.utils.time import FileWatch
 from src.utils.logger import INFO_WORKER
 from src.evaluate import parse_mol_tokens, parse_mol
-from src.evaluate import eval_vina, eval_qvina2
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 # arguments
@@ -118,6 +113,7 @@ torch.cuda.set_device(rank % torch.cuda.device_count())
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 is_main = rank == MAIN_RANK
+torch.cuda.memory._record_memory_history()
 ## check generate_per_sample
 assert (dist_size * args.batch_size) % args.generate_per_sample == 0
 ## make&sync result dir
@@ -127,7 +123,6 @@ if is_main:
     os.makedirs(f"{result_dir}/errors", exist_ok=True)
     os.makedirs(f"{result_dir}/scores", exist_ok=True)
     os.makedirs(f"{result_dir}/cplm", exist_ok=True)
-    os.makedirs(f"{result_dir}/batches", exist_ok=True)
     shutil.copy2('reinforce.py', f"{result_dir}/cplm/reinforce.py")
     shutil.copytree('src', f"{result_dir}/cplm/src")
 os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
@@ -137,6 +132,7 @@ logger.info(f"num_workers={args.num_workers}")
 if auto_finetune_step:
     logger.info(f"finetune_step was set to {args.finetune_step}")
 log_step = 1
+getLogger('rdkit').propagate = False
 
 ### logging on other libraries
 RDLogger.DisableLog("rdApp.*")
@@ -151,26 +147,17 @@ for i in range(args.batch_size):
 # load state dict(for vocs)
 state_dict = torch.load(f"{finetune_dir}/models/{args.finetune_step}.pth", 
     map_location=device, weights_only=True)
-if pargs.mamba:
-    # modlfy from MambaModel to MambaModel2
-    new_state = {}
-    for key, value in state_dict.items():
-        assert key.startswith('module.')
-        key = key[7:]
-        if key == 'vocs':
-            pass
-        else:
-            key = f"model.{key}"
-        new_state[key] = value
-    state_dict = new_state
-else:
-    # modlfy from MambaModel to MambaModel2
-    new_state = {}
-    for key, value in state_dict.items():
-        assert key.startswith('module.')
-        key = key[7:]
-        new_state[key] = value
-    state_dict = new_state
+# modlfy from MambaModel to MambaModel2
+new_state = {}
+for key, value in state_dict.items():
+    assert key.startswith('module.')
+    key = key[7:]
+    if key == 'vocs':
+        pass
+    else:
+        key = f"model.{key}"
+    new_state[key] = value
+state_dict = new_state
 
 
 vocs = state_dict['vocs']
@@ -276,52 +263,12 @@ train_iter = ReinforceIter(train_data, args.num_workers,
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
     voc_encoder.pad_token, args.generate_per_sample, args.fix_pocket, device, MAIN_RANK)
 
-## Scoring function 最大化したいものとする
-match args.target:
-    case 'min_vina':
-        def get_score(lig_path: str, rec_path: str, out_dir: str):
-            score, min_score = eval_vina(lig_path, rec_path, out_dir)
-            if min_score is None:
-                return np.nan
-            return -min_score
-        error_score = -50
-    case 'vina':
-        def get_score(lig_path: str, rec_path: str, out_dir: str):
-            score, min_score = eval_vina(lig_path, rec_path, out_dir)
-            if score is None:
-                return np.nan
-            return -score
-        error_score = -50
-    case 'mw_max':
-        def get_score(lig_path: str, rec_path: str, out_dir: str):
-            mol = Chem.SDMolSupplier(lig_path).__next__()
-            if mol is None: 
-                return np.nan
-            return rdMolDescriptors.CalcExactMolWt(mol)
-        error_score = 0
-    case 'qvina':
-        def get_score(lig_path: str, rec_path: str, out_dir: str):
-            score = eval_qvina2(lig_path, rec_path, out_dir, timeout=60)
-            if score is None:
-                return np.nan
-            return -score
-        error_score = -50
-    case 'dummy':
-        def get_score(lig_path: str, rec_path: str, out_dir: str):
-            return random.random()
-        error_score = 0
-
-if args.error_score is not None:
-    error_score = args.error_score
+error_score = args.error_score or 0
 
 
 # model
-if pargs.mamba:
-    net_model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
-    init_model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
-else:
-    net_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
-    init_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+net_model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
+init_model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
 net_model.to(torch.bfloat16)
 init_model.to(torch.bfloat16)
 net_model.to(device)
@@ -380,12 +327,6 @@ scoress = []
 nan_grad_step_saved = False
 step = 0
 
-# save at step 0
-if is_main:
-    torch.save(model.state_dict(), f"{result_dir}/models/{step}.pth")
-    cleardir(f"{result_dir}/optimizers")
-    torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
-
 logger.info("Training started.")
 for step in range(args.max_step): 
     logger.log(INFO_WORKER,f"step {step}")
@@ -399,7 +340,6 @@ for step in range(args.max_step):
         rotations = rotations.cpu().numpy()
         steps['batch_size'].append(batch.shape[1])
         steps['max_len'].append(batch.shape[0])
-        torch.save(batch.cpu(), f"{result_dir}/batches/{step}.pt") # test
 
     # forward
     with torch.autocast('cuda', dtype=torch.bfloat16):
@@ -423,82 +363,53 @@ for step in range(args.max_step):
             weight[end_count[:-1] > 0] = 0.0
             logger.log(INFO_WORKER, "weight calculated.")
 
-        ## Log output
-        logger.log(INFO_WORKER, "log output")
-        if step < log_sample_step:
-            for idx in np.arange(B):
-                context = voc_encoder.decode(batch[:,idx])
-                logger.log(INFO_WORKER, f"step {step}[{idx}]context={' '.join(context)}")
-                output = voc_encoder.decode(outputs[idx])
-                logger.log(INFO_WORKER, f"step {step}[{idx}]generated={' '.join(output)}")
-                logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
-            ## check distribution
-            if rank == dist_size-1:
-                logger.log(INFO_WORKER, f"step {step}{all_idxs=}")
-                logger.log(INFO_WORKER, f"step {step}{files=}")
-                logger.log(INFO_WORKER, f"step {step}{centers=}")
-                
-
         ## Get score
         logger.log(INFO_WORKER, "get score")
-        do_save = step in do_save_steps
+        do_save = True
         errors = []
-        with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
-            futures = []
-            valid_scores = []
-            for idx in range(len(outputs)):
-                logger.log(INFO_WORKER, f"get score {idx}")
+        futures = []
+        valid_scores = []
+        for idx in range(len(outputs)):
+            logger.log(INFO_WORKER, f"get score {idx}")
 
-                with watch.hold('prepare_score'):
-                    center = centers[idx]
-                    rotation = rotations[idx]
-                    if do_save:
-                        eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
-                        os.makedirs(eval_dir, exist_ok=True)
-                    else:
-                        eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
+            with watch.hold('prepare_score'):
+                center = centers[idx]
+                rotation = rotations[idx]
+                eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
+                os.makedirs(eval_dir, exist_ok=True)
 
-                    score = np.nan
-                    out_tokens = voc_encoder.decode(outputs[idx].tolist())
+                score = np.nan
+                out_tokens = voc_encoder.decode(outputs[idx].tolist())
 
-                    if do_save:
-                        info = {**files.iloc[idx].to_dict(), 'idx': idx, 
-                                'center': center.tolist(), 'rotation': rotation.tolist()}
-                        with open(f"{eval_dir}/info.yaml", 'w') as f:
-                            yaml.dump(info, f)
-                        with open(f"{eval_dir}/tokens.txt", 'w') as f:
-                            f.write(','.join(out_tokens)+'\n')
-                    error, smiles, coords = parse_mol_tokens(out_tokens)
-                    
-                    if error != '':
-                        errors.append(error)
-                        continue
-                    
-                    rotation_inv = np.linalg.inv(rotation)
-                    coords = np.matmul(coords, rotation_inv) + center
-                    error, mol = parse_mol(smiles, coords)
+                info = {**files.iloc[idx].to_dict(), 'idx': idx, 
+                        'center': center.tolist(), 'rotation': rotation.tolist()}
+                with open(f"{eval_dir}/info.yaml", 'w') as f:
+                    yaml.dump(info, f)
+                with open(f"{eval_dir}/tokens.txt", 'w') as f:
+                    f.write(','.join(out_tokens)+'\n')
+                error, smiles, coords = parse_mol_tokens(out_tokens)
+                
+                if error != '':
                     errors.append(error)
+                    continue
+                
+                rotation_inv = np.linalg.inv(rotation)
+                coords = np.matmul(coords, rotation_inv) + center
+                error, mol = parse_mol(smiles, coords)
+                errors.append(error)
 
-                    if error != '':
-                        continue
-                    
-                    with open(f"{eval_dir}/lig.sdf", 'w') as f:
-                        f.write(Chem.MolToMolBlock(mol))
-                    dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
-                    
-                    lig_path = f"{eval_dir}/lig.sdf"
-                    rec_path = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}"
-                    if args.num_score_workers >= 2:
-                        futures.append(e.submit(get_score, 
-                                lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
-                    else:
-                        logger.log(INFO_WORKER, f"get_score() {idx}")
-                        valid_scores.append(get_score(lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
-            with watch.hold('wait_score'):
-                if args.num_score_workers >= 2:
-                    valid_scores = np.array([f.result() for f in futures])
-                else:
-                    valid_scores = np.array(valid_scores)
+                if error != '':
+                    continue
+                
+                with open(f"{eval_dir}/lig.sdf", 'w') as f:
+                    f.write(Chem.MolToMolBlock(mol))
+                dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
+                
+                lig_path = f"{eval_dir}/lig.sdf"
+                rec_path = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}"
+                valid_scores.append(random.random())
+        with watch.hold('wait_score'):
+            valid_scores = np.array(valid_scores)
 
         logger.log(INFO_WORKER, "modify_score")
         with watch.hold('modify_score'):
@@ -585,30 +496,6 @@ for step in range(args.max_step):
         torch.save(log_probs_all.cpu(), f"{sdir}/log_probs_all.pt")
         torch.save(log_probs.cpu(), f"{sdir}/log_probs.pt")
 
-    # check nan
-    logger.log(INFO_WORKER, "check nan")
-    if args.reset_nan_grad:
-        grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
-        if not grad_is_finite:
-            if is_main:
-                logger.warning("nan or infinite value in gradient. Gradient is reset.")
-                for name, param in model.module.named_parameters():
-                    n_nan = torch.sum(torch.isnan(param.grad)).item()
-                    n_inf = torch.sum(torch.isinf(param.grad)).item()
-                    if n_nan > 0 or n_inf > 0:
-                        logger.warning(f"{name}: {n_nan=}, {n_inf=}")
-
-            ## save situation
-            if is_main and not nan_grad_step_saved:
-                nan_dir = f"{result_dir}/nan_step_{step}/{rank}"
-                os.makedirs(nan_dir, exist_ok=True)
-                torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
-                torch.save(model.state_dict(), f"{nan_dir}/model.pth")
-                nan_grad_step_saved = True
-            
-            ## reset grad
-            optimizer.zero_grad()
-
     logger.log(INFO_WORKER, "optimize")
     with watch.hold('optimize'):
         if args.clip_grad_value is not None:
@@ -618,30 +505,8 @@ for step in range(args.max_step):
         optimizer.zero_grad()
     step += 1
     steps['lr'].append(scheduler.get_last_lr()[0])
-
     steps['memory'].append(psutil.virtual_memory().used/(2**30))
-
     scheduler.step()
-    
-    logger.log(INFO_WORKER, "record opt step")
-    if step % args.record_opt_step == 0:
-        pd.DataFrame(steps).to_csv(f"{result_dir}/steps/{rank}.csv")
-        pd.DataFrame(scoress).to_csv(f"{result_dir}/scores/{rank}.csv")
-        pd.DataFrame(errorss).to_csv(f"{result_dir}/errors/{rank}.csv")
-        watch.flush()
-        if is_main:
-            torch.save(model.state_dict(), f"{result_dir}/models/{step}.pth")
-            cleardir(f"{result_dir}/optimizers")
-            torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
-        if args.gc:
-            gc.collect()
-
-    if step % log_step == 0:
-        logger.info(f"{step=} finished.")
-
-    if step == log_sample_step:
-        logger.info("RDKit logger will be disabled.")
-        getLogger('rdkit').propagate = False
     
 logger.info("Training finished!")
 

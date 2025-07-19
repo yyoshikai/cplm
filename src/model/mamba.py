@@ -1,6 +1,8 @@
+import sys, psutil, gc
 from pathlib import Path
 from functools import partial
 from logging import getLogger
+from tqdm import tqdm
 import yaml
 import torch.nn as nn
 import torch
@@ -72,52 +74,35 @@ class MambaModel2(nn.Module):
         x: Tensor = output['logits'] # [B, L, D]
         return x.transpose(0, 1) # [L, B, D]
     
-    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True, result_dir=None, step=None, rank=None) -> list[torch.Tensor]:
+    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True) -> list[torch.Tensor]:
         """
         context: [L, B]
         """
         assert self.model.config.pad_token_id == pad_token
         assert self.model.config.eos_token_id == self.vocs.index(end_voc)
         output = []
-        log_dir = f"{result_dir}/gen_memories/{step}/{rank}"
-        os.makedirs(log_dir, exist_ok=True)
         for i, item in enumerate(context.T):
             if pad_token in item:
                 item = item[:torch.where(item == pad_token)[0][0]]
-            output.append(self.model.generate(item.unsqueeze(0), do_sample=True, max_new_tokens=max_len, streamer=ProgressStreamer(str(i), f"{log_dir}/{i}.txt") if tqdm else None)[0])
+            output.append(self.model.generate(item.unsqueeze(0), do_sample=True, max_new_tokens=max_len, streamer=ProgressStreamer(str(i), max_len, self) if tqdm else None)[0])
             self.logger.log(INFO_WORKER, f"Generation {i}: finished at generate2.")
+            gc.collect()
         self.logger.log(INFO_WORKER, "MambaModel2.generate2() finished.")
         return output
 
 class ProgressStreamer(BaseStreamer):
     logger = getLogger(__module__)
 
-    def __init__(self, name, memory_path):
-        self.name = name
-        self.count = 0
-        self.init = True
-        self.memory_path = memory_path
-        mstat = torch.cuda.memory_stats()
-        with open(self.memory_path, 'w') as f:
-            f.write('l,time,'+','.join(mstat.keys())+'\n')
-        pass
+    def __init__(self, name, max_len, model):
+        self.pbar = tqdm(total=max_len, desc=name, miniters=1)
+        self.model = model
 
     def put(self, value: torch.Tensor):
         l = value.shape[1] if value.dim() == 2 else value.shape[0]
-        self.count += l
+        mem = psutil.virtual_memory()
+        GB = 2**30
+        self.pbar.set_postfix_str(f"mem={mem.used/GB:.03f}/{mem.total/GB:.03f}GB", refresh=False)
+        self.pbar.update(l)
         
-        # Log start
-        if self.init:
-            self.logger.log(INFO_WORKER, f"Generation {self.name}: started generation.")
-        
-        # Log l
-        if self.count % 10 == 0 or self.init:
-            self.logger.log(INFO_WORKER, f"Generation {self.name}: generated {self.count} tokens")
-
-        # memory stat
-        mstat = torch.cuda.memory_stats()
-        with open(self.memory_path, 'a') as f:
-            f.write(f"{l},{time()},"+','.join(map(str, mstat.values()))+'\n')
-        self.init = False
     def end(self):
-        self.logger.log(INFO_WORKER, f'Generation {self.name}: finished. ({self.count}) tokens.')
+        pass
