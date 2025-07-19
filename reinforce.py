@@ -1,4 +1,4 @@
-import sys, os, argparse, yaml, shutil, psutil, gc, math
+import sys, os, argparse, yaml, shutil, psutil, gc, math, random
 import itertools as itr
 import concurrent.futures as cf
 from logging import getLogger
@@ -306,6 +306,10 @@ match args.target:
                 return np.nan
             return -score
         error_score = -50
+    case 'dummy':
+        def get_score(lig_path: str, rec_path: str, out_dir: str):
+            return random.random()
+        error_score = 0
 
 if args.error_score is not None:
     error_score = args.error_score
