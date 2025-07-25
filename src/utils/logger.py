@@ -1,8 +1,7 @@
 import sys, os, logging
-from logging import Formatter, StreamHandler, FileHandler, Logger, getLogger
-import inspect
+from logging import Logger, Formatter, StreamHandler, FileHandler, Filter, LogRecord, getLogger
+from collections.abc import Callable
 from tqdm import tqdm as _tqdm
-import yaml
 
 DEFAULT_FMT = "[{asctime}][{name}][{levelname}]{message}"
 DEFAULT_DATEFMT = "%y%m%d %H:%M:%S"
@@ -30,6 +29,13 @@ class TqdmHandler(logging.Handler):
             self.flush()
         except Exception:
             self.handleError(record)
+
+class LambdaFilter(Filter):
+    def __init__(self, fn: Callable[[LogRecord], bool]):
+        self.fn = fn
+    
+    def filter(self, record: LogRecord):
+        return self.fn(record)
 
 def get_logger(name=None, level=logging.DEBUG, stream=False) -> logging.Logger:
     logger = getLogger(name)
