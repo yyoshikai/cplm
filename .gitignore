@@ -152,3 +152,4 @@ todo.md
 /pocket_conditioned_generation_old/*
 !/pocket_conditioned_generation/*.py
 /ssd
+pjs/

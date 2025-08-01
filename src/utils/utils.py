@@ -29,7 +29,7 @@ def load_random_state_dict(state_dict: dict):
     torch.set_rng_state(state_dict['torch'])
     torch.cuda.set_rng_state_all(state_dict['cuda'])
 
-def ddp_set_random_seed(seed: int):
+def ddp_set_random_seed(seed: int, device: torch.device):
     """
     DDPでの挙動について
     1(x). 各プロセスでmanual_seed(): 
@@ -48,7 +48,7 @@ def ddp_set_random_seed(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    dist.barrier()
+    dist.broadcast(torch.tensor(0, device=device), src=0) # dist.barrierだとwarningが出るので, 代わりに
 
 def load_gninatypes(path, struct_fmt='fffi'):
     struct_len = struct.calcsize(struct_fmt)
