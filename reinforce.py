@@ -397,7 +397,7 @@ for step in range(args.max_step):
         rotations = rotations.cpu().numpy()
         steps['batch_size'].append(batch.shape[1])
         steps['max_len'].append(batch.shape[0])
-        torch.save(batch.cpu(), f"{result_dir}/batches/{step}.pt") # test
+        torch.save(batch.cpu(), f"{result_dir}/batches/{step}.pt") # TODO: remove batch
 
     # forward
     with torch.autocast('cuda', dtype=torch.bfloat16):
