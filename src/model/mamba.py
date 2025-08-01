@@ -88,12 +88,9 @@ class MambaModel2(nn.Module):
         return output
     
     @torch.no_grad()
-    def generate(
-        self,
-        context,
-        max_new_tokens: int,
-        streamer: Optional["BaseStreamer"] = None,
-        do_sample: bool=True):
+    def generate(self, context, max_new_tokens: int, do_sample: bool=True, tqdm: bool=True):
+        
+        streamer=ProgressStreamer("", max_new_tokens, self) if tqdm else None
 
         generation_config = copy.deepcopy(self.model.generation_config)
         generation_config.update(**{'max_new_tokens': max_new_tokens, 'do_sample': do_sample})
@@ -104,7 +101,6 @@ class MambaModel2(nn.Module):
         if pad_token_id in context:
             start_len = torch.where(torch.any(context == pad_token_id, dim=0))[0][0].item()
         else:
-
             start_len = context_len
         input_ids = context[:, :start_len]
 
@@ -118,7 +114,8 @@ class MambaModel2(nn.Module):
         generation_config._decoder_start_token_tensor = _tensor_or_none(generation_config.decoder_start_token_id, device=device)
 
         attention_mask = torch.ones(input_ids.shape[:2], dtype=torch.long, device=input_ids.device)
-        streamer.put(input_ids.cpu())
+        if streamer is not None:
+            streamer.put(input_ids.cpu())
         generation_config.max_length = generation_config.max_new_tokens + input_ids.shape[1]
         
         # ---- sample ------
@@ -170,7 +167,8 @@ class MambaModel2(nn.Module):
 
             next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
             input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
-            streamer.put(next_tokens.cpu())
+            if streamer is not None:
+                streamer.put(next_tokens.cpu())
 
             is_done = input_ids.shape[1] >= generation_config.max_length
             unfinished_sequences = unfinished_sequences & ~(
@@ -182,8 +180,8 @@ class MambaModel2(nn.Module):
             cur_len += 1
 
             del outputs
-
-        streamer.end()
+        if streamer is not None:
+            streamer.end()
         outputs = []
         for i in range(4):
             input_ids0 = input_ids[i]
