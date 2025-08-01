@@ -91,12 +91,12 @@ class MambaModel2(nn.Module):
     def generate(
         self,
         context,
+        max_new_tokens: int,
         streamer: Optional["BaseStreamer"] = None,
-        **kwargs,
-    ):
+        do_sample: bool=True):
 
         generation_config = copy.deepcopy(self.model.generation_config)
-        generation_config.update(**kwargs)
+        generation_config.update(**{'max_new_tokens': max_new_tokens, 'do_sample': do_sample})
 
         pad_token_id = generation_config.pad_token_id
         context = context.T
