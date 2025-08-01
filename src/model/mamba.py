@@ -156,13 +156,8 @@ class MambaModel2(nn.Module):
 
             # token selection
             if do_sample:
-                next_tokens = []
-                for i in range(batch_size):
-                    set_random_seed(cur_len)
-                    probs = nn.functional.softmax(next_token_scores[i], dim=-1)
-                    next_token = torch.multinomial(probs, num_samples=1).squeeze(0)
-                    next_tokens.append(next_token)
-                next_tokens = torch.stack(next_tokens, dim=0)
+                probs = nn.functional.softmax(next_token_scores, dim=-1)
+                next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
             else:
                 next_tokens = torch.argmax(next_token_scores, dim=-1)
             if cur_len < context_len:
@@ -188,7 +183,7 @@ class MambaModel2(nn.Module):
         if streamer is not None:
             streamer.end()
         outputs = []
-        for i in range(4):
+        for i in range(batch_size):
             input_ids0 = input_ids[i]
             input_ids0 = input_ids0[:torch.where(input_ids0 == generation_config.eos_token_id)[0][0]+1]
             outputs.append(input_ids0)
