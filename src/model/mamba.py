@@ -88,10 +88,15 @@ class MambaModel2(nn.Module):
         return output
     
     @torch.no_grad()
-    def generate(self, context, max_new_tokens: int, do_sample: bool=True, tqdm: bool=True):
+    def generate(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm: bool=True, do_sample: bool=True):
+        
+        assert self.model.config.eos_token_id == self.vocs.index(end_voc)
+        assert self.model.config.pad_token_id == pad_token
+
+        max_new_tokens = max_len
         
         streamer=ProgressStreamer("", max_new_tokens, self) if tqdm else None
-
+        
         generation_config = copy.deepcopy(self.model.generation_config)
         generation_config.update(**{'max_new_tokens': max_new_tokens, 'do_sample': do_sample})
 
