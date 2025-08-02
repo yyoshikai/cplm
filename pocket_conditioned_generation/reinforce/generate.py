@@ -5,7 +5,7 @@ from addict import Dict
 import torch
 PROJ_DIR = "/workspace/cplm"
 sys.path.append(PROJ_DIR)
-from src.generate2 import generate
+from src.generate import generate
 from src.utils.path import subs_vars
 from src.model import Model
 
@@ -22,7 +22,6 @@ if __name__ == '__main__':
     parser.add_argument("--max-len", type=int, default=1000)
     parser.add_argument("--token-per-batch", type=int)
     parser.add_argument("--seed", type=int, default=0)
-
     args = parser.parse_args()
 
     reinforce_dir = f"{PROJ_DIR}/reinforce/results/{args.sname}"
@@ -30,7 +29,7 @@ if __name__ == '__main__':
     with open(f"{reinforce_dir}/config.yaml") as f:
         rargs = Dict(yaml.safe_load(f))
     fdir = f"{PROJ_DIR}/finetune/results/{rargs.finetune_name}"
-    rdir = f"{PROJ_DIR}/pocket_conditioned_generation/reinforce/results/{args.genname}/{args.sname}/{args.step}/{args.index}"
+    rdir = f"{PROJ_DIR}/pocket_conditioned_generation/reinforce/{args.genname}/{args.index}/{args.sname}/{args.step}"
 
     
     fargs = Dict(yaml.safe_load(open(f"{fdir}/config.yaml")))

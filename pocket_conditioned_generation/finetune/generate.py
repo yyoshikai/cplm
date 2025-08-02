@@ -5,7 +5,7 @@ from addict import Dict
 from rdkit import RDLogger
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path += [f"{WORKDIR}/cplm"]
-from src.generate2 import generate
+from src.generate import generate
 from src.utils.path import subs_vars
 from src.model import Model, MambaModel2
 from src.model.mamba import mamba2mamba2
