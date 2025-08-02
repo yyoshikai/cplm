@@ -71,7 +71,6 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
         with logend(logger, 'loading state'):
             state = torch.load(model_path, weights_only=True)
             state = {key[7:]: value for key, value in state.items()}
-            state_vocs = state['vocs']
 
         ## Sentence
         float_tokenizer = FloatTokenizer(-coord_range, coord_range)
