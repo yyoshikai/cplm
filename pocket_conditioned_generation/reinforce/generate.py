@@ -5,6 +5,7 @@ from addict import Dict
 PROJ_DIR = "/workspace/cplm"
 sys.path.append(PROJ_DIR)
 from src.generate import pocket_conditioned_generate, add_pocket_conditioned_generate_args
+from src.utils.path import subs_vars
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -20,5 +21,12 @@ if __name__ == '__main__':
         rargs = Dict(yaml.safe_load(f))
     fdir = f"{PROJ_DIR}/finetune/results/{rargs.finetune_name}"
     rdir = f"{PROJ_DIR}/pocket_conditioned_generation/reinforce/results/{args.genname}/{args.sname}/{args.step}/{args.index}"
-    pocket_conditioned_generate(args, rdir, fdir, model_path)
+
+    
+    fargs = Dict(yaml.safe_load(open(f"{fdir}/config.yaml")))
+    fargs = subs_vars(fargs, {'/work/02/ga97/a97003': '/workspace'})
+
+    token_per_batch = args.token_per_batch if args.token_per_batch is not None else fargs.token_per_batch
+
+    pocket_conditioned_generate(args, fargs, rdir, model_path, token_per_batch)
 

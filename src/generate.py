@@ -18,7 +18,7 @@ from src.model import Model
 from src.utils import logend, set_random_seed
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.utils.logger import add_stream_handler, add_file_handler, get_logger
-from src.utils.path import cleardir, subs_vars
+from src.utils.path import cleardir
 PROJ_DIR = "/workspace/cplm"
 WORKDIR = "/workspace"
 
@@ -33,13 +33,9 @@ def add_pocket_conditioned_generate_args(parser: ArgumentParser):
     parser.add_argument("--seed", type=int, default=0)
 
 
-def pocket_conditioned_generate(args: Namespace, rdir: str, fdir: str, model_path: str):
+def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_path: str, 
+        token_per_batch: int):
     
-    fargs = Dict(yaml.safe_load(open(f"{fdir}/config.yaml")))
-    fargs = subs_vars(fargs, {'/work/02/ga97/a97003': '/workspace'})
-    if args.token_per_batch is None:
-        args.token_per_batch = fargs.token_per_batch
-
     if os.path.exists(f"{rdir}/info.csv"):
         print(f"{rdir} already finished.")
         return
@@ -113,7 +109,7 @@ def pocket_conditioned_generate(args: Namespace, rdir: str, fdir: str, model_pat
 
     # 生成
     batch_size = len(data) if args.gtype == 3 \
-        else args.token_per_batch // args.max_len
+        else token_per_batch // args.max_len
     def collate_fn(batch):
         idxs, batch, centers = list(zip(*batch))
         batch = pad_sequence(batch, padding_value=voc_encoder.pad_token)
@@ -134,7 +130,7 @@ def pocket_conditioned_generate(args: Namespace, rdir: str, fdir: str, model_pat
                 case 2:
                     output = model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10)
                 case 3:
-                    output = model.generate3(batch, '[END]', args.max_len, voc_encoder.pad_token, args.token_per_batch, np.arange(100, args.max_len+1, 100))
+                    output = model.generate3(batch, '[END]', args.max_len, voc_encoder.pad_token, token_per_batch, np.arange(100, args.max_len+1, 100))
 
             outputs += output
             centers += centers_batch
