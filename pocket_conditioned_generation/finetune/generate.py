@@ -30,6 +30,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     rdir = f"{WORKDIR}/cplm/pocket_conditioned_generation/finetune/{args.genname}/{args.index}/{args.sname}/{args.step}"
+    os.makedirs(rdir, exist_ok=True)
 
     # Load finetuning / training
     ## finetuning
@@ -48,6 +49,7 @@ if __name__ == '__main__':
     # 引数の作成
     token_per_batch = args.token_per_batch if args.token_per_batch is not None \
         else fargs.token_per_batch
+    mamba = targs.get('mamba', False)
 
     ## prompt_score
     if fargs.no_score:
@@ -63,14 +65,15 @@ if __name__ == '__main__':
     print("Loading state ... ", flush=True)
     state = torch.load(f"{fdir}/models/{args.step}.pth", weights_only=True)
     state = {key[7:]: value for key, value in state.items()}
-    state = mamba2mamba2(state)
+    if mamba:
+        state = mamba2mamba2(state)
 
     
     state_vocs: list = state['vocs']
     pad_token = state_vocs.index('[PAD]')
     end_token = state_vocs.index('[END]')
     
-    if targs.get('mamba', False):
+    if mamba:
         model = MambaModel2(state_vocs, pad_token, end_token)
     else:
         model = Model(8, 768, 12, 4, 0.1, 'gelu', True, state_vocs, pad_token)
