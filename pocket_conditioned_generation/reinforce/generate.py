@@ -7,6 +7,7 @@ PROJ_DIR = "/workspace/cplm"
 sys.path.append(PROJ_DIR)
 from src.generate import pocket_conditioned_generate, add_pocket_conditioned_generate_args
 from src.utils.path import subs_vars
+from src.model import Model
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -33,5 +34,11 @@ if __name__ == '__main__':
     state = {key[7:]: value for key, value in state.items()}
     state_vocs = state['vocs']
 
-    pocket_conditioned_generate(rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
+
+    pad_token = state_vocs.index('[PAD]')
+    end_token = state_vocs.index('[END]')
+    model = Model(8, 768, 12, 4, 0.1, 'gelu', True, state_vocs, pad_token)
+    print(model.load_state_dict(state))
+
+    pocket_conditioned_generate(model, rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
 
