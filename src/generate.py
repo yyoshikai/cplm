@@ -87,70 +87,79 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
         ## Generation data index
         indices = np.load(f"../index/results/{index}.npy")
         data = Subset(data, indices)
-
-    model.to(device)
-
-    # 生成
-    batch_size = token_per_batch // max_len
     def collate_fn(batch):
         idxs, batch, centers = list(zip(*batch))
         batch = pad_sequence(batch, padding_value=voc_encoder.pad_token)
         return idxs, batch, centers
-    train_loader = DataLoader(data, shuffle=False, num_workers=28, batch_size=batch_size, collate_fn=collate_fn, )
-    idxs = []
-    outputs = []
-    centers = []
+    batch_size = token_per_batch // max_len
+    min_batch_size = batch_size // 2
+
+    model.to(device)
+
+    # 生成
+
+
+    for i_trial in range(n_trial):
+        train_loader = DataLoader(data, shuffle=False, num_workers=28, batch_size=batch_size, collate_fn=collate_fn, )
+
+        idxs = []
+        outputs = []
+        centers = []
+
+        logger.info("Generating...")
+        with torch.inference_mode():
+            for idxs_batch, batch, centers_batch in train_loader:
+                batch = batch.to(device)
+
+                match gtype:
+                    case 1:
+                        output = model.generate(batch, '[END]', max_len, voc_encoder.pad_token)
+                    case 2:
+                        output = model.generate2(batch, '[END]', max_len, voc_encoder.pad_token, 10)
+                outputs += [out.cpu().numpy() for out in output]
+                centers += centers_batch
+                idxs += idxs_batch
+
+        # detokenize
+        logger.info("Detokenizing...")
+        wordss = []
+        end_token = voc_encoder.voc2i['[END]']
+        with open(f"{rdir}/tokens.txt", 'w') as f:
+            for i in range(len(outputs)):
+                tokens = outputs[i]
+                tokens = itertools.takewhile(lambda x: x != end_token, tokens)
+                words = voc_encoder.decode(tokens)
+                wordss.append(words)
+                f.write(','.join(words)+'\n')
+
+        # parse SMILES and coordinates
+        logger.info("Parsing...")
+
+        smiless = []
+        errors = []
+        os.makedirs(f"{rdir}/sdf", exist_ok=True)
+        for i in range(len(wordss)):
+
+            words = wordss[i]
+            center = centers[i]
+
+            error, smiles, coords = parse_mol_tokens(words)
+            smiless.append(smiles)
+            if error != "":
+                errors.append(error)
+                continue
+
+            coords += center
+            error, mol = parse_mol(smiles, coords)
+            errors.append(error)
+            if error != "":
+                continue
+            with open(f"{rdir}/sdf/{i}.sdf", 'w') as f:
+                f.write(Chem.MolToMolBlock(mol))
 
     
-    with torch.inference_mode():
-        for idxs_batch, batch, centers_batch in train_loader:
-            batch = batch.to(device)
-
-            match gtype:
-                case 1:
-                    output = model.generate(batch, '[END]', max_len, voc_encoder.pad_token)
-                case 2:
-                    output = model.generate2(batch, '[END]', max_len, voc_encoder.pad_token, 10)
-            outputs += output
-            centers += centers_batch
-            idxs += idxs_batch
-        with open(f"{rdir}/tokens.pkl", 'wb') as f:
-            pickle.dump(outputs, f)
-
-    # detokenize
-    end_token = voc_encoder.voc2i['[END]']
-    with open(f"{rdir}/tokens.txt", 'w') as f:
-        for i in range(len(outputs)):
-            tokens = outputs[i]
-            tokens = itertools.takewhile(lambda x: x != end_token, tokens)
-            words = voc_encoder.decode(tokens)
-            f.write(','.join(words)+'\n')
-
-    # parse SMILES and coordinates
-    with open(f"{rdir}/tokens.txt") as f:
-        wordss = [line.split(',') for line in f.read().splitlines()]
-
-    smiless = []
-    errors = []
-    os.makedirs(f"{rdir}/sdf", exist_ok=True)
-    for i in range(len(wordss)):
-
-        words = wordss[i]
-        center = centers[i]
-
-        error, smiles, coords = parse_mol_tokens(words)
-        smiless.append(smiles)
-        if error != "":
-            errors.append(error)
-            continue
-
-        coords += center
-        error, mol = parse_mol(smiles, coords)
-        errors.append(error)
-        if error != "":
-            continue
-        with open(f"{rdir}/sdf/{i}.sdf", 'w') as f:
-            f.write(Chem.MolToMolBlock(mol))
+    with open(f"{rdir}/tokens.pkl", 'wb') as f:
+        pickle.dump(outputs, f)
 
     df = pd.DataFrame({'idx': idxs, 'smiles': smiless, 'error': errors})
     df.to_csv(f"{rdir}/info.csv")
