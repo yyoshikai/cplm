@@ -34,7 +34,7 @@ def add_pocket_conditioned_generate_args(parser: ArgumentParser):
 
 
 def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_path: str, 
-        token_per_batch: int):
+        token_per_batch: int, seed: int, max_len: int):
     
     if os.path.exists(f"{rdir}/info.csv"):
         print(f"{rdir} already finished.")
@@ -42,7 +42,7 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
     
     # Environment
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    set_random_seed(args.seed)
+    set_random_seed(seed)
     ## Result dir
     cleardir(rdir)
 
@@ -60,7 +60,7 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
     with logend(logger, 'Prepare data'):
 
         ## CD
-        data = CDDataset(args.data_dir, fargs.seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
+        data = CDDataset(args.data_dir, seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
             pocket_coord_heavy=fargs.pocket_coord_heavy)
         pocket_atom, pocket_coord, _, _, score, center  = untuple_dataset(data, 6)
 
@@ -81,7 +81,7 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
         if not fargs.no_score:
             if args.score_min is not None and args.score_max is not None:
                 score = RandomScoreDataset(args.score_min, args.score_max, 
-                    len(pocket_atom), args.seed)
+                    len(pocket_atom), seed)
             else:
                 assert args.score_min is None and args.score_max is None
             score = TokenizeDataset(score, float_tokenizer)
@@ -109,7 +109,7 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
 
     # 生成
     batch_size = len(data) if args.gtype == 3 \
-        else token_per_batch // args.max_len
+        else token_per_batch // max_len
     def collate_fn(batch):
         idxs, batch, centers = list(zip(*batch))
         batch = pad_sequence(batch, padding_value=voc_encoder.pad_token)
@@ -126,11 +126,11 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
 
             match args.gtype:
                 case 1:
-                    output = model.generate(batch, '[END]', args.max_len, voc_encoder.pad_token)
+                    output = model.generate(batch, '[END]', max_len, voc_encoder.pad_token)
                 case 2:
-                    output = model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10)
+                    output = model.generate2(batch, '[END]', max_len, voc_encoder.pad_token, 10)
                 case 3:
-                    output = model.generate3(batch, '[END]', args.max_len, voc_encoder.pad_token, token_per_batch, np.arange(100, args.max_len+1, 100))
+                    output = model.generate3(batch, '[END]', max_len, voc_encoder.pad_token, token_per_batch, np.arange(100, max_len+1, 100))
 
             outputs += output
             centers += centers_batch
