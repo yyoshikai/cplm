@@ -5,7 +5,7 @@ from addict import Dict
 import torch
 PROJ_DIR = "/workspace/cplm"
 sys.path.append(PROJ_DIR)
-from src.generate import pocket_conditioned_generate, add_pocket_conditioned_generate_args
+from src.generate import generate
 from src.utils.path import subs_vars
 from src.model import Model
 
@@ -14,7 +14,15 @@ if __name__ == '__main__':
     parser.add_argument('--sname')
     parser.add_argument('--step', type=int, required=True)
     parser.add_argument('--genname', required=True)
-    add_pocket_conditioned_generate_args(parser)
+    parser.add_argument("--data-dir")
+    parser.add_argument("--score-min", type=float)
+    parser.add_argument("--score-max", type=float)
+    parser.add_argument("--index", required=True)
+    parser.add_argument("--gtype", type=int, default=2, choices=[1,2,3])
+    parser.add_argument("--max-len", type=int, default=1000)
+    parser.add_argument("--token-per-batch", type=int)
+    parser.add_argument("--seed", type=int, default=0)
+
     args = parser.parse_args()
 
     reinforce_dir = f"{PROJ_DIR}/reinforce/results/{args.sname}"
@@ -40,5 +48,5 @@ if __name__ == '__main__':
     model = Model(8, 768, 12, 4, 0.1, 'gelu', True, state_vocs, pad_token)
     print(model.load_state_dict(state))
 
-    pocket_conditioned_generate(model, rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
+    generate(model, rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
 

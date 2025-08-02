@@ -6,7 +6,7 @@ import numpy as np, pandas as pd
 import torch
 from torch.utils.data import DataLoader, Subset, StackDataset
 from torch.nn.utils.rnn import pad_sequence
-from rdkit import Chem
+from rdkit import Chem, RDLogger
 
 sys.path += ["/workspace/cplm"]
 from src.data.tokenizer import FloatTokenizer, \
@@ -21,18 +21,7 @@ from src.utils.path import cleardir
 PROJ_DIR = "/workspace/cplm"
 WORKDIR = "/workspace"
 
-def add_pocket_conditioned_generate_args(parser: ArgumentParser):
-    parser.add_argument("--data-dir")
-    parser.add_argument("--score-min", type=float)
-    parser.add_argument("--score-max", type=float)
-    parser.add_argument("--index", required=True)
-    parser.add_argument("--gtype", type=int, default=2, choices=[1,2,3])
-    parser.add_argument("--max-len", type=int, default=1000)
-    parser.add_argument("--token-per-batch", type=int)
-    parser.add_argument("--seed", type=int, default=0)
-
-
-def pocket_conditioned_generate(model, rdir: str, model_path: str, 
+def generate(model, rdir: str, model_path: str, 
         token_per_batch: int, 
         seed: int, max_len: int, index: str, pocket_coord_heavy: bool, 
         coord_range: float, prompt_score: Literal['data', 'low', 'no_score'], 
