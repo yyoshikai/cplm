@@ -19,7 +19,7 @@ from src.model.mamba import MambaModel2
 from src.utils import logend, set_random_seed
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.utils.logger import add_stream_handler, add_file_handler, get_logger
-from src.utils.path import cleardir, subs_vars
+from src.utils.path import cleardir
 PROJ_DIR = "/workspace/cplm"
 WORKDIR = "/workspace"
 

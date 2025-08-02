@@ -14,6 +14,8 @@ from src.data.tokenizer import FloatTokenizer, \
 from src.data import untuple_dataset, index_dataset
 from src.data.finetune import  CDDataset, RandomScoreDataset
 from src.data.tokenizer import TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
+from src.model import Model
+from src.model.mamba import MambaModel2
 from src.utils import logend, set_random_seed
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.utils.logger import add_stream_handler, add_file_handler, get_logger
@@ -21,13 +23,13 @@ from src.utils.path import cleardir
 PROJ_DIR = "/workspace/cplm"
 WORKDIR = "/workspace"
 
-def generate(model, rdir: str, model_path: str, 
-        token_per_batch: int, 
+def generate(model: Model | MambaModel2,  rdir: str, token_per_batch: int, 
         seed: int, max_len: int, index: str, pocket_coord_heavy: bool, 
         coord_range: float, prompt_score: Literal['data', 'low', 'no_score'], 
         state_vocs: list, gtype: int=2):
     
-    
+    assert prompt_score in ['data', 'low', 'no_score']
+
     if os.path.exists(f"{rdir}/info.csv"):
         print(f"{rdir} already finished.")
         return
@@ -55,11 +57,6 @@ def generate(model, rdir: str, model_path: str,
         data = CDDataset("/workspace/cplm/preprocess/results/finetune/r4_all", seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
             pocket_coord_heavy=pocket_coord_heavy)
         pocket_atom, pocket_coord, _, _, score, center  = untuple_dataset(data, 6)
-
-        ## Vocs from state
-        with logend(logger, 'loading state'):
-            state = torch.load(model_path, weights_only=True)
-            state = {key[7:]: value for key, value in state.items()}
 
         ## Sentence
         float_tokenizer = FloatTokenizer(-coord_range, coord_range)

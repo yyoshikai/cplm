@@ -48,5 +48,5 @@ if __name__ == '__main__':
     model = Model(8, 768, 12, 4, 0.1, 'gelu', True, state_vocs, pad_token)
     print(model.load_state_dict(state))
 
-    generate(model, rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
+    generate(model, rdir, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
 
