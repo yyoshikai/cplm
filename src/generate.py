@@ -101,7 +101,8 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
     outputs = []
     centers = []
 
-    with torch.inference_mode(), logend(logger, 'generate'):
+    
+    with torch.inference_mode():
         for idxs_batch, batch, centers_batch in train_loader:
             batch = batch.to(device)
 
@@ -117,41 +118,39 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
             pickle.dump(outputs, f)
 
     # detokenize
-    with logend(logger, 'detokenize'):
-        end_token = voc_encoder.voc2i['[END]']
-        with open(f"{rdir}/tokens.txt", 'w') as f:
-            for i in range(len(outputs)):
-                tokens = outputs[i]
-                tokens = itertools.takewhile(lambda x: x != end_token, tokens)
-                words = voc_encoder.decode(tokens)
-                f.write(','.join(words)+'\n')
+    end_token = voc_encoder.voc2i['[END]']
+    with open(f"{rdir}/tokens.txt", 'w') as f:
+        for i in range(len(outputs)):
+            tokens = outputs[i]
+            tokens = itertools.takewhile(lambda x: x != end_token, tokens)
+            words = voc_encoder.decode(tokens)
+            f.write(','.join(words)+'\n')
 
     # parse SMILES and coordinates
-    with logend(logger, 'parse tokens'):
-        with open(f"{rdir}/tokens.txt") as f:
-            wordss = [line.split(',') for line in f.read().splitlines()]
+    with open(f"{rdir}/tokens.txt") as f:
+        wordss = [line.split(',') for line in f.read().splitlines()]
 
-        smiless = []
-        errors = []
-        os.makedirs(f"{rdir}/sdf", exist_ok=True)
-        for i in range(len(wordss)):
+    smiless = []
+    errors = []
+    os.makedirs(f"{rdir}/sdf", exist_ok=True)
+    for i in range(len(wordss)):
 
-            words = wordss[i]
-            center = centers[i]
+        words = wordss[i]
+        center = centers[i]
 
-            error, smiles, coords = parse_mol_tokens(words)
-            smiless.append(smiles)
-            if error != "":
-                errors.append(error)
-                continue
-
-            coords += center
-            error, mol = parse_mol(smiles, coords)
+        error, smiles, coords = parse_mol_tokens(words)
+        smiless.append(smiles)
+        if error != "":
             errors.append(error)
-            if error != "":
-                continue
-            with open(f"{rdir}/sdf/{i}.sdf", 'w') as f:
-                f.write(Chem.MolToMolBlock(mol))
+            continue
 
-        df = pd.DataFrame({'idx': idxs, 'smiles': smiless, 'error': errors})
-        df.to_csv(f"{rdir}/info.csv")
+        coords += center
+        error, mol = parse_mol(smiles, coords)
+        errors.append(error)
+        if error != "":
+            continue
+        with open(f"{rdir}/sdf/{i}.sdf", 'w') as f:
+            f.write(Chem.MolToMolBlock(mol))
+
+    df = pd.DataFrame({'idx': idxs, 'smiles': smiless, 'error': errors})
+    df.to_csv(f"{rdir}/info.csv")
