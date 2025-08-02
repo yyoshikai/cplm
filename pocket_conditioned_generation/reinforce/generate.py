@@ -22,6 +22,7 @@ if __name__ == '__main__':
     parser.add_argument("--max-len", type=int, default=1000)
     parser.add_argument("--token-per-batch", type=int)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument('--n-trial', type=int, required=True)
     args = parser.parse_args()
 
     reinforce_dir = f"{PROJ_DIR}/reinforce/results/{args.sname}"
@@ -47,5 +48,5 @@ if __name__ == '__main__':
     model = Model(8, 768, 12, 4, 0.1, 'gelu', True, state_vocs, pad_token)
     print(model.load_state_dict(state))
 
-    generate(model, rdir, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
+    generate(model, rdir, args.n_trial, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
 

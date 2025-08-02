@@ -23,7 +23,7 @@ from src.utils.path import cleardir
 PROJ_DIR = "/workspace/cplm"
 WORKDIR = "/workspace"
 
-def generate(model: Model | MambaModel2,  rdir: str, token_per_batch: int, 
+def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batch: int, 
         seed: int, max_len: int, index: str, pocket_coord_heavy: bool, 
         coord_range: float, prompt_score: Literal['data', 'low', 'no_score'], 
         state_vocs: list, gtype: int=2):
