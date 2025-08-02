@@ -224,3 +224,10 @@ class ProgressStreamer(BaseStreamer):
         
     def end(self):
         pass
+
+def mamba2mamba2(state: dict):
+    new_state = {}
+    for key, value in state.items():
+        if key != 'vocs': key = f"model.{key}"
+        new_state[key] = value
+    return new_state
