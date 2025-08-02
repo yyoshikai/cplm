@@ -28,5 +28,5 @@ if __name__ == '__main__':
 
     token_per_batch = args.token_per_batch if args.token_per_batch is not None else fargs.token_per_batch
 
-    pocket_conditioned_generate(args, fargs, rdir, model_path, token_per_batch, args.seed, args.max_len)
+    pocket_conditioned_generate(args, fargs, rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score')
 

@@ -1,6 +1,6 @@
 import sys, os, itertools, pickle, yaml
 from argparse import ArgumentParser, Namespace
-from typing import Optional
+from typing import Optional, Literal
 from addict import Dict
 import numpy as np, pandas as pd
 import torch
@@ -34,7 +34,9 @@ def add_pocket_conditioned_generate_args(parser: ArgumentParser):
 
 
 def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_path: str, 
-        token_per_batch: int, seed: int, max_len: int):
+        token_per_batch: int, 
+        seed: int, max_len: int, index: str, pocket_coord_heavy: bool, 
+        coord_range: float, prompt_score: Literal['data', 'low', 'no_score']):
     
     if os.path.exists(f"{rdir}/info.csv"):
         print(f"{rdir} already finished.")
@@ -61,7 +63,7 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
 
         ## CD
         data = CDDataset(args.data_dir, seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
-            pocket_coord_heavy=fargs.pocket_coord_heavy)
+            pocket_coord_heavy=pocket_coord_heavy)
         pocket_atom, pocket_coord, _, _, score, center  = untuple_dataset(data, 6)
 
         ## Vocs from state
@@ -71,19 +73,16 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
             state_vocs = state['vocs']
 
         ## Sentence
-        float_tokenizer = FloatTokenizer(-fargs.coord_range, fargs.coord_range)
+        float_tokenizer = FloatTokenizer(-coord_range, coord_range)
         pocket_atom = TokenizeDataset(pocket_atom, ProteinAtomTokenizer())
         pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
         sentence = ['[POCKET]']
 
         sentence += [pocket_atom, '[XYZ]', pocket_coord]
 
-        if not fargs.no_score:
-            if args.score_min is not None and args.score_max is not None:
-                score = RandomScoreDataset(args.score_min, args.score_max, 
-                    len(pocket_atom), seed)
-            else:
-                assert args.score_min is None and args.score_max is None
+        if prompt_score != 'no_score':
+            if prompt_score == 'low':
+                score = RandomScoreDataset(-12.0, -10.0, len(pocket_atom), seed)
             score = TokenizeDataset(score, float_tokenizer)
             sentence += ['[SCORE]', score]
         sentence += ['[LIGAND]']
@@ -100,7 +99,7 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
         data = StackDataset(idx_data, data, center)
 
         ## Generation data index
-        indices = np.load(f"../index/results/{args.index}.npy")
+        indices = np.load(f"../index/results/{index}.npy")
         data = Subset(data, indices)
 
     model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
