@@ -5,7 +5,7 @@ from addict import Dict
 import torch
 PROJ_DIR = "/workspace/cplm"
 sys.path.append(PROJ_DIR)
-from src.generate import generate
+from src.generate2 import generate
 from src.utils.path import subs_vars
 from src.model import Model
 
