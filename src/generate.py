@@ -44,17 +44,17 @@ def generate(model: Model | MambaModel2,  rdir: str, token_per_batch: int,
     logger = get_logger()
     add_stream_handler(logger)
     add_file_handler(logger, f"{rdir}/debug.log")
+    RDLogger.DisableLog("rdApp.*")
 
-    # 引数の保存
+    ## Save args
     with open(f"{rdir}/args.yaml", 'w') as f:
         yaml.dump(dict(rdir=rdir, token_per_batch=token_per_batch, seed=seed, max_len=max_len, index=index, pocket_coord_heavy=pocket_coord_heavy, coord_range=coord_range, prompt_score=prompt_score, gtype=gtype), f)
-
 
     # Data
     with logend(logger, 'Prepare data'):
 
-        ## CD
-        data = CDDataset("/workspace/cplm/preprocess/results/finetune/r4_all", seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
+        ## CrossDocked
+        data = CDDataset(f"{WORKDIR}/cplm/preprocess/results/finetune/r4_all", seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
             pocket_coord_heavy=pocket_coord_heavy)
         pocket_atom, pocket_coord, _, _, score, center  = untuple_dataset(data, 6)
 
@@ -91,8 +91,7 @@ def generate(model: Model | MambaModel2,  rdir: str, token_per_batch: int,
     model.to(device)
 
     # 生成
-    batch_size = len(data) if gtype == 3 \
-        else token_per_batch // max_len
+    batch_size = token_per_batch // max_len
     def collate_fn(batch):
         idxs, batch, centers = list(zip(*batch))
         batch = pad_sequence(batch, padding_value=voc_encoder.pad_token)
@@ -104,17 +103,13 @@ def generate(model: Model | MambaModel2,  rdir: str, token_per_batch: int,
 
     with torch.inference_mode(), logend(logger, 'generate'):
         for idxs_batch, batch, centers_batch in train_loader:
-            if gtype != 3:
-                batch = batch.to(device)
+            batch = batch.to(device)
 
             match gtype:
                 case 1:
                     output = model.generate(batch, '[END]', max_len, voc_encoder.pad_token)
                 case 2:
                     output = model.generate2(batch, '[END]', max_len, voc_encoder.pad_token, 10)
-                case 3:
-                    output = model.generate3(batch, '[END]', max_len, voc_encoder.pad_token, token_per_batch, np.arange(100, max_len+1, 100))
-
             outputs += output
             centers += centers_batch
             idxs += idxs_batch
@@ -160,4 +155,3 @@ def generate(model: Model | MambaModel2,  rdir: str, token_per_batch: int,
 
         df = pd.DataFrame({'idx': idxs, 'smiles': smiless, 'error': errors})
         df.to_csv(f"{rdir}/info.csv")
-
