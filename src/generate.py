@@ -124,13 +124,9 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
         logger.info("Detokenizing...")
         wordss = []
         end_token = voc_encoder.voc2i['[END]']
-        with open(f"{rdir}/tokens.txt", 'w') as f:
-            for i in range(len(outputs)):
-                tokens = outputs[i]
-                tokens = itertools.takewhile(lambda x: x != end_token, tokens)
-                words = voc_encoder.decode(tokens)
-                wordss.append(words)
-                f.write(','.join(words)+'\n')
+        for tokens in outputs:
+            words = voc_encoder.decode(itertools.takewhile(lambda x: x != end_token, tokens))
+            wordss.append(words)
 
         # parse SMILES and coordinates
         logger.info("Parsing...")
@@ -158,6 +154,10 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
                 f.write(Chem.MolToMolBlock(mol))
 
     
+    with open(f"{rdir}/tokens.txt", 'w') as f:
+        for words in wordss:
+            f.write(','.join(words)+'\n')
+
     with open(f"{rdir}/tokens.pkl", 'wb') as f:
         pickle.dump(outputs, f)
 
