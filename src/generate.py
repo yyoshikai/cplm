@@ -102,7 +102,9 @@ def pocket_conditioned_generate(rdir: str, model_path: str,
         indices = np.load(f"../index/results/{index}.npy")
         data = Subset(data, indices)
 
-    model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+    pad_token = state_vocs.index('[PAD]')
+    end_token = state_vocs.index('[END]')
+    model = Model(8, 768, 12, 4, 0.1, 'gelu', True, state_vocs, pad_token)
     logger.info(model.load_state_dict(state))
     model.to(device)
 
