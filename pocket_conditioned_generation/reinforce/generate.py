@@ -2,6 +2,7 @@ import sys, os
 from argparse import ArgumentParser
 import yaml
 from addict import Dict
+import torch
 PROJ_DIR = "/workspace/cplm"
 sys.path.append(PROJ_DIR)
 from src.generate import pocket_conditioned_generate, add_pocket_conditioned_generate_args
@@ -27,6 +28,10 @@ if __name__ == '__main__':
     fargs = subs_vars(fargs, {'/work/02/ga97/a97003': '/workspace'})
 
     token_per_batch = args.token_per_batch if args.token_per_batch is not None else fargs.token_per_batch
+    
+    state = torch.load(model_path, weights_only=True)
+    state = {key[7:]: value for key, value in state.items()}
+    state_vocs = state['vocs']
 
-    pocket_conditioned_generate(args, fargs, rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score')
+    pocket_conditioned_generate(args, fargs, rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
 

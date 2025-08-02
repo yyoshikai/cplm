@@ -36,7 +36,8 @@ def add_pocket_conditioned_generate_args(parser: ArgumentParser):
 def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_path: str, 
         token_per_batch: int, 
         seed: int, max_len: int, index: str, pocket_coord_heavy: bool, 
-        coord_range: float, prompt_score: Literal['data', 'low', 'no_score']):
+        coord_range: float, prompt_score: Literal['data', 'low', 'no_score'], 
+        state_vocs: list, gtype: int=2):
     
     if os.path.exists(f"{rdir}/info.csv"):
         print(f"{rdir} already finished.")
@@ -62,7 +63,7 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
     with logend(logger, 'Prepare data'):
 
         ## CD
-        data = CDDataset(args.data_dir, seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
+        data = CDDataset("/workspace/cplm/preprocess/results/finetune/r4_all", seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
             pocket_coord_heavy=pocket_coord_heavy)
         pocket_atom, pocket_coord, _, _, score, center  = untuple_dataset(data, 6)
 
@@ -107,7 +108,7 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
     model.to(device)
 
     # 生成
-    batch_size = len(data) if args.gtype == 3 \
+    batch_size = len(data) if gtype == 3 \
         else token_per_batch // max_len
     def collate_fn(batch):
         idxs, batch, centers = list(zip(*batch))
@@ -120,10 +121,10 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
 
     with torch.inference_mode(), logend(logger, 'generate'):
         for idxs_batch, batch, centers_batch in train_loader:
-            if args.gtype != 3:
+            if gtype != 3:
                 batch = batch.to(device)
 
-            match args.gtype:
+            match gtype:
                 case 1:
                     output = model.generate(batch, '[END]', max_len, voc_encoder.pad_token)
                 case 2:
