@@ -12,8 +12,6 @@ from transformers.models.mamba.configuration_mamba import MambaConfig
 from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
 from transformers.generation.streamers import BaseStreamer
 from .transformer import save_vocs, align_embedding
-from src.utils import set_random_seed
-
 
 class MambaModel(MambaForCausalLM):
     logger = getLogger(f"{__module__}.{__qualname__}")

@@ -5,7 +5,7 @@ from glob import glob
 from argparse import ArgumentParser
 from pathlib import Path
 
-import numpy as np, pandas as pd
+import numpy as np, pandas as pd, yaml
 from tqdm import tqdm
 from openbabel import pybel
 
@@ -38,8 +38,20 @@ if args.all:
         paths = glob(f"{prefix}**{postfix}", recursive=True)
         gnames = [path[len(prefix):][:-len(postfix)] for path in paths]
         for gname in gnames:
-            if not os.path.exists(f"{prefix}{gname}/{args.metric}_score.csv"):
-                args.gname.append(gname)
+            gdir = f"{prefix}{gname}"
+            
+            # check index
+            with open(f"{gdir}/config.yaml") as f:
+                index = yaml.safe_load(f)['index']
+            if index != args.index: 
+                logger.warning(f"{gname} was ignored due to different index.")
+                continue
+
+            # check if result exists
+            if os.path.exists(f"{gdir}/{args.metric}_score.csv"):
+                continue
+            
+            args.gname.append(gname)
     logger.info(f"Found {len(args.gname)} generations.")
         
 with logend(logger, 'reading csv'):
@@ -75,29 +87,6 @@ def eval_vina(gname):
     else:
         df = pd.DataFrame({'score': scores}, index=is_)
     df.to_csv(f"{gdir}/{args.metric}_score.csv")
-
-    """
-    scores = []
-    for i in (pbar:=tqdm(is_)):
-        didx=dfg.loc[i, 'idx']
-        row = dfdata[dfdata.index == didx].iloc[0]
-        dname = row['dname']
-        pname = row['protein_name']
-        lig_path = f"{gdir}/sdf/{i}.sdf"
-        rec_path = f"{cddir}/{dname}/{pname}"
-        out_dir = f"{gdir}/eval_{args.metric}/{i}"
-        v = metric(lig_path=lig_path, 
-                rec_path=rec_path, 
-                out_dir=out_dir)
-        scores.append(v)
-        pbar.set_postfix_str(f"{v=}")
-    if args.metric == 'vina':
-        df = pd.DataFrame(scores, columns=['score', 'min_score'], index=is_)
-    else:
-        df = pd.DataFrame({'score': scores}, index=is_)
-    df.to_csv(f"{gdir}/{args.metric}_score.csv")
-    """
-
 
 for gname in args.gname:
     logger.info(f"evaluating {gname} started.")
