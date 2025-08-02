@@ -23,4 +23,5 @@ graph/
 /pocket_conditioned_generation_old/*
 !/pocket_conditioned_generation/*.py
 !/pocket_conditioned_generation/*/*.py
-!/pocket_conditioned_generation/finetune/test.sh
+
+!test.sh
