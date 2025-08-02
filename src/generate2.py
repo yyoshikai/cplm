@@ -46,6 +46,10 @@ def generate(model: Model | MambaModel2,  rdir: str, token_per_batch: int,
     add_file_handler(logger, f"{rdir}/debug.log")
     RDLogger.DisableLog("rdApp.*")
 
+    ## Save args
+    with open(f"{rdir}/args.yaml", 'w') as f:
+        yaml.dump(dict(rdir=rdir, token_per_batch=token_per_batch, seed=seed, max_len=max_len, index=index, pocket_coord_heavy=pocket_coord_heavy, coord_range=coord_range, prompt_score=prompt_score, gtype=gtype), f)
+
     # Data
     with logend(logger, 'Prepare data'):
 
