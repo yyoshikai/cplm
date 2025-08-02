@@ -33,7 +33,7 @@ def add_pocket_conditioned_generate_args(parser: ArgumentParser):
     parser.add_argument("--seed", type=int, default=0)
 
 
-def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_path: str, 
+def pocket_conditioned_generate(rdir: str, model_path: str, 
         token_per_batch: int, 
         seed: int, max_len: int, index: str, pocket_coord_heavy: bool, 
         coord_range: float, prompt_score: Literal['data', 'low', 'no_score'], 
@@ -55,8 +55,8 @@ def pocket_conditioned_generate(args: Namespace, fargs: Dict, rdir: str, model_p
     add_file_handler(logger, f"{rdir}/debug.log")
 
     # 引数の保存
-    with open(f"{rdir}/config.yaml", 'w') as f:
-        yaml.dump(vars(args), f, sort_keys=False)
+    with open(f"{rdir}/args.yaml", 'w') as f:
+        yaml.dump(dict(rdir=rdir, token_per_batch=token_per_batch, seed=seed, max_len=max_len, index=index, pocket_coord_heavy=pocket_coord_heavy, coord_range=coord_range, prompt_score=prompt_score, gtype=gtype), f)
 
 
     # Data

@@ -33,5 +33,5 @@ if __name__ == '__main__':
     state = {key[7:]: value for key, value in state.items()}
     state_vocs = state['vocs']
 
-    pocket_conditioned_generate(args, fargs, rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
+    pocket_conditioned_generate(rdir, model_path, token_per_batch, args.seed, args.max_len, args.index, fargs.pocket_coord_heavy, fargs.coord_range, 'no_score', state_vocs)
 
