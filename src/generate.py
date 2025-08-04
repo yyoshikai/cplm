@@ -105,7 +105,7 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
 
     with torch.inference_mode():
         for batch_idxs in (pbar:=wtqdm(batch_sampler)):
-
+            logger.info(f"{batch_idxs=}")
             pbar.start('data')
             train_loader = DataLoader(Subset(data, batch_idxs), shuffle=False, 
                     num_workers=num_workers, batch_size=len(batch_idxs), 
@@ -155,6 +155,7 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
                 with open(f"{rdir}/sdf/{idx}.sdf", 'w') as f:
                     f.write(Chem.MolToMolBlock(mol))
                 sampler.is_remain[idx] = False
+                logger.info(f"{idx}: finished")
 
     with open(f"{rdir}/tokens.txt", 'w') as f:
         for words in wordss:

@@ -20,6 +20,7 @@ if __name__ == '__main__':
     ## scheme
     parser.add_argument("--genname", required=True)
     parser.add_argument("--index", required=True)
+    parser.add_argument('--n-trial', type=int, default=1)
     parser.add_argument('--from-data-score', action='store_true')
 
     ## Environment
