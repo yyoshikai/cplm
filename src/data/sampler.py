@@ -2,7 +2,8 @@
 import torch
 from collections.abc import Iterator, Sized
 from logging import getLogger
-from torch.utils.data import Sampler
+import numpy as np
+from torch.utils.data import Sampler, BatchSampler
 
 class InfiniteRandomSampler(Sampler):
     logger = getLogger(f"{__module__}.{__qualname__}")
