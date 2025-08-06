@@ -1,8 +1,8 @@
 import sys, os, yaml
 from argparse import ArgumentParser
+from glob import glob
 import torch
 from addict import Dict
-from rdkit import RDLogger
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path += [f"{WORKDIR}/cplm"]
 from src.generate import generate
@@ -16,7 +16,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     ## study
     parser.add_argument("--sname", required=True)
-    parser.add_argument("--step", type=int, required=True)
+    parser.add_argument("--step", type=int)
     ## scheme
     parser.add_argument("--genname", required=True)
     parser.add_argument("--index", required=True)
@@ -30,8 +30,6 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
-    rdir = f"{WORKDIR}/cplm/pocket_conditioned_generation/finetune/{args.genname}/{args.index}/{args.sname}/{args.step}"
-    os.makedirs(rdir, exist_ok=True)
 
     # Load finetuning / training
     ## finetuning
@@ -43,10 +41,21 @@ if __name__ == '__main__':
     tdir = f"{WORKDIR}/cplm/training/results/{fargs.pretrain_name}"
     targs = Dict(yaml.safe_load(open(f"{tdir}/config.yaml")))
 
-    # 引数の保存
-    with open(f"{rdir}/finetune_config.yaml", 'w') as f:
-        yaml.dump(vars(args), f, sort_keys=False)
+    
+    ## step
+    if args.step is None:
+        steps = [int(path.split('/')[-1].split('.')[0]) for path in glob(f"{fdir}/models/*")]
+        args.step = max(steps)
+        print(f"step was set to {args.step}")
 
+    rdir = f"{WORKDIR}/cplm/pocket_conditioned_generation/finetune/{args.genname}/{args.index}/{args.sname}/{args.step}"
+    os.makedirs(rdir, exist_ok=True)
+
+    # check if result exists
+    if os.path.exists(f"{rdir}/info.csv"):
+        print(f"{rdir} already finished.")
+        sys.exit()
+    
     # 引数の作成
     token_per_batch = args.token_per_batch if args.token_per_batch is not None \
         else fargs.token_per_batch
@@ -62,6 +71,7 @@ if __name__ == '__main__':
         else:
             prompt_score = 'low'
 
+
     ## Vocs from state
     print("Loading state ... ", flush=True)
     state = torch.load(f"{fdir}/models/{args.step}.pth", weights_only=True)
@@ -75,10 +85,15 @@ if __name__ == '__main__':
     end_token = state_vocs.index('[END]')
     
     if mamba:
-        model = MambaModel2(state_vocs, pad_token, end_token)
+        model = MambaModel2(state_vocs, pad_token, '[END]')
     else:
         model = Model(8, 768, 12, 4, 0.1, 'gelu', True, state_vocs, pad_token)
     print(model.load_state_dict(state))
     
-    generate(model, rdir, token_per_batch, args.seed, args.max_len, args.index,
+    done = generate(model, rdir, args.n_trial, token_per_batch, args.seed, args.max_len, args.index,
             fargs.pocket_coord_heavy, fargs.coord_range, prompt_score, state_vocs)
+    
+    # 引数の保存
+    if done:
+        with open(f"{rdir}/finetune_config.yaml", 'w') as f:
+            yaml.dump(vars(args), f, sort_keys=False)

@@ -32,7 +32,7 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
 
     if os.path.exists(f"{rdir}/info.csv"):
         print(f"{rdir} already finished.")
-        return
+        return False
     
     # Environment
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -47,46 +47,47 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
     RDLogger.DisableLog("rdApp.*")
 
     ## Save args
-    with open(f"{rdir}/args.yaml", 'w') as f:
-        yaml.dump(dict(rdir=rdir, token_per_batch=token_per_batch, seed=seed, max_len=max_len, index=index, pocket_coord_heavy=pocket_coord_heavy, coord_range=coord_range, prompt_score=prompt_score, gtype=gtype), f)
+    with open(f"{rdir}/config.yaml", 'w') as f:
+        yaml.dump(dict(rdir=rdir, n_trial=n_trial, token_per_batch=token_per_batch, seed=seed, max_len=max_len, index=index, pocket_coord_heavy=pocket_coord_heavy, coord_range=coord_range, prompt_score=prompt_score, gtype=gtype), f)
 
     # Data
-    with logend(logger, 'Prepare data'):
+    logger.info("Preparing data...")
 
-        ## CrossDocked
-        data = CDDataset(f"{WORKDIR}/cplm/preprocess/results/finetune/r4_all", seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
-            pocket_coord_heavy=pocket_coord_heavy)
-        pocket_atom, pocket_coord, _, _, score, center  = untuple_dataset(data, 6)
+    ## CrossDocked
+    data = CDDataset(f"{WORKDIR}/cplm/preprocess/results/finetune/r4_all", seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
+        pocket_coord_heavy=pocket_coord_heavy)
+    pocket_atom, pocket_coord, _, _, score, center  = untuple_dataset(data, 6)
 
-        ## Sentence
-        float_tokenizer = FloatTokenizer(-coord_range, coord_range)
-        pocket_atom = TokenizeDataset(pocket_atom, ProteinAtomTokenizer())
-        pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
-        sentence = ['[POCKET]']
+    ## Sentence
+    float_tokenizer = FloatTokenizer(-coord_range, coord_range)
+    pocket_atom = TokenizeDataset(pocket_atom, ProteinAtomTokenizer())
+    pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
+    sentence = ['[POCKET]']
 
-        sentence += [pocket_atom, '[XYZ]', pocket_coord]
+    sentence += [pocket_atom, '[XYZ]', pocket_coord]
 
-        if prompt_score != 'no_score':
-            if prompt_score == 'low':
-                score = RandomScoreDataset(-12.0, -10.0, len(pocket_atom), seed)
-            score = TokenizeDataset(score, float_tokenizer)
-            sentence += ['[SCORE]', score]
-        sentence += ['[LIGAND]']
-        data = SentenceDataset(*sentence)
-        
-        data_vocs = data.vocs()
-        assert data_vocs <= set(state_vocs)
-        assert state_vocs[0] == '[PAD]'
-        voc_encoder = VocEncoder(state_vocs[1:])
-        data = TokenEncodeDataset(data, voc_encoder)
+    if prompt_score != 'no_score':
+        if prompt_score == 'low':
+            score = RandomScoreDataset(-12.0, -10.0, len(pocket_atom), seed)
+        score = TokenizeDataset(score, float_tokenizer)
+        sentence += ['[SCORE]', score]
+    sentence += ['[LIGAND]']
+    data = SentenceDataset(*sentence)
+    
+    data_vocs = data.vocs()
+    assert data_vocs <= set(state_vocs)
+    assert state_vocs[0] == '[PAD]'
+    voc_encoder = VocEncoder(state_vocs[1:])
+    data = TokenEncodeDataset(data, voc_encoder)
 
-        ## Stack 
-        idx_data, data = index_dataset(data)
-        data = StackDataset(idx_data, data, center)
+    ## Stack 
+    idx_data, data = index_dataset(data)
+    data = StackDataset(idx_data, data, center)
 
-        ## Generation data index
-        indices = np.load(f"../index/results/{index}.npy")
-        data = Subset(data, indices)
+    ## Generation data index
+    indices = np.load(f"../index/results/{index}.npy")
+    data = Subset(data, indices)
+
     def collate_fn(batch):
         indices, batch, centers = list(zip(*batch))
         batch = pad_sequence(batch, padding_value=voc_encoder.pad_token)
@@ -105,7 +106,7 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
 
     with torch.inference_mode():
         for batch_idxs in (pbar:=wtqdm(batch_sampler)):
-            logger.info(f"{batch_idxs=}")
+            # logger.info(f"{batch_idxs=}")
             pbar.start('data')
             train_loader = DataLoader(Subset(data, batch_idxs), shuffle=False, 
                     num_workers=num_workers, batch_size=len(batch_idxs), 
@@ -155,7 +156,7 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
                 with open(f"{rdir}/sdf/{idx}.sdf", 'w') as f:
                     f.write(Chem.MolToMolBlock(mol))
                 sampler.is_remain[idx] = False
-                logger.info(f"{idx}: finished")
+                # logger.info(f"{idx}: finished")
 
     with open(f"{rdir}/tokens.txt", 'w') as f:
         for words in wordss:
@@ -166,6 +167,8 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
 
     df = pd.DataFrame({'idx': indices, 'smiles': smiless, 'error': errors})
     df.to_csv(f"{rdir}/info.csv")
+
+    return True
 
 class UnfinishedSampler:
     def __init__(self, dataset: Sized, max_cycle: int=math.inf):

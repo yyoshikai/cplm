@@ -181,9 +181,11 @@ class MambaModel2(nn.Module):
         if streamer is not None:
             streamer.end()
         outputs = []
+        eos_token_id = generation_config.eos_token_id
         for i in range(batch_size):
             input_ids0 = input_ids[i]
-            input_ids0 = input_ids0[:torch.where(input_ids0 == generation_config.eos_token_id)[0][0]+1]
+            if eos_token_id in input_ids0:
+                input_ids0 = input_ids0[:torch.where(input_ids0 == eos_token_id)[0][0]+1]
             outputs.append(input_ids0)
         return outputs
 
