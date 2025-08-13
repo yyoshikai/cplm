@@ -31,7 +31,7 @@ from src.utils import set_random_seed
 from src.utils.time import FileWatch
 from src.utils.logger import INFO_WORKER
 from src.evaluate import parse_mol_tokens, parse_mol
-from src.evaluate import eval_vina, eval_qvina2
+from src.evaluate import eval_vina, eval_qvina3
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 # arguments
@@ -59,6 +59,7 @@ parser.add_argument('--max-step', type=int, default=1000)
 parser.add_argument('--finetune-save-dir', required=True)
 parser.add_argument('--pocket-coord-heavy', action='store_true')
 parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', 'qvina', 'dummy'], default='min_vina')
+parser.add_argument('--path-to-qvina', default=f"{WORKDIR}/github/qvina/bin/qvina02")
 parser.add_argument('--generate-per-sample', type=int, default=1)
 ## finetune
 parser.add_argument('--finetune-name', required=True)
@@ -301,7 +302,7 @@ match args.target:
         error_score = 0
     case 'qvina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
-            score = eval_qvina2(lig_path, rec_path, out_dir, timeout=60)
+            score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, path_to_qvina=args.path_to_qvina)
             if score is None:
                 return np.nan
             return -score

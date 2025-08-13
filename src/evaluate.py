@@ -527,7 +527,7 @@ def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=Non
 
         mol = next(pybel.readfile('sdf', f"{out_dir}/lig.sdf"))
         mol.write('pdbqt', f"{out_dir}/lig.pdbqt", overwrite=True)
-
+        print(f"{path_to_qvina} --receptor rec.pdbqt --ligand lig.pdbqt --center_x {center[0]:.4f} --center_y {center[1]:.4f} --center_z {center[2]:.4f} --size_x 20 --size_y 20 --size_z 20 --exhaustiveness {exhaustiveness}")
         prepare_receptor4_func(['-r', rec_path, '-o', f'{out_dir}/rec.pdbqt'])
         commands = f"""cd {out_dir} && {path_to_qvina} --receptor rec.pdbqt --ligand lig.pdbqt --center_x {center[0]:.4f} --center_y {center[1]:.4f} --center_z {center[2]:.4f} --size_x 20 --size_y 20 --size_z 20 --exhaustiveness {exhaustiveness}
         """
