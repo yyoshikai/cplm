@@ -12,6 +12,7 @@ from rdkit.Chem.rdMolAlign import CalcRMS
 from vina import Vina
 from openbabel import pybel
 from AutoDockTools.Utilities24 import prepare_receptor4
+from .prepare_receptor4 import main as prepare_receptor4_func
 logger = getLogger(__name__)
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 
@@ -450,6 +451,85 @@ python {prepare_receptor4.__file__} -r {rec_path} -o rec.pdbqt
 --center_z {center[2]:.4f} \
 --size_x 20 --size_y 20 --size_z 20 \
 --exhaustiveness {exhaustiveness}
+        """
+
+        docked_sdf_path = os.path.join(out_dir, 'lig_out.sdf')
+
+        proc = subprocess.Popen(
+            '/bin/bash', 
+            shell=False, 
+            stdin=subprocess.PIPE, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE
+        )
+
+        proc.stdin.write(commands.encode('utf-8'))
+        proc.stdin.close()
+        start = time()
+        while proc.poll() is None:
+            if timeout is not None and time()-start > timeout:
+                print(f"qvina subprocess reached timeout({timeout})", flush=True)
+                return None
+            
+        mol = next(pybel.readfile('pdbqt', F"{out_dir}/lig_out.pdbqt"))
+        mol.addh()
+        mol.write('sdf', f"{out_dir}/lig_out.sdf", overwrite=True)    
+
+
+        results = parse_qvina_outputs(docked_sdf_path, noH_rdmol)
+        return results[0]['affinity']
+    except:
+        logger.info('[Error] Vina error: %s' % docked_sdf_path)
+        logger.info(f"output: ")
+        logger.info(proc.stdout.read().decode())
+        logger.info(f"stderr:")
+        logger.info(proc.stderr.read().decode())
+        return None
+
+
+def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, path_to_qvina=f"{WORKDIR}/github/qvina/bin/qvina02"):
+    """
+    Pocket2Molの実装から変更
+    """
+    logger = getLogger('eval_qvina')
+    try:
+        out_dir = os.path.realpath(out_dir)
+        os.makedirs(out_dir, exist_ok=True)
+
+        rec_path = os.path.realpath(rec_path)
+
+        mol = list(Chem.SDMolSupplier(lig_path))[lig_idx]
+        mol = Chem.AddHs(mol, addCoords=True)
+        if use_uff:
+            try:
+                not_converge = 10
+                while not_converge > 0:
+                    flag = UFFOptimizeMolecule(mol)
+                    not_converge = min(not_converge - 1, flag * 10)
+            except RuntimeError:
+                pass
+        sdf_writer = Chem.SDWriter(f"{out_dir}/lig.sdf")
+        sdf_writer.write(mol)
+        sdf_writer.close()
+        noH_rdmol = Chem.RemoveHs(mol)
+
+
+        pos = mol.GetConformer(0).GetPositions()
+        if center is None:
+            center = (pos.max(0) + pos.min(0)) / 2
+        else:
+            center = center
+
+        proc = None
+        results = None
+        docked_sdf_path = None
+
+
+        mol = next(pybel.readfile('sdf', f"{out_dir}/lig.sdf"))
+        mol.write('pdbqt', f"{out_dir}/lig.pdbqt", overwrite=True)
+
+        prepare_receptor4_func(['-r', rec_path, '-o', f'{out_dir}/rec.pdbqt'])
+        commands = f"""cd {out_dir} && {path_to_qvina} --receptor rec.pdbqt --ligand lig.pdbqt --center_x {center[0]:.4f} --center_y {center[1]:.4f} --center_z {center[2]:.4f} --size_x 20 --size_y 20 --size_z 20 --exhaustiveness {exhaustiveness}
         """
 
         docked_sdf_path = os.path.join(out_dir, 'lig_out.sdf')
