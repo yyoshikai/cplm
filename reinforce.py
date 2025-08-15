@@ -422,17 +422,17 @@ for step in range(args.max_step):
         end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
         weight[end_count[:-1] > 0] = 0.0
 
-    ## Log output
-    if step < log_sample_step:
-        for idx in np.arange(B):
-            context = voc_encoder.decode(batch[:,idx])
-            output = voc_encoder.decode(outputs[idx])
-            logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
-        ## check distribution
-        if rank == dist_size-1:
-            logger.log(INFO_WORKER, f"step {step}{all_idxs=}")
-            logger.log(INFO_WORKER, f"step {step}{files=}")
-            logger.log(INFO_WORKER, f"step {step}{centers=}")
+        ## Log output
+        if step < log_sample_step:
+            for idx in np.arange(B):
+                context = voc_encoder.decode(batch[:,idx])
+                output = voc_encoder.decode(outputs[idx])
+                logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
+            ## check distribution
+            if rank == dist_size-1:
+                logger.log(INFO_WORKER, f"step {step}{all_idxs=}")
+                logger.log(INFO_WORKER, f"step {step}{files=}")
+                logger.log(INFO_WORKER, f"step {step}{centers=}")
                 
 
         ## Get score
