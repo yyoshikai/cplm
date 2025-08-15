@@ -99,16 +99,15 @@ class wtqdm(tqdm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.name2time = defaultdict(float)
-        self.cur_job = None
-        self.start_ = None
+        self.cur_job = 'after_init'
+        self.start_ = time()
 
     def __iter__(self):
         if self.disable:
             yield from self.iterable
             return
 
-        self.cur_job = 'first_iter_data'
-        self.start_ = time()
+        self.start('first_iter_data')
         for item in super().__iter__():
             self.start('after_iter')
             yield item
