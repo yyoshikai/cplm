@@ -32,7 +32,6 @@ from src.utils.time import FileWatch
 from src.utils.logger import INFO_WORKER
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.evaluate import eval_vina, eval_qvina3
-from src.utils.time import wtqdm
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 # arguments
@@ -75,7 +74,6 @@ parser.add_argument('--reset-nan-grad', action='store_true')
 parser.add_argument('--gc', action='store_true')
 parser.add_argument('--use-categorical', action='store_true')
 parser.add_argument('--tqdm-generate', action='store_true')
-parser.add_argument('--tqdm', action='store_true')
 ## record
 parser.add_argument('--record-opt-step', type=int)
 parser.add_argument('--tokenizer-log-interval', type=int)
@@ -130,6 +128,7 @@ if is_main:
     os.makedirs(f"{result_dir}/errors", exist_ok=True)
     os.makedirs(f"{result_dir}/scores", exist_ok=True)
     os.makedirs(f"{result_dir}/cplm", exist_ok=True)
+    os.makedirs(f"{result_dir}/batches", exist_ok=True)
     shutil.copy2('reinforce.py', f"{result_dir}/cplm/reinforce.py")
     shutil.copytree('src', f"{result_dir}/cplm/src")
 os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
@@ -278,12 +277,6 @@ train_iter = ReinforceIter(train_data, args.num_workers,
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
     voc_encoder.pad_token, args.generate_per_sample, args.fix_pocket, device, MAIN_RANK)
 
-## Define pbar to input for eval_qvina
-pbar = wtqdm(total=args.max_step) if args.tqdm else None
-def start(name):
-    if pbar is not None:
-        pbar.start(name)
-
 ## Scoring function 最大化したいものとする
 match args.target:
     case 'min_vina':
@@ -309,8 +302,7 @@ match args.target:
         error_score = 0
     case 'qvina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
-            score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, path_to_qvina=args.path_to_qvina, 
-                    pbar=pbar if args.num_workers >= 2 else None)
+            score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, path_to_qvina=args.path_to_qvina)
             if score is None:
                 return np.nan
             return -score
@@ -381,6 +373,8 @@ match args.loss_scale:
 scheduler = get_scheduler(optimizer, args.scheduler, 55000)
 
 ## records
+os.makedirs(f"{result_dir}/times", exist_ok=True)
+watch = FileWatch(f"{result_dir}/times/{rank}.csv", 10000)
 steps = defaultdict(list)
 errorss = []
 scoress = []
@@ -396,31 +390,33 @@ if is_main:
 logger.info("Training started.")
 for step in range(args.max_step): 
 
-    start('data')
-    all_idxs, files, centers, rotations, batch = train_iter.__next__()
-    batch = batch.to(device)
-    centers = centers.cpu().numpy()
-    rotations = rotations.cpu().numpy()
-    steps['batch_size'].append(batch.shape[1])
-    steps['max_len'].append(batch.shape[0])
+    # get batch
+    with watch.hold('data'):
+        all_idxs, files, centers, rotations, batch = train_iter.__next__()
+        batch = batch.to(device)
+        centers = centers.cpu().numpy()
+        rotations = rotations.cpu().numpy()
+        steps['batch_size'].append(batch.shape[1])
+        steps['max_len'].append(batch.shape[0])
+        torch.save(batch.cpu(), f"{result_dir}/batches/{step}.pt") # TODO: remove batch
 
     # forward
     with torch.autocast('cuda', dtype=torch.bfloat16):
 
         ## generate sample
-        start('generate')
-        model.eval()
-        with torch.inference_mode():
-            outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
+        with watch.hold('generate'):
+            model.eval()
+            with torch.inference_mode():
+                outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
 
-        out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
-        Lo, B = out_batch.shape
-        dtype = torch.float
-        weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
-        lig_count = torch.cumsum(out_batch == voc_encoder.voc2i['[LIGAND]'], dim=0) # [L, B]
-        weight[lig_count[:-1] > 0] = 1.0
-        end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
-        weight[end_count[:-1] > 0] = 0.0
+            out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
+            Lo, B = out_batch.shape
+            dtype = torch.float
+            weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
+            lig_count = torch.cumsum(out_batch == voc_encoder.voc2i['[LIGAND]'], dim=0) # [L, B]
+            weight[lig_count[:-1] > 0] = 1.0
+            end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
+            weight[end_count[:-1] > 0] = 0.0
 
         ## Log output
         if step < log_sample_step:
@@ -443,129 +439,127 @@ for step in range(args.max_step):
             valid_scores = []
             for idx in range(len(outputs)):
 
-                start('prepare_score')
-                center = centers[idx]
-                rotation = rotations[idx]
-                if do_save:
-                    eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
-                    os.makedirs(eval_dir, exist_ok=True)
-                else:
-                    eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
+                with watch.hold('prepare_score'):
+                    center = centers[idx]
+                    rotation = rotations[idx]
+                    if do_save:
+                        eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
+                        os.makedirs(eval_dir, exist_ok=True)
+                    else:
+                        eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
 
-                score = np.nan
-                out_tokens = voc_encoder.decode(outputs[idx].tolist())
+                    score = np.nan
+                    out_tokens = voc_encoder.decode(outputs[idx].tolist())
 
-                if do_save:
-                    info = {**files.iloc[idx].to_dict(), 'idx': idx, 
-                            'center': center.tolist(), 'rotation': rotation.tolist()}
-                    with open(f"{eval_dir}/info.yaml", 'w') as f:
-                        yaml.dump(info, f)
-                    with open(f"{eval_dir}/tokens.txt", 'w') as f:
-                        f.write(','.join(out_tokens)+'\n')
-                error, smiles, coords = parse_mol_tokens(out_tokens)
-                
-                if error != '':
+                    if do_save:
+                        info = {**files.iloc[idx].to_dict(), 'idx': idx, 
+                                'center': center.tolist(), 'rotation': rotation.tolist()}
+                        with open(f"{eval_dir}/info.yaml", 'w') as f:
+                            yaml.dump(info, f)
+                        with open(f"{eval_dir}/tokens.txt", 'w') as f:
+                            f.write(','.join(out_tokens)+'\n')
+                    error, smiles, coords = parse_mol_tokens(out_tokens)
+                    
+                    if error != '':
+                        errors.append(error)
+                        continue
+                    
+                    rotation_inv = np.linalg.inv(rotation)
+                    coords = np.matmul(coords, rotation_inv) + center
+                    error, mol = parse_mol(smiles, coords)
                     errors.append(error)
-                    continue
-                
-                rotation_inv = np.linalg.inv(rotation)
-                coords = np.matmul(coords, rotation_inv) + center
-                error, mol = parse_mol(smiles, coords)
-                errors.append(error)
 
-                if error != '':
-                    continue
-                
-                with open(f"{eval_dir}/lig.sdf", 'w') as f:
-                    f.write(Chem.MolToMolBlock(mol))
-                dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
-                
-                lig_path = f"{eval_dir}/lig.sdf"
-                rec_path = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}"
+                    if error != '':
+                        continue
+                    
+                    with open(f"{eval_dir}/lig.sdf", 'w') as f:
+                        f.write(Chem.MolToMolBlock(mol))
+                    dname, lig_name, protein_name, sdf_idx = files.iloc[idx].tolist()
+                    
+                    lig_path = f"{eval_dir}/lig.sdf"
+                    rec_path = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020/{dname}/{protein_name}"
+                    if args.num_score_workers >= 2:
+                        futures.append(e.submit(get_score, 
+                                lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
+                    else:
+                        valid_scores.append(get_score(lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
+            with watch.hold('wait_score'):
                 if args.num_score_workers >= 2:
-                    futures.append(e.submit(get_score, 
-                            lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
+                    valid_scores = np.array([f.result() for f in futures])
                 else:
-                    start('get_score')
-                    valid_scores.append(get_score(lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
+                    valid_scores = np.array(valid_scores)
 
-        
-            if args.num_score_workers >= 2:
-                start('wait_score')
-                valid_scores = np.array([f.result() for f in futures])
-            else:
-                valid_scores = np.array(valid_scores)
+        with watch.hold('modify_score'):
+            errors = np.array(errors)
+            scores = np.full(len(errors), np.nan)
+            scores[errors == ""] = valid_scores
+            errors[errors == ""][np.isnan(valid_scores)] = 'VINA'
 
-        start('modify_score')
-        errors = np.array(errors)
-        scores = np.full(len(errors), np.nan)
-        scores[errors == ""] = valid_scores
-        errors[errors == ""][np.isnan(valid_scores)] = 'VINA'
+            errorss.append(errors)
+            scores = torch.tensor(scores, device=device, dtype=torch.float)
+            if not args.ignore_error:
+                scores[torch.isnan(scores)] = error_score
+            torch.clamp_(scores, min=args.min_score)
+            scoress.append(scores.cpu().tolist())
 
-        errorss.append(errors)
-        scores = torch.tensor(scores, device=device, dtype=torch.float)
-        if not args.ignore_error:
-            scores[torch.isnan(scores)] = error_score
-        torch.clamp_(scores, min=args.min_score)
-        scoress.append(scores.cpu().tolist())
+            ## gather & normalize score
+            all_scores = [torch.zeros(args.batch_size, dtype=torch.float, device=device)
+                    for _ in range(dist_size)]
+            dist.all_gather(all_scores, scores)
+            all_scores = torch.cat(all_scores)
+            
+            match args.reward_scale:
+                case 'none': 
+                    pass
+                case 'all_mean':
+                    if torch.any(torch.isfinite(all_scores)):
+                        scores = scores - torch.nanmean(all_scores)
+                case 'sample_mean':
+                    idxs = all_idxs[rank*args.batch_size:(rank+1)*args.batch_size]
+                    unique_idxs = idxs.unique()
+                    for uidx in unique_idxs:
+                        if torch.any(torch.isfinite(all_scores[all_idxs == uidx])):
+                            scores[idxs == uidx] -= torch.nanmean(all_scores[all_idxs == uidx])
+                case 'rank_mean':
+                    if torch.any(torch.isfinite(scores)):
+                        scores = scores - torch.nanmean(scores)
+                case 'rank_mean_std':
+                    if torch.any(torch.isfinite(scores)):
+                        scores = scores - torch.nanmean(scores)
+                        if torch.sum(torch.isfinite(scores)) >= 2:
+                            scores = scores / (torch.std(scores[torch.isfinite(scores)])+1.0e-8)
+            if args.ignore_error:
+                scores[torch.isnan(scores)] = 0.0
 
-        ## gather & normalize score
-        all_scores = [torch.zeros(args.batch_size, dtype=torch.float, device=device)
-                for _ in range(dist_size)]
-        dist.all_gather(all_scores, scores)
-        all_scores = torch.cat(all_scores)
-        
-        match args.reward_scale:
-            case 'none': 
-                pass
-            case 'all_mean':
-                if torch.any(torch.isfinite(all_scores)):
-                    scores = scores - torch.nanmean(all_scores)
-            case 'sample_mean':
-                idxs = all_idxs[rank*args.batch_size:(rank+1)*args.batch_size]
-                unique_idxs = idxs.unique()
-                for uidx in unique_idxs:
-                    if torch.any(torch.isfinite(all_scores[all_idxs == uidx])):
-                        scores[idxs == uidx] -= torch.nanmean(all_scores[all_idxs == uidx])
-            case 'rank_mean':
-                if torch.any(torch.isfinite(scores)):
-                    scores = scores - torch.nanmean(scores)
-            case 'rank_mean_std':
-                if torch.any(torch.isfinite(scores)):
-                    scores = scores - torch.nanmean(scores)
-                    if torch.sum(torch.isfinite(scores)) >= 2:
-                        scores = scores / (torch.std(scores[torch.isfinite(scores)])+1.0e-8)
-        if args.ignore_error:
-            scores[torch.isnan(scores)] = 0.0
         if step < 5:
             logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
         ## Get prob & reward loss
-        start('forward')
-        model.train()
-        logits = model(out_batch[:-1]) # [Lo-1, B, T]
-        if args.use_categorical:
-            cat = Categorical(logits=logits) # ~[Lo-1, B]
-            log_probs = cat.log_prob(out_batch[1:]) # [Lo-1, B]
-        else:
-            log_probs_all = F.log_softmax(logits, dim=-1) # [Lo-1, B, N]
-            log_probs = torch.gather(log_probs_all, dim=-1, index=out_batch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
-        reward_loss = torch.sum(-scores*(log_probs*weight).sum(dim=0)/weight.sum(dim=0))
+        with watch.hold('loss'):
+            model.train()
+            logits = model(out_batch[:-1]) # [Lo-1, B, T]
+            if args.use_categorical:
+                cat = Categorical(logits=logits) # ~[Lo-1, B]
+                log_probs = cat.log_prob(out_batch[1:]) # [Lo-1, B]
+            else:
+                log_probs_all = F.log_softmax(logits, dim=-1) # [Lo-1, B, N]
+                log_probs = torch.gather(log_probs_all, dim=-1, index=out_batch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
+            reward_loss = torch.sum(-scores*(log_probs*weight).sum(dim=0)/weight.sum(dim=0))
 
-        ## KL loss
-        log_probs_all = F.log_softmax(logits, dim=-1)
-        with torch.inference_mode():
-            init_logits = init_model(out_batch[:-1]) # [L, B, N]
-            init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
-        kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
-            log_target=True) # [Lo-1, B, N]
-        kl_loss = kl_loss.sum(dim=-1) # [Lo-1, B]
-        kl_loss = torch.sum(kl_loss*weight)
-        
-        loss = (reward_loss + kl_loss * args.alpha) * loss_scale
+            ## KL loss
+            log_probs_all = F.log_softmax(logits, dim=-1)
+            with torch.inference_mode():
+                init_logits = init_model(out_batch[:-1]) # [L, B, N]
+                init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
+            kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
+                log_target=True) # [Lo-1, B, N]
+            kl_loss = kl_loss.sum(dim=-1) # [Lo-1, B]
+            kl_loss = torch.sum(kl_loss*weight)
+            
+            loss = (reward_loss + kl_loss * args.alpha) * loss_scale
 
-    start('backward')
-    loss.backward()
+    with watch.hold('backward'):
+        loss.backward()
     steps['reward_loss'].append(reward_loss.item())
     steps['kl_loss'].append(kl_loss.item())
 
@@ -599,12 +593,12 @@ for step in range(args.max_step):
             ## reset grad
             optimizer.zero_grad()
 
-    start('optimize')
-    if args.clip_grad_value is not None:
-        torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
-    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
-    optimizer.step()
-    optimizer.zero_grad()
+    with watch.hold('optimize'):
+        if args.clip_grad_value is not None:
+            torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+        optimizer.step()
+        optimizer.zero_grad()
     step += 1
     steps['lr'].append(scheduler.get_last_lr()[0])
     steps['memory'].append(psutil.virtual_memory().used/(2**30))
@@ -614,6 +608,7 @@ for step in range(args.max_step):
         pd.DataFrame(steps).to_csv(f"{result_dir}/steps/{rank}.csv")
         pd.DataFrame(scoress).to_csv(f"{result_dir}/scores/{rank}.csv")
         pd.DataFrame(errorss).to_csv(f"{result_dir}/errors/{rank}.csv")
+        watch.flush()
         if is_main:
             torch.save(model.state_dict(), f"{result_dir}/models/{step}.pth")
             cleardir(f"{result_dir}/optimizers")
@@ -626,9 +621,6 @@ for step in range(args.max_step):
 
     if step == log_sample_step:
         getLogger('rdkit').propagate = False
-
-    if pbar is not None:
-        pbar.update()
     
 logger.info("Training finished!")
 
