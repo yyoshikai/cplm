@@ -21,10 +21,8 @@ from ..utils.utils import CompressedArray
 
 @dataclass
 class Protein:
-    atoms: list[str]
+    atoms: np.ndarray
     coord: np.ndarray
-
-
 
 class CDDataset2(WrapDataset[tuple[Protein, Chem.Mol, float]]):
     def __init__(self, save_dir: str, out_filename: bool=False):
@@ -56,6 +54,120 @@ class CDDataset2(WrapDataset[tuple[Protein, Chem.Mol, float]]):
         if self.out_filename:
             output += ({key: self.df[key][idx] for key in self.df}, )
         return output
+    
+    
+    @classmethod
+    def preprocess(cls, args, cddir, save_dir, radius, 
+            ends=['lig_tt_docked.sdf', 'lig_tt_min.sdf'], 
+            map_size: int=int(100e9), test=False, rank=None, size=None):
+        if size is not None:
+            assert rank is not None
+            save_dir = f"{save_dir}/{rank}"
+        os.makedirs(save_dir, exist_ok=True)
+        add_file_handler(getLogger(), f"{save_dir}/root.log", level=logging.INFO)
+        ignore_warning()
+        logger = get_logger(f"{cls.__name__}.preprocess")
+        ends = tuple(ends)
+        with open(f"{save_dir}/args.yaml", 'w') as f:
+            yaml.dump(args, f)
+        env, txn = new_lmdb(f"{save_dir}/main.lmdb", map_size=map_size)
+        n_invalid = 0
+        n_far = 0
+        idx = 0
+        logger.info("Processing...")
+        lig_idx = None
+        if test:
+            protein2n = defaultdict(int)
+        data_dnames = []
+        data_lig_names = []
+        data_protein_names = []
+        data_sdf_idxs = []
+        with open("/workspace/cheminfodata/crossdocked/projects/survey/files/dirs.txt") as fd:
+            dnames = sorted(fd.read().splitlines())
+            if test: dnames = dnames[:20]
+            if size is not None:
+                dnames = dnames[rank::size]
+            for idir, dname in enumerate(dnames):
+                with open(f"/workspace/cheminfodata/crossdocked/projects/survey/files/{dname}.txt") as ff:
+                    for basename in sorted(ff.read().splitlines()):
+                        if not basename.endswith(ends): continue
+
+                        protein_name = basename.split('_rec_')[0]
+                        protein_agroup = parsePDB(f"{cddir}/{dname}/{protein_name}_rec.pdb")
+                        protein_contact = Contacts(protein_agroup)
+
+                        # for debug
+                        if test:
+                            if protein2n[protein_name] >= 10:
+                                continue
+                        
+                        lig_sup = Chem.SDMolSupplier(f"{cddir}/{dname}/{basename}", removeHs=False)
+                        t_addh = 0
+                        t_prody = 0
+                        t_data = 0
+                        for lig_idx, lig_mol in enumerate(lig_sup):
+                            if lig_mol is None:
+                                n_invalid+=1
+                                continue
+                            try:
+                                # 水素付加
+                                start = time()
+                                lig_mol = Chem.AddHs(lig_mol, addCoords=True)
+                                t_addh += time()-start
+
+                                # ポケットをProDyで抽出
+                                start = time()
+                                lig_pdb = Chem.MolToPDBBlock(lig_mol)
+                                lig_agroup = parsePDBStream(io.StringIO(lig_pdb))
+                                pocket = protein_contact.select(radius, lig_agroup)
+                                if pocket is None:
+                                    n_far += 1
+                                    continue
+                                t_prody += time() - start
+
+                                # データ作成
+                                start = time()
+                                pocket_atoms = pocket.getData('name')
+                                pocket_coord = pocket.getCoords()
+                                data = {
+                                    'lig_mol': lig_mol,  
+                                    'score': lig_mol.GetProp('minimizedAffinity'),
+                                    'pocket_atoms': pocket_atoms,
+                                    'pocket_coordinate': pocket_coord
+                                }
+                                data_dnames.append(dname)
+                                data_lig_names.append(basename)
+                                data_protein_names.append(f"{protein_name}_rec.pdb")
+                                data_sdf_idxs.append(lig_idx)
+                                txn.put(str(idx).encode('ascii'), pickle.dumps(data))
+                                idx += 1
+                                t_data += time() - start
+                                
+                                if test:
+                                    protein2n[protein_name] += 1
+                                    if protein2n[protein_name] >= 10:
+                                        break
+
+                            except Exception as e:
+                                logger.error(f"Error at {dname, basename, lig_idx}: {e}")
+                                logger.error(f"{lig_mol=}")
+                                logger.error(f"{lig_pdb=}")
+                                logger.error(f"{lig_agroup=}")
+                                logger.error(f"{pocket=}")
+                                logger.error(f"{protein_agroup=}")
+                                logger.error(f"{protein_contact=}")
+                                raise e
+                            
+                        lig_idx = None
+                logger.info(f'finished: ({idir}){dname}')
+        txn.commit()
+        env.close()
+        df = pd.DataFrame({'dname': data_dnames, 'lig_name': data_lig_names, 
+            'protein_name': data_protein_names, 'sdf_idx': data_sdf_idxs})
+        df.to_csv(f"{save_dir}/filenames.csv.gz", index_label='idx')
+        logger.info(f"# of data: {idx}")
+        logger.info(f"# of invalid mols: {n_invalid}")
+        logger.info(f"# of far away ligand: {n_far}")
         
 class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState,
@@ -187,118 +299,6 @@ class CDDataset(Dataset):
     def __len__(self):
         return len(self.lmdb_dataset)
 
-    @classmethod
-    def preprocess(cls, args, cddir, save_dir, radius, 
-            ends=['lig_tt_docked.sdf', 'lig_tt_min.sdf'], 
-            map_size: int=int(100e9), test=False, rank=None, size=None):
-        if size is not None:
-            assert rank is not None
-            save_dir = f"{save_dir}/{rank}"
-        os.makedirs(save_dir, exist_ok=True)
-        add_file_handler(getLogger(), f"{save_dir}/root.log", level=logging.INFO)
-        ignore_warning()
-        logger = get_logger(f"{cls.__name__}.preprocess")
-        ends = tuple(ends)
-        with open(f"{save_dir}/args.yaml", 'w') as f:
-            yaml.dump(args, f)
-        env, txn = new_lmdb(f"{save_dir}/main.lmdb", map_size=map_size)
-        n_invalid = 0
-        n_far = 0
-        idx = 0
-        logger.info("Processing...")
-        lig_idx = None
-        if test:
-            protein2n = defaultdict(int)
-        data_dnames = []
-        data_lig_names = []
-        data_protein_names = []
-        data_sdf_idxs = []
-        with open("/workspace/cheminfodata/crossdocked/projects/survey/files/dirs.txt") as fd:
-            dnames = sorted(fd.read().splitlines())
-            if test: dnames = dnames[:20]
-            if size is not None:
-                dnames = dnames[rank::size]
-            for idir, dname in enumerate(dnames):
-                with open(f"/workspace/cheminfodata/crossdocked/projects/survey/files/{dname}.txt") as ff:
-                    for basename in sorted(ff.read().splitlines()):
-                        if not basename.endswith(ends): continue
-
-                        protein_name = basename.split('_rec_')[0]
-                        protein_agroup = parsePDB(f"{cddir}/{dname}/{protein_name}_rec.pdb")
-                        protein_contact = Contacts(protein_agroup)
-
-                        # for debug
-                        if test:
-                            if protein2n[protein_name] >= 10:
-                                continue
-                        
-                        lig_sup = Chem.SDMolSupplier(f"{cddir}/{dname}/{basename}", removeHs=False)
-                        t_addh = 0
-                        t_prody = 0
-                        t_data = 0
-                        for lig_idx, lig_mol in enumerate(lig_sup):
-                            if lig_mol is None:
-                                n_invalid+=1
-                                continue
-                            try:
-                                # 水素付加
-                                start = time()
-                                lig_mol = Chem.AddHs(lig_mol, addCoords=True)
-                                t_addh += time()-start
-
-                                # ポケットをProDyで抽出
-                                start = time()
-                                lig_pdb = Chem.MolToPDBBlock(lig_mol)
-                                lig_agroup = parsePDBStream(io.StringIO(lig_pdb))
-                                pocket = protein_contact.select(radius, lig_agroup)
-                                if pocket is None:
-                                    n_far += 1
-                                    continue
-                                t_prody += time() - start
-
-                                # データ作成
-                                start = time()
-                                pocket_atoms = pocket.getData('name')
-                                pocket_coord = pocket.getCoords()
-                                data = {
-                                    'lig_mol': lig_mol,  
-                                    'score': lig_mol.GetProp('minimizedAffinity'),
-                                    'pocket_atoms': pocket_atoms,
-                                    'pocket_coordinate': pocket_coord
-                                }
-                                data_dnames.append(dname)
-                                data_lig_names.append(basename)
-                                data_protein_names.append(f"{protein_name}_rec.pdb")
-                                data_sdf_idxs.append(lig_idx)
-                                txn.put(str(idx).encode('ascii'), pickle.dumps(data))
-                                idx += 1
-                                t_data += time() - start
-                                
-                                if test:
-                                    protein2n[protein_name] += 1
-                                    if protein2n[protein_name] >= 10:
-                                        break
-
-                            except Exception as e:
-                                logger.error(f"Error at {dname, basename, lig_idx}: {e}")
-                                logger.error(f"{lig_mol=}")
-                                logger.error(f"{lig_pdb=}")
-                                logger.error(f"{lig_agroup=}")
-                                logger.error(f"{pocket=}")
-                                logger.error(f"{protein_agroup=}")
-                                logger.error(f"{protein_contact=}")
-                                raise e
-                            
-                        lig_idx = None
-                logger.info(f'finished: ({idir}){dname}')
-        txn.commit()
-        env.close()
-        df = pd.DataFrame({'dname': data_dnames, 'lig_name': data_lig_names, 
-            'protein_name': data_protein_names, 'sdf_idx': data_sdf_idxs})
-        df.to_csv(f"{save_dir}/filenames.csv.gz", index_label='idx')
-        logger.info(f"# of data: {idx}")
-        logger.info(f"# of invalid mols: {n_invalid}")
-        logger.info(f"# of far away ligand: {n_far}")
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):
