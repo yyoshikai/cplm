@@ -58,7 +58,7 @@ class CDDataset2(Dataset):
 
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, cddata, seed:int=0,
+    def __init__(self, protein, lig, score, seed:int=0,
             coord_center: str='ligand', random_rotate: bool=True,
             pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
             pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
@@ -70,7 +70,9 @@ class CDDataset(Dataset):
                 coord_heavy: bool=False, coord_h: bool = False
         BindGPTも↑と同じ。
         """
-        self.cddata = cddata
+        self.protein = protein
+        self.lig = lig
+        self.score = score
         self.rstate = np.random.RandomState(seed)
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
@@ -84,7 +86,10 @@ class CDDataset(Dataset):
         assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
         
     def __getitem__(self, idx):
-        protein, lig_mol, score = self.cddata[idx]
+        # protein, lig_mol, score = self.cddata[idx]
+        protein = self.protein[idx]
+        lig_mol = self.lig[idx]
+        score = self.score[idx]
         pocket_atoms = protein.atoms
         pocket_coord = protein.coord
         
