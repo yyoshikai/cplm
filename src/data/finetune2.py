@@ -24,7 +24,7 @@ class Protein:
     atoms: np.ndarray
     coord: np.ndarray
 
-class CDDataset2(WrapDataset[tuple[Protein, Chem.Mol, float]]):
+class CDDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
     def __init__(self, save_dir: str, out_filename: bool=False):
         self.lmdb_dataset = PickleLMDBDataset(f"{save_dir}/main.lmdb", idx_to_key='str')
         super().__init__(self.lmdb_dataset)
@@ -259,46 +259,6 @@ class RandomRotateDataset(WrapDataset[tuple[np.ndarray, ...]]):
         rotation_matrix = get_random_rotation_matrix(self.rstate)
         return (rotation_matrix, )+tuple(np.matmul(coord_data[idx], rotation_matrix) 
                 for coord_data in self.coord_datas)
-
-
-class CDDataset(Dataset):
-    logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, protein_atoms, protein_coord, lig_smi, lig_coord, center, score, rotation_matrix, rstate,
-            coord_center: str='ligand', random_rotate: bool=True):
-        """
-        train.py: 
-            mol: atom_h=True, coord_h=True, 
-            pocket: heavy_atom: bool = True, atom_h: bool = False,
-                coord_heavy: bool=False, coord_h: bool = False
-        BindGPTも↑と同じ。
-        """
-        self.protein_atoms = protein_atoms
-        self.protein_coord = protein_coord
-        self.lig_smi = lig_smi
-        self.lig_coord = lig_coord
-        self.score = score
-        self.center = center
-        self.rotation_matrix = rotation_matrix
-        self.rstate = rstate
-        self.coord_center = coord_center
-        assert self.coord_center in ['ligand', 'pocket', 'none']
-        self.random_rotate = random_rotate
-        
-    def __getitem__(self, idx):
-        score = self.score[idx]
-        lig_smi = self.lig_smi[idx]
-        lig_coord = self.lig_coord[idx]
-        pocket_atoms = self.protein_atoms[idx]
-        pocket_coord = self.protein_coord[idx]
-        center = self.center[idx]
-        rotation_matrix = self.rotation_matrix[idx]
-
-        output = (pocket_atoms, pocket_coord, lig_smi, lig_coord, score, center, rotation_matrix)
-        return output
-
-    def __len__(self):
-        return len(self.lmdb_dataset)
-
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):
