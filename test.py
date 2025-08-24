@@ -15,7 +15,7 @@ cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
 os.makedirs("items/ref", exist_ok=True)
 for i in range(3):
     with open(f"items/ref/{i}.pkl", 'wb') as f:
-        pickle.dump(cddata[0], f)
+        pickle.dump(cddata[i], f)
 
 # ref
 import sys, os, pickle
@@ -41,6 +41,6 @@ cddata = CDDataset(protein, lig, score, rstate, pocket_coord_heavy=args.pocket_c
 os.makedirs("items/mod", exist_ok=True)
 for i in range(3):
     with open(f"items/mod/{i}.pkl", 'wb') as f:
-        pickle.dump(cddata[0], f)
+        pickle.dump(cddata[i], f)
     assert (filecmp.cmp(f"items/ref/{i}.pkl", f"items/mod/{i}.pkl"))
     print('OK')
