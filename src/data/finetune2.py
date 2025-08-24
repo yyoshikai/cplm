@@ -58,7 +58,7 @@ class CDDataset2(Dataset):
 
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, protein, lig, score, seed:int=0,
+    def __init__(self, protein, lig, score, rstate,
             coord_center: str='ligand', random_rotate: bool=True,
             pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
             pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
@@ -73,7 +73,7 @@ class CDDataset(Dataset):
         self.protein = protein
         self.lig = lig
         self.score = score
-        self.rstate = np.random.RandomState(seed)
+        self.rstate = rstate
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
         self.random_rotate = random_rotate

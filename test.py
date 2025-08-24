@@ -22,6 +22,7 @@ import sys, os, pickle
 from addict import Dict
 import yaml
 import filecmp
+import numpy as np
 sys.path.append('/workspace/cplm')
 from src.data.finetune2 import CDDataset2, CDDataset
 from src.data import untuple_dataset
@@ -30,9 +31,10 @@ sdir = "/workspace/cplm/finetune/results/250628_mamba"
 with open(f"{sdir}/config.yaml") as f:
     args = Dict(yaml.safe_load(f))
 args.finetune_save_dir = "/workspace/cplm/ssd/preprocess/results/finetune/r4_all"
+rstate = np.random.RandomState(args.seed)
 cddata = CDDataset2(args.finetune_save_dir)
 protein, lig, score = untuple_dataset(cddata, 3)
-cddata = CDDataset(protein, lig, score, args.seed, mol_atom_h=True,
+cddata = CDDataset(protein, lig, score, rstate, mol_atom_h=True,
         mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
 
 os.makedirs("items/mod", exist_ok=True)
