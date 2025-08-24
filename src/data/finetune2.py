@@ -86,12 +86,8 @@ class CDDataset(Dataset):
         assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
         
     def __getitem__(self, idx):
-        # protein, lig_mol, score = self.cddata[idx]
-        protein = self.protein[idx]
         lig_mol = self.lig[idx]
         score = self.score[idx]
-        pocket_atoms = protein.atoms
-        pocket_coord = protein.coord
         
         ## randomize
         nums = np.arange(lig_mol.GetNumAtoms())
@@ -113,6 +109,9 @@ class CDDataset(Dataset):
 
 
         ## calc mask
+        protein = self.protein[idx]
+        pocket_atoms = protein.atoms
+        pocket_coord = protein.coord
         is_ca = pocket_atoms == 'CA'
         is_h = slice_str(pocket_atoms, 1) == 'H'
         is_heavy = (~is_ca)&(~is_h)
