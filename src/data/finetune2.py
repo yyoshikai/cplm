@@ -90,7 +90,7 @@ class MolProcessDataset(Dataset):
 
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, protein, lig, score, rstate,
+    def __init__(self, protein, lig_smi, lig_coord, score, rstate,
             coord_center: str='ligand', random_rotate: bool=True,
             pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
             pocket_coord_heavy: bool=False, pocket_coord_h: bool=False):
@@ -102,7 +102,8 @@ class CDDataset(Dataset):
         BindGPTも↑と同じ。
         """
         self.protein = protein
-        self.lig = lig
+        self.lig_smi = lig_smi
+        self.lig_coord = lig_coord
         self.score = score
         self.rstate = rstate
         self.coord_center = coord_center
@@ -115,7 +116,8 @@ class CDDataset(Dataset):
         
     def __getitem__(self, idx):
         score = self.score[idx]
-        lig_smi, lig_coord = self.lig[idx]
+        lig_smi = self.lig_smi[idx]
+        lig_coord = self.lig_coord[idx]
 
 
         ## calc mask

@@ -36,7 +36,8 @@ cddata = CDDataset2(args.finetune_save_dir)
 protein, lig, score = untuple_dataset(cddata, 3)
 lig = MolProcessDataset(lig, rstate, mol_atom_h=True,
         mol_coord_h=True, )
-cddata = CDDataset(protein, lig, score, rstate, pocket_coord_heavy=args.pocket_coord_heavy)
+lig_smi, lig_coord = untuple_dataset(lig, 2)
+cddata = CDDataset(protein, lig_smi, lig_coord, score, rstate, pocket_coord_heavy=args.pocket_coord_heavy)
 
 os.makedirs("items/mod", exist_ok=True)
 for i in range(3):
