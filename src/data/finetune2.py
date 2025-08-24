@@ -68,6 +68,7 @@ class MolProcessDataset(Dataset):
 
         ## randomize
         nums = np.arange(lig_mol.GetNumAtoms())
+        print(f"rstate@MolProcessDataset[{idx}]={self.rstate.get_state()}")
         self.rstate.shuffle(nums)
         lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
         
