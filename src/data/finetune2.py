@@ -68,7 +68,7 @@ class MolProcessDataset(Dataset):
 
         ## randomize
         nums = np.arange(lig_mol.GetNumAtoms())
-        print(f"rstate@MolProcessDataset[{idx}]={self.rstate.get_state()[2]}")
+        # print(f"rstate@MolProcessDataset[{idx}]={self.rstate.get_state()[2]}")
         self.rstate.shuffle(nums)
         lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
         
@@ -148,7 +148,7 @@ class CDDataset(Dataset):
         pocket_coord -= center
 
         ## random rotation 250501 centerizeと順番を入れ替えた
-        print(f"rstate@CDDataset[{idx}]={self.rstate.get_state()[2]}")
+        # print(f"rstate@CDDataset[{idx}]={self.rstate.get_state()[2]}")
         if self.random_rotate:
             rotation_matrix = get_random_rotation_matrix(self.rstate)
             lig_coord = np.matmul(lig_coord, rotation_matrix)
