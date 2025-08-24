@@ -1,8 +1,9 @@
 import os, pickle, io, logging, yaml, random
 from logging import getLogger
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
-from collections import defaultdict
 from torch.utils.data import Dataset
 from time import time
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ class Protein:
 
 
 
-class CDDataset2(Dataset):
+class CDDataset2(Dataset[tuple[Protein, Chem.Mol, float]]):
     def __init__(self, save_dir: str, out_filename: bool=False):
         self.lmdb_dataset = PickleLMDBDataset(f"{save_dir}/main.lmdb", idx_to_key='str')
         self.out_filename = out_filename
@@ -54,8 +55,8 @@ class CDDataset2(Dataset):
             output += ({key: self.df[key][idx] for key in self.df}, )
         return output
         
-class MolProcessDataset(Dataset):
-    def __init__(self, mol_data: Dataset[Chem.Mol], rstate,
+class MolProcessDataset(Dataset[tuple[str, np.ndarray]]):
+    def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState,
             mol_atom_h: bool=False, mol_coord_h: bool=True):
         self.mol_data = mol_data
         self.mol_atom_h = mol_atom_h
@@ -85,43 +86,21 @@ class MolProcessDataset(Dataset):
         else:
             lig_coord = conf_pos[atom_idxs]
         return lig_smi, lig_coord
-
-
-
-class CDDataset(Dataset):
-    logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, protein, lig_smi, lig_coord, score, rstate,
-            coord_center: str='ligand', random_rotate: bool=True,
+    
+class ProteinProcessDataset(Dataset[tuple[list[str], np.ndarray]]):
+    def __init__(self, protein_data: Dataset[Protein],
             pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
             pocket_coord_heavy: bool=False, pocket_coord_h: bool=False):
-        """
-        train.py: 
-            mol: atom_h=True, coord_h=True, 
-            pocket: atom_heavy: bool = True, atom_h: bool = False,
-                coord_heavy: bool=False, coord_h: bool = False
-        BindGPTも↑と同じ。
-        """
-        self.protein = protein
-        self.lig_smi = lig_smi
-        self.lig_coord = lig_coord
-        self.score = score
-        self.rstate = rstate
-        self.coord_center = coord_center
-        assert self.coord_center in ['ligand', 'pocket', 'none']
-        self.random_rotate = random_rotate
+        self.protein_data = protein_data
         self.pocket_atom_heavy = pocket_atom_heavy
         self.pocket_atom_h = pocket_atom_h
         self.pocket_coord_heavy = pocket_coord_heavy
         self.pocket_coord_h = pocket_coord_h
-        
-    def __getitem__(self, idx):
-        score = self.score[idx]
-        lig_smi = self.lig_smi[idx]
-        lig_coord = self.lig_coord[idx]
 
+    def __getitem__(self, idx: int):
+        protein = self.protein_data[idx]
 
         ## calc mask
-        protein = self.protein[idx]
         pocket_atoms = protein.atoms
         pocket_coord = protein.coord
         is_ca = pocket_atoms == 'CA'
@@ -135,6 +114,36 @@ class CDDataset(Dataset):
         if self.pocket_coord_heavy: coord_mask |= is_heavy
         if self.pocket_coord_h: coord_mask |= is_h
         pocket_coord = pocket_coord[coord_mask]
+        return pocket_atoms, pocket_coord
+
+class CDDataset(Dataset):
+    logger = get_logger(f"{__module__}.{__qualname__}")
+    def __init__(self, protein_atoms, protein_coord, lig_smi, lig_coord, score, rstate,
+            coord_center: str='ligand', random_rotate: bool=True):
+        """
+        train.py: 
+            mol: atom_h=True, coord_h=True, 
+            pocket: atom_heavy: bool = True, atom_h: bool = False,
+                coord_heavy: bool=False, coord_h: bool = False
+        BindGPTも↑と同じ。
+        """
+        self.protein_atoms = protein_atoms
+        self.protein_coord = protein_coord
+        self.lig_smi = lig_smi
+        self.lig_coord = lig_coord
+        self.score = score
+        self.rstate = rstate
+        self.coord_center = coord_center
+        assert self.coord_center in ['ligand', 'pocket', 'none']
+        self.random_rotate = random_rotate
+        
+    def __getitem__(self, idx):
+        score = self.score[idx]
+        lig_smi = self.lig_smi[idx]
+        lig_coord = self.lig_coord[idx]
+        pocket_atoms = self.protein_atoms[idx]
+        pocket_coord = self.protein_coord[idx]
+
 
         # normalize coords
         ## centerize

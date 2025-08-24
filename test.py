@@ -24,7 +24,7 @@ import yaml
 import filecmp
 import numpy as np
 sys.path.append('/workspace/cplm')
-from src.data.finetune2 import CDDataset2, CDDataset, MolProcessDataset
+from src.data.finetune2 import CDDataset2, CDDataset, MolProcessDataset, ProteinProcessDataset
 from src.data import untuple_dataset
 
 sdir = "/workspace/cplm/finetune/results/250628_mamba"
@@ -37,7 +37,9 @@ protein, lig, score = untuple_dataset(cddata, 3)
 lig = MolProcessDataset(lig, rstate, mol_atom_h=True,
         mol_coord_h=True, )
 lig_smi, lig_coord = untuple_dataset(lig, 2)
-cddata = CDDataset(protein, lig_smi, lig_coord, score, rstate, pocket_coord_heavy=args.pocket_coord_heavy)
+protein = ProteinProcessDataset(protein, pocket_coord_heavy=args.pocket_coord_heavy)
+protein_atoms, protein_coord = untuple_dataset(protein, 2)
+cddata = CDDataset(protein_atoms, protein_coord, lig_smi, lig_coord, score, rstate)
 
 os.makedirs("items/mod", exist_ok=True)
 for i in range(3):
