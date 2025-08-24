@@ -54,6 +54,37 @@ class CDDataset2(Dataset):
             output += ({key: self.df[key][idx] for key in self.df}, )
         return output
         
+class MolProcessDataset(Dataset):
+    def __init__(self, mol_data: Dataset[Chem.Mol], rstate,
+            mol_atom_h: bool=False, mol_coord_h: bool=True):
+        self.mol_data = mol_data
+        self.mol_atom_h = mol_atom_h
+        self.mol_coord_h = mol_coord_h
+        self.rstate = rstate
+        assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
+
+    def __getitem__(self, idx: int):
+        lig_mol = self.mol_data[idx]
+
+        ## randomize
+        nums = np.arange(lig_mol.GetNumAtoms())
+        self.rstate.shuffle(nums)
+        lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
+        
+        ## remove hydrogen
+        if not self.mol_atom_h:
+            lig_mol = Chem.RemoveHs(lig_mol)
+
+        lig_smi = Chem.MolToSmiles(lig_mol, canonical=False)
+        conf_pos = lig_mol.GetConformer().GetPositions()
+        atom_idxs = np.array(lig_mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
+        if self.mol_atom_h and not self.mol_coord_h:
+            atom_idxs = [idx for idx in atom_idxs if lig_mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
+            lig_coord = conf_pos[atom_idxs]
+        else:
+            lig_coord = conf_pos[atom_idxs]
+        return lig_smi, lig_coord
+
 
 
 class CDDataset(Dataset):
@@ -61,8 +92,7 @@ class CDDataset(Dataset):
     def __init__(self, protein, lig, score, rstate,
             coord_center: str='ligand', random_rotate: bool=True,
             pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
-            pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
-            mol_atom_h: bool=False, mol_coord_h: bool=True):
+            pocket_coord_heavy: bool=False, pocket_coord_h: bool=False):
         """
         train.py: 
             mol: atom_h=True, coord_h=True, 
@@ -81,31 +111,10 @@ class CDDataset(Dataset):
         self.pocket_atom_h = pocket_atom_h
         self.pocket_coord_heavy = pocket_coord_heavy
         self.pocket_coord_h = pocket_coord_h
-        self.mol_atom_h = mol_atom_h
-        self.mol_coord_h = mol_coord_h
-        assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
         
     def __getitem__(self, idx):
-        lig_mol = self.lig[idx]
         score = self.score[idx]
-        
-        ## randomize
-        nums = np.arange(lig_mol.GetNumAtoms())
-        self.rstate.shuffle(nums)
-        lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
-        
-        ## remove hydrogen
-        if not self.mol_atom_h:
-            lig_mol = Chem.RemoveHs(lig_mol)
-
-        lig_smi = Chem.MolToSmiles(lig_mol, canonical=False)
-        conf_pos = lig_mol.GetConformer().GetPositions()
-        atom_idxs = np.array(lig_mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
-        if self.mol_atom_h and not self.mol_coord_h:
-            atom_idxs = [idx for idx in atom_idxs if lig_mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
-            lig_coord = conf_pos[atom_idxs]
-        else:
-            lig_coord = conf_pos[atom_idxs]
+        lig_smi, lig_coord = self.lig[idx]
 
 
         ## calc mask
