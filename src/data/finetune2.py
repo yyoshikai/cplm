@@ -5,6 +5,7 @@ import pandas as pd
 from collections import defaultdict
 from torch.utils.data import Dataset
 from time import time
+from dataclasses import dataclass
 from prody import parsePDB, parsePDBStream, confProDy, Contacts
 from ..utils.lmdb import new_lmdb
 from .coord_transform import get_random_rotation_matrix
@@ -16,14 +17,52 @@ from ..utils.logger import add_file_handler, get_logger
 from ..utils.rdkit import ignore_warning
 from ..utils.utils import CompressedArray
 
+@dataclass
+class Protein:
+    atoms: list[str]
+    coord: np.ndarray
+
+
+
+class CDDataset2(Dataset):
+    def __init__(self, save_dir: str, out_filename: bool=False):
+        self.lmdb_dataset = PickleLMDBDataset(f"{save_dir}/main.lmdb", idx_to_key='str')
+        self.out_filename = out_filename
+        if self.out_filename:
+            self.logger.info("Loading filenames.csv.gz ... ")
+            df = pd.read_csv(f"{save_dir}/filenames.csv.gz")
+            self.logger.info("loaded.")
+            self.df = {'idx': df['idx'].values}
+            for key in ['dname', 'lig_name', 'protein_name']:
+                self.df[key] = CompressedArray(df[key].values)
+            self.df['sdf_idx'] = df['sdf_idx'].values
+            del df
+
+    def __getitem__(self, idx: int):
+        data = self.lmdb_dataset[idx]
+
+        # ligand
+        lig_mol: Chem.Mol = data['lig_mol']
+        score = float(data['score'])
+
+        # pocket
+        pocket_atoms, pocket_coord = data['pocket_atoms'], data['pocket_coordinate']
+        protein = Protein(pocket_atoms, pocket_coord)
+        
+        output = (protein, lig_mol, score)
+        if self.out_filename:
+            output += ({key: self.df[key][idx] for key in self.df}, )
+        return output
+        
+
 
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, save_dir: str, seed:int=0,
+    def __init__(self, cddata, seed:int=0,
             coord_center: str='ligand', random_rotate: bool=True,
             pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
             pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
-            mol_atom_h: bool=False, mol_coord_h: bool=True, out_filename: bool=False):
+            mol_atom_h: bool=False, mol_coord_h: bool=True):
         """
         train.py: 
             mol: atom_h=True, coord_h=True, 
@@ -31,8 +70,7 @@ class CDDataset(Dataset):
                 coord_heavy: bool=False, coord_h: bool = False
         BindGPTも↑と同じ。
         """
-        self.lmdb_dataset = PickleLMDBDataset(f"{save_dir}/main.lmdb", idx_to_key='str')
-
+        self.cddata = cddata
         self.rstate = np.random.RandomState(seed)
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
@@ -44,23 +82,11 @@ class CDDataset(Dataset):
         self.mol_atom_h = mol_atom_h
         self.mol_coord_h = mol_coord_h
         assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
-        self.out_filename = out_filename
-        if self.out_filename:
-            self.logger.info("Loading filenames.csv.gz ... ")
-            df = pd.read_csv(f"{save_dir}/filenames.csv.gz")
-            self.logger.info("loaded.")
-            self.df = {'idx': df['idx'].values}
-            for key in ['dname', 'lig_name', 'protein_name']:
-                self.df[key] = CompressedArray(df[key].values)
-            self.df['sdf_idx'] = df['sdf_idx'].values
-            del df
         
     def __getitem__(self, idx):
-        data = self.lmdb_dataset[idx]
-            
-        # ligand
-        lig_mol: Chem.Mol = data['lig_mol']
-        score = float(data['score'])
+        protein, lig_mol, score = self.cddata[idx]
+        pocket_atoms = protein.atoms
+        pocket_coord = protein.coord
         
         ## randomize
         nums = np.arange(lig_mol.GetNumAtoms())
@@ -80,8 +106,6 @@ class CDDataset(Dataset):
         else:
             lig_coord = conf_pos[atom_idxs]
 
-        # pocket
-        pocket_atoms, pocket_coord = data['pocket_atoms'], data['pocket_coordinate']
 
         ## calc mask
         is_ca = pocket_atoms == 'CA'
@@ -116,8 +140,6 @@ class CDDataset(Dataset):
             rotation_matrix = np.eye(3, dtype=float)
 
         output = (pocket_atoms, pocket_coord, lig_smi, lig_coord, score, center, rotation_matrix)
-        if self.out_filename:
-            output += ({key: self.df[key][idx] for key in self.df}, )
         return output
 
     def __len__(self):
