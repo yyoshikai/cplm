@@ -24,7 +24,7 @@ import yaml
 import filecmp
 import numpy as np
 sys.path.append('/workspace/cplm')
-from src.data.finetune2 import CDDataset2, CDDataset, MolProcessDataset, ProteinProcessDataset
+from src.data.finetune2 import CDDataset2, CDDataset, MolProcessDataset, ProteinProcessDataset, CentralizeCoordsDataset
 from src.data import untuple
 
 sdir = "/workspace/cplm/finetune/results/250628_mamba"
@@ -32,13 +32,12 @@ with open(f"{sdir}/config.yaml") as f:
     args = Dict(yaml.safe_load(f))
 args.finetune_save_dir = "/workspace/cplm/ssd/preprocess/results/finetune/r4_all"
 rstate = np.random.RandomState(args.seed)
-cddata = CDDataset2(args.finetune_save_dir)
-protein, lig, score = untuple(cddata, 3)
-lig = MolProcessDataset(lig, rstate, h_atom=True, h_coord=True)
-lig_smi, lig_coord = untuple(lig, 2)
-protein = ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy)
-protein_atoms, protein_coord = untuple(protein, 2)
-cddata = CDDataset(protein_atoms, protein_coord, lig_smi, lig_coord, score, rstate)
+protein, lig, score = untuple(CDDataset2(args.finetune_save_dir), 3)
+lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True), 2)
+protein_atoms, protein_coord = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy), 2)
+
+center, lig_coord, protein_coord = untuple(CentralizeCoordsDataset(lig_coord, protein_coord), 3)
+cddata = CDDataset(protein_atoms, protein_coord, lig_smi, lig_coord, center, score, rstate)
 
 
 os.makedirs("items/mod", exist_ok=True)

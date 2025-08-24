@@ -129,12 +129,12 @@ class CentralizeCoordsDataset(Dataset[tuple[np.ndarray, ...]]):
         base_coord = self.base_coord_data[idx]
         center = np.mean(base_coord, axis=0)
         base_coord -= center
-        return (base_coord, ) + tuple(coord_data[idx] - center for coord_data in self.coord_datas)
+        return (center, base_coord, ) + tuple(coord_data[idx] - center for coord_data in self.coord_datas)
 
 
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, protein_atoms, protein_coord, lig_smi, lig_coord, score, rstate,
+    def __init__(self, protein_atoms, protein_coord, lig_smi, lig_coord, center, score, rstate,
             coord_center: str='ligand', random_rotate: bool=True):
         """
         train.py: 
@@ -148,6 +148,7 @@ class CDDataset(Dataset):
         self.lig_smi = lig_smi
         self.lig_coord = lig_coord
         self.score = score
+        self.center = center
         self.rstate = rstate
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
@@ -159,18 +160,7 @@ class CDDataset(Dataset):
         lig_coord = self.lig_coord[idx]
         pocket_atoms = self.protein_atoms[idx]
         pocket_coord = self.protein_coord[idx]
-
-
-        # normalize coords
-        ## centerize
-        if self.coord_center == 'ligand':
-            center = np.mean(lig_coord, axis=0)
-        elif self.coord_center == 'pocket':
-            center = np.mean(pocket_coord, axis=0)
-        else:
-            center = np.zeros(3, dtype=float)
-        lig_coord -= center
-        pocket_coord -= center
+        center = self.center[idx]
 
         ## random rotation 250501 centerizeと順番を入れ替えた
         # print(f"rstate@CDDataset[{idx}]={self.rstate.get_state()[2]}")
