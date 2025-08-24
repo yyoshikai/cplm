@@ -11,6 +11,7 @@ from prody import parsePDB, parsePDBStream, confProDy, Contacts
 from ..utils.lmdb import new_lmdb
 from .coord_transform import get_random_rotation_matrix
 from .lmdb import PickleLMDBDataset
+from .data import WrapDataset
 from ..utils import slice_str
 from rdkit import Chem
 confProDy(verbosity='none')
@@ -25,9 +26,10 @@ class Protein:
 
 
 
-class CDDataset2(Dataset[tuple[Protein, Chem.Mol, float]]):
+class CDDataset2(WrapDataset[tuple[Protein, Chem.Mol, float]]):
     def __init__(self, save_dir: str, out_filename: bool=False):
         self.lmdb_dataset = PickleLMDBDataset(f"{save_dir}/main.lmdb", idx_to_key='str')
+        super().__init__(self.lmdb_dataset)
         self.out_filename = out_filename
         if self.out_filename:
             self.logger.info("Loading filenames.csv.gz ... ")
@@ -55,9 +57,10 @@ class CDDataset2(Dataset[tuple[Protein, Chem.Mol, float]]):
             output += ({key: self.df[key][idx] for key in self.df}, )
         return output
         
-class MolProcessDataset(Dataset[tuple[str, np.ndarray]]):
+class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState,
             h_atom: bool=False, h_coord: bool=True):
+        super().__init__(mol_data)
         self.mol_data = mol_data
         self.h_atom = h_atom
         self.h_coord = h_coord
@@ -86,10 +89,11 @@ class MolProcessDataset(Dataset[tuple[str, np.ndarray]]):
             lig_coord = conf_pos[atom_idxs]
         return lig_smi, lig_coord
     
-class ProteinProcessDataset(Dataset[tuple[list[str], np.ndarray]]):
+class ProteinProcessDataset(WrapDataset[tuple[list[str], np.ndarray]]):
     def __init__(self, protein_data: Dataset[Protein],
             heavy_atom: bool=True, h_atom: bool=False,
             heavy_coord: bool=False, h_coord: bool=False):
+        super().__init__(protein_data)
         self.protein_data = protein_data
         self.heavy_atom = heavy_atom
         self.h_atom = h_atom
@@ -120,8 +124,9 @@ class ProteinProcessDataset(Dataset[tuple[list[str], np.ndarray]]):
 
         return atoms, coord
     
-class CentralizeCoordsDataset(Dataset[tuple[np.ndarray, ...]]):
+class CentralizeCoordsDataset(WrapDataset[tuple[np.ndarray, ...]]):
     def __init__(self, base_coord_data: Dataset[np.ndarray], *coord_datas: list[Dataset[np.ndarray]]):
+        super().__init__(base_coord_data)
         self.base_coord_data = base_coord_data
         self.coord_datas = coord_datas
     
@@ -132,8 +137,9 @@ class CentralizeCoordsDataset(Dataset[tuple[np.ndarray, ...]]):
         return (center, base_coord, ) + tuple(coord_data[idx] - center 
                 for coord_data in self.coord_datas)
 
-class RandomRotateDataset(Dataset[tuple[np.ndarray, ...]]):
+class RandomRotateDataset(WrapDataset[tuple[np.ndarray, ...]]):
     def __init__(self, rstate: np.random.RandomState, *coord_datas: list[Dataset[np.ndarray]]):
+        super().__init__(coord_datas[0])
         self.rstate = rstate
         self.coord_datas = coord_datas
 
@@ -141,6 +147,7 @@ class RandomRotateDataset(Dataset[tuple[np.ndarray, ...]]):
         rotation_matrix = get_random_rotation_matrix(self.rstate)
         return (rotation_matrix, )+tuple(np.matmul(coord_data[idx], rotation_matrix) 
                 for coord_data in self.coord_datas)
+
 
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
