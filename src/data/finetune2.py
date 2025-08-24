@@ -129,12 +129,22 @@ class CentralizeCoordsDataset(Dataset[tuple[np.ndarray, ...]]):
         base_coord = self.base_coord_data[idx]
         center = np.mean(base_coord, axis=0)
         base_coord -= center
-        return (center, base_coord, ) + tuple(coord_data[idx] - center for coord_data in self.coord_datas)
+        return (center, base_coord, ) + tuple(coord_data[idx] - center 
+                for coord_data in self.coord_datas)
 
+class RandomRotateDataset(Dataset[tuple[np.ndarray, ...]]):
+    def __init__(self, rstate: np.random.RandomState, *coord_datas: list[Dataset[np.ndarray]]):
+        self.rstate = rstate
+        self.coord_datas = coord_datas
+
+    def __getitem__(self, idx: int):
+        rotation_matrix = get_random_rotation_matrix(self.rstate)
+        return (rotation_matrix, )+tuple(np.matmul(coord_data[idx], rotation_matrix) 
+                for coord_data in self.coord_datas)
 
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, protein_atoms, protein_coord, lig_smi, lig_coord, center, score, rstate,
+    def __init__(self, protein_atoms, protein_coord, lig_smi, lig_coord, center, score, rotation_matrix, rstate,
             coord_center: str='ligand', random_rotate: bool=True):
         """
         train.py: 
@@ -149,6 +159,7 @@ class CDDataset(Dataset):
         self.lig_coord = lig_coord
         self.score = score
         self.center = center
+        self.rotation_matrix = rotation_matrix
         self.rstate = rstate
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
@@ -161,15 +172,7 @@ class CDDataset(Dataset):
         pocket_atoms = self.protein_atoms[idx]
         pocket_coord = self.protein_coord[idx]
         center = self.center[idx]
-
-        ## random rotation 250501 centerizeと順番を入れ替えた
-        # print(f"rstate@CDDataset[{idx}]={self.rstate.get_state()[2]}")
-        if self.random_rotate:
-            rotation_matrix = get_random_rotation_matrix(self.rstate)
-            lig_coord = np.matmul(lig_coord, rotation_matrix)
-            pocket_coord = np.matmul(pocket_coord, rotation_matrix)
-        else:
-            rotation_matrix = np.eye(3, dtype=float)
+        rotation_matrix = self.rotation_matrix[idx]
 
         output = (pocket_atoms, pocket_coord, lig_smi, lig_coord, score, center, rotation_matrix)
         return output

@@ -24,7 +24,7 @@ import yaml
 import filecmp
 import numpy as np
 sys.path.append('/workspace/cplm')
-from src.data.finetune2 import CDDataset2, CDDataset, MolProcessDataset, ProteinProcessDataset, CentralizeCoordsDataset
+from src.data.finetune2 import CDDataset2, CDDataset, MolProcessDataset, ProteinProcessDataset, CentralizeCoordsDataset, RandomRotateDataset
 from src.data import untuple
 
 sdir = "/workspace/cplm/finetune/results/250628_mamba"
@@ -35,9 +35,9 @@ rstate = np.random.RandomState(args.seed)
 protein, lig, score = untuple(CDDataset2(args.finetune_save_dir), 3)
 lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True), 2)
 protein_atoms, protein_coord = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy), 2)
-
 center, lig_coord, protein_coord = untuple(CentralizeCoordsDataset(lig_coord, protein_coord), 3)
-cddata = CDDataset(protein_atoms, protein_coord, lig_smi, lig_coord, center, score, rstate)
+rotation_matrix, lig_coord, protein_coord = untuple(RandomRotateDataset(rstate, lig_coord, protein_coord), 3)
+cddata = CDDataset(protein_atoms, protein_coord, lig_smi, lig_coord, center, score, rotation_matrix, rstate)
 
 
 os.makedirs("items/mod", exist_ok=True)
