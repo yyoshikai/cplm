@@ -69,7 +69,6 @@ class MolProcessDataset(Dataset[tuple[str, np.ndarray]]):
 
         ## randomize
         nums = np.arange(lig_mol.GetNumAtoms())
-        # print(f"rstate@MolProcessDataset[{idx}]={self.rstate.get_state()[2]}")
         self.rstate.shuffle(nums)
         lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
         
@@ -120,6 +119,18 @@ class ProteinProcessDataset(Dataset[tuple[list[str], np.ndarray]]):
         coord = coord[coord_mask]
 
         return atoms, coord
+    
+class CentralizeCoordsDataset(Dataset[tuple[np.ndarray, ...]]):
+    def __init__(self, base_coord_data: Dataset[np.ndarray], *coord_datas: list[Dataset[np.ndarray]]):
+        self.base_coord_data = base_coord_data
+        self.coord_datas = coord_datas
+    
+    def __getitem__(self, idx: int):
+        base_coord = self.base_coord_data[idx]
+        center = np.mean(base_coord, axis=0)
+        base_coord -= center
+        return (base_coord, ) + tuple(coord_data[idx] - center for coord_data in self.coord_datas)
+
 
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
