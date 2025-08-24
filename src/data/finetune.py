@@ -57,70 +57,68 @@ class CDDataset(Dataset):
         
     def __getitem__(self, idx):
         data = self.lmdb_dataset[idx]
-        with logtime(self.logger, f"[{idx}]"):
             
-            # ligand
-            lig_mol: Chem.Mol = data['lig_mol']
-            score = float(data['score'])
-            
-            ## randomize
-            nums = np.arange(lig_mol.GetNumAtoms())
-            self.rstate.shuffle(nums)
-            lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
-            
-            ## remove hydrogen
-            if not self.mol_atom_h:
-                lig_mol = Chem.RemoveHs(lig_mol)
+        # ligand
+        lig_mol: Chem.Mol = data['lig_mol']
+        score = float(data['score'])
+        
+        ## randomize
+        nums = np.arange(lig_mol.GetNumAtoms())
+        self.rstate.shuffle(nums)
+        lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
+        
+        ## remove hydrogen
+        if not self.mol_atom_h:
+            lig_mol = Chem.RemoveHs(lig_mol)
 
-            lig_smi = Chem.MolToSmiles(lig_mol, canonical=False)
-            conf_pos = lig_mol.GetConformer().GetPositions()
-            atom_idxs = np.array(lig_mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
-            if self.mol_atom_h and not self.mol_coord_h:
-                atom_idxs = [idx for idx in atom_idxs if lig_mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
-                lig_coord = conf_pos[atom_idxs]
-            else:
-                lig_coord = conf_pos[atom_idxs]
+        lig_smi = Chem.MolToSmiles(lig_mol, canonical=False)
+        conf_pos = lig_mol.GetConformer().GetPositions()
+        atom_idxs = np.array(lig_mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
+        if self.mol_atom_h and not self.mol_coord_h:
+            atom_idxs = [idx for idx in atom_idxs if lig_mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
+            lig_coord = conf_pos[atom_idxs]
+        else:
+            lig_coord = conf_pos[atom_idxs]
 
-            # pocket
-            pocket_atoms, pocket_coord = data['pocket_atoms'], data['pocket_coordinate']
+        # pocket
+        pocket_atoms, pocket_coord = data['pocket_atoms'], data['pocket_coordinate']
 
-            ## calc mask
-            is_ca = pocket_atoms == 'CA'
-            is_h = slice_str(pocket_atoms, 1) == 'H'
-            is_heavy = (~is_ca)&(~is_h)
-            atom_mask = is_ca.copy()
-            if self.pocket_atom_heavy: atom_mask |= is_heavy
-            if self.pocket_atom_h: atom_mask |= is_h
-            pocket_atoms = pocket_atoms[atom_mask]
-            coord_mask = is_ca.copy()
-            if self.pocket_coord_heavy: coord_mask |= is_heavy
-            if self.pocket_coord_h: coord_mask |= is_h
-            pocket_coord = pocket_coord[coord_mask]
+        ## calc mask
+        is_ca = pocket_atoms == 'CA'
+        is_h = slice_str(pocket_atoms, 1) == 'H'
+        is_heavy = (~is_ca)&(~is_h)
+        atom_mask = is_ca.copy()
+        if self.pocket_atom_heavy: atom_mask |= is_heavy
+        if self.pocket_atom_h: atom_mask |= is_h
+        pocket_atoms = pocket_atoms[atom_mask]
+        coord_mask = is_ca.copy()
+        if self.pocket_coord_heavy: coord_mask |= is_heavy
+        if self.pocket_coord_h: coord_mask |= is_h
+        pocket_coord = pocket_coord[coord_mask]
 
-            # normalize coords
-            
-            ## centerize
-            if self.coord_center == 'ligand':
-                center = np.mean(lig_coord, axis=0)
-            elif self.coord_center == 'pocket':
-                center = np.mean(pocket_coord, axis=0)
-            else:
-                center = np.zeros(3, dtype=float)
-            lig_coord -= center
-            pocket_coord -= center
+        # normalize coords
+        ## centerize
+        if self.coord_center == 'ligand':
+            center = np.mean(lig_coord, axis=0)
+        elif self.coord_center == 'pocket':
+            center = np.mean(pocket_coord, axis=0)
+        else:
+            center = np.zeros(3, dtype=float)
+        lig_coord -= center
+        pocket_coord -= center
 
-            ## random rotation 250501 centerizeと順番を入れ替えた
-            if self.random_rotate:
-                rotation_matrix = get_random_rotation_matrix(self.rstate)
-                lig_coord = np.matmul(lig_coord, rotation_matrix)
-                pocket_coord = np.matmul(pocket_coord, rotation_matrix)
-            else:
-                rotation_matrix = np.eye(3, dtype=float)
+        ## random rotation 250501 centerizeと順番を入れ替えた
+        if self.random_rotate:
+            rotation_matrix = get_random_rotation_matrix(self.rstate)
+            lig_coord = np.matmul(lig_coord, rotation_matrix)
+            pocket_coord = np.matmul(pocket_coord, rotation_matrix)
+        else:
+            rotation_matrix = np.eye(3, dtype=float)
 
-            output = (pocket_atoms, pocket_coord, lig_smi, lig_coord, score, center, rotation_matrix)
-            if self.out_filename:
-                output += ({key: self.df[key][idx] for key in self.df}, )
-            return output
+        output = (pocket_atoms, pocket_coord, lig_smi, lig_coord, score, center, rotation_matrix)
+        if self.out_filename:
+            output += ({key: self.df[key][idx] for key in self.df}, )
+        return output
 
     def __len__(self):
         return len(self.lmdb_dataset)
