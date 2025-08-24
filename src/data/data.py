@@ -126,7 +126,12 @@ def untuple_dataset(dataset: Dataset, size: int):
     if not isinstance(dataset, CacheDataset):
         dataset = CacheDataset(dataset)
     return tuple(KeyDataset(dataset, i) for i in range(size))
-    
+
+def untuple(dataset: Dataset, size: int):
+    if not isinstance(dataset, CacheDataset):
+        dataset = CacheDataset(dataset)
+    return tuple(KeyDataset(dataset, i) for i in range(size))
+
 class IndexDataset(WrapDataset[tuple[int,T_co]]):
     def __init__(self, dataset: Dataset[T_co]):
         super().__init__(dataset)

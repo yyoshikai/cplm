@@ -57,12 +57,12 @@ class CDDataset2(Dataset[tuple[Protein, Chem.Mol, float]]):
         
 class MolProcessDataset(Dataset[tuple[str, np.ndarray]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState,
-            mol_atom_h: bool=False, mol_coord_h: bool=True):
+            h_atom: bool=False, h_coord: bool=True):
         self.mol_data = mol_data
-        self.mol_atom_h = mol_atom_h
-        self.mol_coord_h = mol_coord_h
+        self.h_atom = h_atom
+        self.h_coord = h_coord
         self.rstate = rstate
-        assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
+        assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
 
     def __getitem__(self, idx: int):
         lig_mol = self.mol_data[idx]
@@ -74,13 +74,13 @@ class MolProcessDataset(Dataset[tuple[str, np.ndarray]]):
         lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
         
         ## remove hydrogen
-        if not self.mol_atom_h:
+        if not self.h_atom:
             lig_mol = Chem.RemoveHs(lig_mol)
 
         lig_smi = Chem.MolToSmiles(lig_mol, canonical=False)
         conf_pos = lig_mol.GetConformer().GetPositions()
         atom_idxs = np.array(lig_mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
-        if self.mol_atom_h and not self.mol_coord_h:
+        if self.h_atom and not self.h_coord:
             atom_idxs = [idx for idx in atom_idxs if lig_mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
             lig_coord = conf_pos[atom_idxs]
         else:
@@ -89,32 +89,37 @@ class MolProcessDataset(Dataset[tuple[str, np.ndarray]]):
     
 class ProteinProcessDataset(Dataset[tuple[list[str], np.ndarray]]):
     def __init__(self, protein_data: Dataset[Protein],
-            pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
-            pocket_coord_heavy: bool=False, pocket_coord_h: bool=False):
+            heavy_atom: bool=True, h_atom: bool=False,
+            heavy_coord: bool=False, h_coord: bool=False):
         self.protein_data = protein_data
-        self.pocket_atom_heavy = pocket_atom_heavy
-        self.pocket_atom_h = pocket_atom_h
-        self.pocket_coord_heavy = pocket_coord_heavy
-        self.pocket_coord_h = pocket_coord_h
+        self.heavy_atom = heavy_atom
+        self.h_atom = h_atom
+        self.heavy_coord = heavy_coord
+        self.h_coord = h_coord
 
     def __getitem__(self, idx: int):
         protein = self.protein_data[idx]
+        atoms = protein.atoms
+        coord = protein.coord
 
-        ## calc mask
-        pocket_atoms = protein.atoms
-        pocket_coord = protein.coord
-        is_ca = pocket_atoms == 'CA'
-        is_h = slice_str(pocket_atoms, 1) == 'H'
+        # calc mask
+        is_ca = atoms == 'CA'
+        is_h = slice_str(atoms, 1) == 'H'
         is_heavy = (~is_ca)&(~is_h)
+
+        # atoms 
         atom_mask = is_ca.copy()
-        if self.pocket_atom_heavy: atom_mask |= is_heavy
-        if self.pocket_atom_h: atom_mask |= is_h
-        pocket_atoms = pocket_atoms[atom_mask]
+        if self.heavy_atom: atom_mask |= is_heavy
+        if self.h_atom: atom_mask |= is_h
+        atoms = atoms[atom_mask]
+
+        # coord
         coord_mask = is_ca.copy()
-        if self.pocket_coord_heavy: coord_mask |= is_heavy
-        if self.pocket_coord_h: coord_mask |= is_h
-        pocket_coord = pocket_coord[coord_mask]
-        return pocket_atoms, pocket_coord
+        if self.heavy_coord: coord_mask |= is_heavy
+        if self.h_coord: coord_mask |= is_h
+        coord = coord[coord_mask]
+
+        return atoms, coord
 
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
@@ -123,7 +128,7 @@ class CDDataset(Dataset):
         """
         train.py: 
             mol: atom_h=True, coord_h=True, 
-            pocket: atom_heavy: bool = True, atom_h: bool = False,
+            pocket: heavy_atom: bool = True, atom_h: bool = False,
                 coord_heavy: bool=False, coord_h: bool = False
         BindGPTも↑と同じ。
         """
