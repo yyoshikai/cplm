@@ -146,7 +146,7 @@ class CDDataset(Dataset):
         pocket_coord -= center
 
         ## random rotation 250501 centerizeと順番を入れ替えた
-        print(f"rstate@CDDataset[{idx}]={self.rstate.get_state()[1][0]}")
+        print(f"rstate@CDDataset[{idx}]={self.rstate.get_state()[2]}")
         if self.random_rotate:
             rotation_matrix = get_random_rotation_matrix(self.rstate)
             lig_coord = np.matmul(lig_coord, rotation_matrix)
