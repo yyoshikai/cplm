@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from ..tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset
 from ..coord_transform import CoordTransform
 from ..lmdb import PickleLMDBDataset
-from ...utils import logtime, slice_str
+from ...utils import slice_str
 from ..finetune2 import Protein
 
 # net_datasetは {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
@@ -32,6 +32,8 @@ class ProteinDataset(Dataset):
         self.coord_heavy = coord_heavy
         self.coord_h = coord_h
         self.coord_follow_atom = coord_follow_atom
+        assert not (self.coord_heavy and not self.atom_heavy)
+        assert not (self.coord_h and not self.atom_h)
 
     def __getitem__(self, idx):
         data = self.net_dataset[idx]
@@ -55,6 +57,9 @@ class ProteinDataset(Dataset):
         coords = coords[coord_mask]
         
         coords = self.coord_transform(coords)
+        i_coord2i_atom = np.where(coord_mask[atom_mask])[0]
+
+        return atoms, coords, i_coord2i_atom
 
         # tokenize
         atom_tokens = self.atom_tokenizer.tokenize(atoms)
@@ -94,19 +99,25 @@ class UniMolPocketDataset(Dataset[Protein]):
         return len(self.dataset)
 
 class CoordFollowDataset(Dataset):
-    def __init__(self, pocket_atom: TokenizeDataset, pocket_coord: ArrayTokenizeDataset):
+    def __init__(self, pocket_atom: TokenizeDataset, pocket_coord: ArrayTokenizeDataset, i_coord2i_atom: Dataset[np.ndarray]):
         self.pocket_atom = pocket_atom
         self.pocket_coord = pocket_coord
+        self.i_coord2i_atom = i_coord2i_atom
         assert len(self.pocket_atom) == len(self.pocket_coord)
     
     def __getitem__(self, idx: int):
         pocket_atom = self.pocket_atom[idx]
         pocket_coord = self.pocket_coord[idx]
-        assert len(pocket_atom)*6 == len(pocket_coord)
-        return np.concatenate([
-            np.array(pocket_atom).reshape(-1, 1),
-            np.array(pocket_coord, dtype=object).reshape(-1, 6),
-        ], axis=1).ravel().tolist()
+        i_coord2i_atom = self.i_coord2i_atom[idx]
+        assert len(i_coord2i_atom)*6 == len(pocket_coord)
+        output = []
+        i_coord = 0
+        for i_atom in range(len(pocket_atom)):
+            output.append(pocket_atom[i_atom])
+            if i_coord2i_atom[i_coord] == i_atom:
+                output += pocket_coord[i_coord*6:(i_coord+1)*6]
+                i_coord += 1
+        return output
 
     def __len__(self):
         return len(self.pocket_atom)

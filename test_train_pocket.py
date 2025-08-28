@@ -28,9 +28,10 @@ for coord_follow in [False, True]:
     import yaml
     from addict import Dict
     sys.path.append("/workspace/cplm")
-    from src.data.pretrain2 import UniMolPocketDataset, ProteinDataset
+    from src.data.pretrain2 import UniMolPocketDataset, ProteinDataset, CoordFollowDataset
     from src.data.coord_transform import CoordTransform
-    from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer
+    from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
+    from src.data import untuple
 
     org_dir = "/workspace/cplm/training/results/250619_mamba"
     with open(f"{org_dir}/config.yaml") as f:
@@ -43,10 +44,31 @@ for coord_follow in [False, True]:
     coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
     pocket_data = UniMolPocketDataset(args.pocket_data, idx_to_key='str')
     pocket_data = ProteinDataset(pocket_data, protein_atom_tokenizer, coord_tokenizer, coord_transform, atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, coord_follow_atom=coord_follow)
+
+    atoms, coord = untuple(pocket_data, 2)
+    atoms, coord, i_coord2i_atom = untuple(pocket_data, 3)
+    atoms = TokenizeDataset(atoms, protein_atom_tokenizer)
+    coord = ArrayTokenizeDataset(coord, coord_tokenizer)
+    if coord_follow:
+        pocket_data = CoordFollowDataset(atoms, coord, i_coord2i_atom)
+        pocket_data = SentenceDataset('[POCKET]', pocket_data, '[END]')
+    else:
+        pocket_data = SentenceDataset('[POCKET]', atoms, '[XYZ]', coord, '[END]')
+
+
     vocs0 = pocket_data.vocs()
+    if coord_follow:
+        vocs0.add('[XYZ]')
 
     items0 = [pocket_data[i] for i in range(3)]
 
     # check
-    assert vocs == vocs0
-    assert all(item == item0 for item, item0 in zip(items, items0))
+    if  vocs != vocs0:
+        print(f"{vocs-vocs0=}")
+        print(f"{vocs0-vocs=}")
+        raise ValueError
+    for i in range(3):
+        if items[i] != items0[i]:
+            print(f"{items[i]=}")
+            print(f"{items0[i]=}")
+            raise ValueError
