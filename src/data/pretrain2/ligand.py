@@ -14,21 +14,67 @@ from ...utils import logtime
 # Pretrain時, 分子の処理用のデータセット
 class MoleculeDataset(Dataset):
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, dataset: Dataset, coord_transform: CoordTransform, 
-            smiles_tokenizer: StringTokenizer, coord_tokenizer: FloatTokenizer
+    def __init__(self, mol_data: Dataset[Chem.Mol], coord_transform: CoordTransform, 
+            smiles_tokenizer: StringTokenizer, coord_tokenizer: FloatTokenizer, seed: int, 
+            atom_h: bool=True, coord_h: bool=True, randomize: bool=False, 
+            sample_save_dir: Optional[str]=None
         ):
-        self.dataset = dataset
+        self.mol_data = mol_data
         self.coord_transform = coord_transform
         self.smiles_tokenizer = smiles_tokenizer
         self.coord_tokenizer = coord_tokenizer
 
-    def __getitem__(self, idx):
-        data = self.dataset[idx]
-        with logtime(self.logger, f"[{idx}]"):
-            smi = data['smi']
-            coord = data['coordinate']
-            coord = self.coord_transform(coord)
-            return ['[LIGAND]']+self.smiles_tokenizer.tokenize(smi)+['[XYZ]']+self.coord_tokenizer.tokenize_array(coord.ravel())+['[END]']
+        self.atom_h = atom_h
+        self.coord_h = coord_h
+        if (not self.atom_h) and self.coord_h:
+            raise ValueError(f"atom_h=False and coord_h=True is not supported.")
+        self.randomize = randomize
+        self.rng = np.random.default_rng(seed)
+
+        self.sample_save_dir = sample_save_dir
+        self.getitem_count = 0
+
+    def __getitem__(self, idx: int):
+        mol = self.mol_data[idx]
+
+        # remove hydrogen
+        if not self.atom_h:
+            mol = Chem.RemoveHs(mol)
+        
+        # randomize
+        if self.randomize:
+            idxs = np.arange(mol.GetNumAtoms(), dtype=int)
+            self.rng.shuffle(idxs)
+            mol = Chem.RenumberAtoms(mol, idxs.tolist())
+            smi = Chem.MolToSmiles(mol, canonical=False)
+        else:
+            smi = Chem.MolToSmiles(mol)
+        atom_order = mol.GetProp('_smilesAtomOutputOrder', autoConvert=True)
+        if self.atom_h and not self.coord_h:
+            atom_order = [o for o in atom_order if mol.GetAtomWithIdx(o).GetSymbol() != 'H']
+        coord = mol.GetConformer().GetPositions()
+        coord = coord[atom_order]
+
+
+        data = {'smi': smi, 'coordinate': coord}
+        self.getitem_count += 1
+
+        smi = data['smi']
+        coord = data['coordinate']
+        coord = self.coord_transform(coord)
+
+        # save sample
+        if self.sample_save_dir is not None and self.getitem_count < 5:
+            save_dir = f"{self.sample_save_dir}/{idx}"
+            os.makedirs(save_dir, exist_ok=True)
+            with open(f"{save_dir}/data_smi.txt", 'w') as f:
+                f.write(data['smi'])
+            with open(f"{save_dir}/out_smi.txt", 'w') as f:
+                f.write(smi)
+            pd.DataFrame(coord) \
+                .to_csv(f"{save_dir}/out_coord.csv", header=False, index=False)
+
+        return ['[LIGAND]']+self.smiles_tokenizer.tokenize(smi)+['[XYZ]']+self.coord_tokenizer.tokenize_array(coord.ravel())+['[END]']
 
     def __len__(self):
         return len(self.dataset)
@@ -36,11 +82,9 @@ class MoleculeDataset(Dataset):
     def vocs(self):
         return self.smiles_tokenizer.vocs()|self.coord_tokenizer.vocs()|{'[LIGAND]', '[XYZ]', '[END]'}
 
-class UniMolLigandDataset(Dataset):
+class UniMolLigandDataset(Dataset[Chem.Mol]):
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, lmdb_path, n_conformer, seed: int, 
-            atom_h: bool=True, coord_h: bool=True, randomize: bool=False, 
-            sample_save_dir: Optional[str]=None):
+    def __init__(self, lmdb_path, n_conformer, sample_save_dir: Optional[str]=None):
         """
         ややdata specificな処理を行っている。
         本当はもう少し上の段階でランダム化を行った方がよいかもしれない。
@@ -54,17 +98,11 @@ class UniMolLigandDataset(Dataset):
         """
         self.net_dataset = PickleLMDBDataset(lmdb_path, idx_to_key='str')
         self.n_conformer = n_conformer
-        self.atom_h = atom_h
-        self.coord_h = coord_h
-        if (not self.atom_h) and self.coord_h:
-            raise ValueError(f"atom_h=False and coord_h=True is not supported.")
-        self.randomize = randomize
-        self.rng = np.random.default_rng(seed)
 
         self.sample_save_dir = sample_save_dir
         self.getitem_count = 0
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> Chem.Mol:
         mol_idx, conformer_idx = divmod(idx, self.n_conformer)
         data = self.net_dataset[mol_idx]
         with logtime(self.logger, f"[{idx}]"):
@@ -91,41 +129,15 @@ class UniMolLigandDataset(Dataset):
                 for i in range(n_atom):
                     conf.SetAtomPosition(i, Point3D(*coord[i]))
                 mol.AddConformer(conf)
-
-            # remove hydrogen
-            if not self.atom_h:
-                mol = Chem.RemoveHs(mol)
-            
-            # randomize
-            if self.randomize:
-                idxs = np.arange(mol.GetNumAtoms(), dtype=int)
-                self.rng.shuffle(idxs)
-                mol = Chem.RenumberAtoms(mol, idxs.tolist())
-                smi = Chem.MolToSmiles(mol, canonical=False)
-            else:
-                smi = Chem.MolToSmiles(mol)
-            atom_order = mol.GetProp('_smilesAtomOutputOrder', autoConvert=True)
-            if self.atom_h and not self.coord_h:
-                atom_order = [o for o in atom_order if mol.GetAtomWithIdx(o).GetSymbol() != 'H']
-            coord = mol.GetConformer().GetPositions()
-            coord = coord[atom_order]
-
-            # save sample
-            if self.sample_save_dir is not None and self.getitem_count < 5:
-                save_dir = f"{self.sample_save_dir}/{idx}"
-                os.makedirs(save_dir, exist_ok=True)
-                with open(f"{save_dir}/data_smi.txt", 'w') as f:
-                    f.write(data['smi'])
-                with open(f"{save_dir}/out_smi.txt", 'w') as f:
-                    f.write(smi)
-                pd.DataFrame(data['coordinates'][conformer_idx]) \
-                    .to_csv(f"{save_dir}/data_coord.csv", header=False, index=False)
-                pd.DataFrame(coord) \
-                    .to_csv(f"{save_dir}/out_coord.csv", header=False, index=False)
-
-            output = {'smi': smi, 'coordinate': coord}
-            self.getitem_count += 1
-            return output
+        
+        # save sample
+        if self.sample_save_dir is not None and self.getitem_count < 5:
+            save_dir = f"{self.sample_save_dir}/{idx}"
+            os.makedirs(save_dir, exist_ok=True)
+            pd.DataFrame(data['coordinates'][conformer_idx]) \
+                .to_csv(f"{save_dir}/data_coord.csv", header=False, index=False)
+        self.getitem_count += 1
+        return mol
     
     def __len__(self):
         return len(self.net_dataset) * self.n_conformer

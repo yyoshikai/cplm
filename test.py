@@ -9,7 +9,7 @@ logger = get_logger(stream=True)
 from src.data.pretrain import UniMolLigandDataset, MoleculeDataset, CoordTransform
 from src.data.tokenizer import StringTokenizer, FloatTokenizer
 
-result_dir = "./tmp"
+result_dir = "./tmp0"
 os.makedirs(result_dir, exist_ok=True)
 
 org_dir = "/workspace/cplm/training/results/250619_mamba"
@@ -23,7 +23,7 @@ coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interv
 
 mol_data = UniMolLigandDataset(args.mol_data, 10, seed=args.seed, 
     atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h, randomize=args.lig_randomize, 
-    sample_save_dir=f"{result_dir}/ligand_sample" if args.test else None)
+    sample_save_dir=f"{result_dir}/ligand_sample")
 mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
 vocs0 = mol_data.vocs()
 
@@ -55,10 +55,11 @@ coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
 smiles_tokenizer = StringTokenizer(open("/workspace/cplm/src/data/smiles_tokens.txt").read().splitlines())
 coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
 
-mol_data = UniMolLigandDataset(args.mol_data, 10, seed=args.seed, 
+mol_data = UniMolLigandDataset(args.mol_data, 10, 
+    sample_save_dir=f"{result_dir}/ligand_sample")
+mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer, seed=args.seed, 
     atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h, randomize=args.lig_randomize, 
-    sample_save_dir=f"{result_dir}/ligand_sample" if args.test else None)
-mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
+    sample_save_dir=f"{result_dir}/ligand_sample")
 vocs = mol_data.vocs()
 
 items = []
@@ -68,3 +69,6 @@ for i in range(3):
 assert vocs == vocs0
 for i in range(3):
     assert items[i] == items0[i]
+
+
+
