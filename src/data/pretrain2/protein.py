@@ -7,12 +7,13 @@ from ..tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, A
 from ..coord_transform import CoordTransform
 from ..lmdb import PickleLMDBDataset
 from ...utils import logtime, slice_str
+from ..finetune2 import Protein
 
 # net_datasetは {'atoms': list, 'coordinate': np.ndarray} を出力すればよい。
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class ProteinDataset(Dataset):
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, net_dataset: Dataset, atom_tokenizer: ProteinAtomTokenizer, 
+    def __init__(self, net_dataset: Dataset[Protein], atom_tokenizer: ProteinAtomTokenizer, 
             coord_tokenizer: FloatTokenizer,
             coord_transform: CoordTransform, 
             atom_heavy: bool = True, atom_h: bool = False,
@@ -34,9 +35,10 @@ class ProteinDataset(Dataset):
 
     def __getitem__(self, idx):
         data = self.net_dataset[idx]
+        atoms = data.atoms
+        coords = data.coord
+
         with logtime(self.logger, f"[{idx}]"):
-            atoms = np.array(data['atoms'])
-            coords = data['coordinate']
             assert len(atoms) == len(coords)
 
             # calc mask
@@ -79,16 +81,15 @@ class ProteinDataset(Dataset):
     def __len__(self):
         return len(self.net_dataset)
 
-class UniMolPocketDataset(Dataset):
-    logger = getLogger(f"{__module__}.{__qualname__}")
+class UniMolPocketDataset(Dataset[Protein]):
     def __init__(self, lmdb_path, **kwargs):
         self.dataset = PickleLMDBDataset(lmdb_path, **kwargs)
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> Protein:
         data = self.dataset[idx]
-        with logtime(self.logger, f"[{idx}]"):
-            data['coordinate'] = data.pop('coordinates')[0] # * np.array([0, 1, 2])
-            return data
+        atoms = np.array(data['atoms'])
+        coord =  data.pop('coordinates')[0] # * np.array([0, 1, 2])
+        return Protein(atoms=atoms, coord=coord)
 
     def __len__(self):
         return len(self.dataset)
