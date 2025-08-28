@@ -218,6 +218,8 @@ class ProteinProcessDataset(WrapDataset[tuple[list[str], np.ndarray]]):
         self.h_atom = h_atom
         self.heavy_coord = heavy_coord
         self.h_coord = h_coord
+        assert not (self.heavy_coord and not self.heavy_atom)
+        assert not (self.h_coord and not self.h_atom)
 
     def __getitem__(self, idx: int):
         protein = self.protein_data[idx]
@@ -240,8 +242,9 @@ class ProteinProcessDataset(WrapDataset[tuple[list[str], np.ndarray]]):
         if self.heavy_coord: coord_mask |= is_heavy
         if self.h_coord: coord_mask |= is_h
         coord = coord[coord_mask]
+        coord_position = np.where(coord_mask[atom_mask])[0]
 
-        return atoms, coord
+        return atoms, coord, coord_position
     
 class CentralizeCoordsDataset(WrapDataset[tuple[np.ndarray, ...]]):
     def __init__(self, base_coord_data: Dataset[np.ndarray], *coord_datas: list[Dataset[np.ndarray]]):

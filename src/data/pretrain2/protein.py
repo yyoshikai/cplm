@@ -3,17 +3,15 @@ from logging import getLogger
 import numpy as np
 from torch.utils.data import Dataset
  
-from ..tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset
-from ..coord_transform import CoordTransform
+from ..tokenizer import TokenizeDataset, ArrayTokenizeDataset
 from ..lmdb import PickleLMDBDataset
 from ...utils import slice_str
 from ..finetune2 import Protein
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
-class ProteinDataset(Dataset):
+class ProteinProcessDataset(Dataset):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, net_dataset: Dataset[Protein], 
-            coord_transform: CoordTransform, 
             atom_heavy: bool = True, atom_h: bool = False,
             coord_heavy: bool=False, coord_h: bool = False):
         """
@@ -21,7 +19,6 @@ class ProteinDataset(Dataset):
         coord_heavy: ca, heavy, h のうちheavyのcoordを抽出するかどうか。
         """
         self.net_dataset = net_dataset
-        self.coord_transform = coord_transform
         self.atom_heavy = atom_heavy
         self.atom_h = atom_h
         self.coord_heavy = coord_heavy
@@ -30,30 +27,32 @@ class ProteinDataset(Dataset):
         assert not (self.coord_h and not self.atom_h)
 
     def __getitem__(self, idx):
-        data = self.net_dataset[idx]
-        atoms = data.atoms
-        coords = data.coord
+        protein = self.net_dataset[idx]
+        atoms = protein.atoms
+        coord = protein.coord
 
-        assert len(atoms) == len(coords)
+        assert len(atoms) == len(coord)
 
         # calc mask
         is_ca = atoms == 'CA'
         is_h = slice_str(atoms, 1) == 'H'
         is_heavy = (~is_ca)&(~is_h)
 
+        # atoms
         atom_mask = is_ca.copy()
         if self.atom_heavy: atom_mask |= is_heavy
         if self.atom_h: atom_mask |= is_h
         atoms = atoms[atom_mask]
+
+        # coord
         coord_mask = is_ca.copy()
         if self.coord_heavy: coord_mask |= is_heavy
         if self.coord_h: coord_mask |= is_h
-        coords = coords[coord_mask]
+        coord = coord[coord_mask]
         
-        coords = self.coord_transform(coords)
         coord_position = np.where(coord_mask[atom_mask])[0]
 
-        return atoms, coords, coord_position
+        return atoms, coord, coord_position
 
     def __len__(self):
         return len(self.net_dataset)
