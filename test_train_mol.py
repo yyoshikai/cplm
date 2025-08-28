@@ -57,7 +57,8 @@ smiles_tokenizer = StringTokenizer(open("/workspace/cplm/src/data/smiles_tokens.
 coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
 
 mol_data = UniMolLigandDataset(args.mol_data, 10)
-mol_data = MolProcessDataset(mol_data, seed=args.seed, h_atom=not args.no_lig_atom_h, h_coord=not args.no_lig_coord_h, randomize=args.lig_randomize, sample_save_dir=f"{result_dir}/ligand_sample")
+rstate = np.random.default_rng(args.seed)
+mol_data = MolProcessDataset(mol_data, rstate, h_atom=not args.no_lig_atom_h, h_coord=not args.no_lig_coord_h, randomize=args.lig_randomize, sample_save_dir=f"{result_dir}/ligand_sample")
 smi_data, coord_data = untuple(mol_data, 2)
 coord_data = CoordTransformDataset(coord_data, rstate=args.seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std)
 coord_data = untuple(coord_data, 3)[0]

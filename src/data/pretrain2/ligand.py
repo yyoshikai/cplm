@@ -10,14 +10,14 @@ from ..lmdb import PickleLMDBDataset
 from ..data import WrapDataset
 
 class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], seed: int, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
+    def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
         super().__init__(mol_data)
         self.mol_data = mol_data
         self.h_atom = h_atom
         self.h_coord = h_coord
         assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
         self.randomize = randomize
-        self.rng = np.random.default_rng(seed)
+        self.rng = rstate
 
         self.sample_save_dir = sample_save_dir
         self.getitem_count = 0
