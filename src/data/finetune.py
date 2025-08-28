@@ -62,14 +62,15 @@ class CDDataset(Dataset):
         lig_mol: Chem.Mol = data['lig_mol']
         score = float(data['score'])
         
+        ## remove hydrogen 250828 pretrain用のデータと合わせるためrandomizeと逆にした。
+        if not self.mol_atom_h:
+            lig_mol = Chem.RemoveHs(lig_mol)
+
         ## randomize
         nums = np.arange(lig_mol.GetNumAtoms())
         self.rstate.shuffle(nums)
         lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
         
-        ## remove hydrogen
-        if not self.mol_atom_h:
-            lig_mol = Chem.RemoveHs(lig_mol)
 
         lig_smi = Chem.MolToSmiles(lig_mol, canonical=False)
         conf_pos = lig_mol.GetConformer().GetPositions()

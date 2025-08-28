@@ -10,8 +10,7 @@ from ..lmdb import PickleLMDBDataset
 from ..data import WrapDataset
 
 class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], seed: int, h_atom: bool=True, h_coord: bool=True, randomize: bool=False, 
-            sample_save_dir: Optional[str]=None):
+    def __init__(self, mol_data: Dataset[Chem.Mol], seed: int, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
         super().__init__(mol_data)
         self.mol_data = mol_data
         self.h_atom = h_atom

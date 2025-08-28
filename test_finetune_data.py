@@ -25,7 +25,7 @@ import filecmp
 import numpy as np
 from torch.utils.data import StackDataset
 sys.path.append('/workspace/cplm')
-from src.data.finetune2 import CDDataset, MolProcessDataset, ProteinProcessDataset, CentralizeCoordsDataset, RandomRotateDataset
+from src.data.finetune2 import CDDataset, MolProcessDataset, ProteinProcessDataset
 from src.data.coord_transform2 import CoordTransformDataset
 from src.data import untuple
 
@@ -35,9 +35,8 @@ with open(f"{sdir}/config.yaml") as f:
 args.finetune_save_dir = "/workspace/cplm/ssd/preprocess/results/finetune/r4_all"
 rstate = np.random.RandomState(args.seed)
 protein, lig, score = untuple(CDDataset(args.finetune_save_dir), 3)
-lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True), 2)
+lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True, randomize=True), 2)
 protein_atoms, protein_coord = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy), 2)
-
 
 coords = CoordTransformDataset(lig_coord, protein_coord, rstate=rstate, normalize_coord=True, random_rotate=True)
 lig_coord, protein_coord, center, rotation_matrix = untuple(coords, 4)

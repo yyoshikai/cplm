@@ -210,27 +210,31 @@ class CDProteinDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
 
 class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState,
-            h_atom: bool=False, h_coord: bool=True):
+            h_atom: bool, h_coord: bool, randomize: bool):
         super().__init__(mol_data)
         self.mol_data = mol_data
         self.h_atom = h_atom
         self.h_coord = h_coord
+        self.randomize = randomize
         self.rstate = rstate
         assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
 
     def __getitem__(self, idx: int):
         mol = self.mol_data[idx]
 
-        ## randomize
-        nums = np.arange(mol.GetNumAtoms())
-        self.rstate.shuffle(nums)
-        mol = Chem.RenumberAtoms(mol, nums.tolist())
-        
         ## remove hydrogen
         if not self.h_atom:
             mol = Chem.RemoveHs(mol)
 
-        smi = Chem.MolToSmiles(mol, canonical=False)
+        ## randomize
+        if self.randomize:
+            nums = np.arange(mol.GetNumAtoms())
+            self.rstate.shuffle(nums)
+            mol = Chem.RenumberAtoms(mol, nums.tolist())
+            smi = Chem.MolToSmiles(mol, canonical=False)
+        else:
+            smi = Chem.MolToSmiles(mol)
+        
         conf_pos = mol.GetConformer().GetPositions()
         atom_idxs = np.array(mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
         if self.h_atom and not self.h_coord:
