@@ -40,7 +40,8 @@ from tqdm import tqdm
 sys.path += ["/workspace", "/workspace/cplm" ]
 from src.utils.logger import get_logger
 logger = get_logger(stream=True)
-from src.data.pretrain2 import UniMolLigandDataset, CoordTransform, MolProcessDataset
+from src.data.pretrain2 import UniMolLigandDataset, MolProcessDataset
+from src.data.coord_transform2 import CoordTransformDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, SentenceDataset, TokenizeDataset, ArrayTokenizeDataset
 from src.data import untuple
 
@@ -52,13 +53,14 @@ with open(f"{org_dir}/config.yaml") as f:
     args = Dict(yaml.safe_load(f))
 args.mol_data = '/workspace/cheminfodata/unimol/ligands/train.lmdb'
 
-coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
 smiles_tokenizer = StringTokenizer(open("/workspace/cplm/src/data/smiles_tokens.txt").read().splitlines())
 coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
 
 mol_data = UniMolLigandDataset(args.mol_data, 10)
-mol_data = MolProcessDataset(mol_data, seed=args.seed, coord_transform=coord_transform, atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h, randomize=args.lig_randomize, sample_save_dir=f"{result_dir}/ligand_sample")
+mol_data = MolProcessDataset(mol_data, seed=args.seed, h_atom=not args.no_lig_atom_h, h_coord=not args.no_lig_coord_h, randomize=args.lig_randomize, sample_save_dir=f"{result_dir}/ligand_sample")
 smi_data, coord_data = untuple(mol_data, 2)
+coord_data = CoordTransformDataset(coord_data, rstate=args.seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std)
+coord_data = untuple(coord_data, 3)[0]
 
 smi_data = TokenizeDataset(smi_data, smiles_tokenizer)
 coord_data = ArrayTokenizeDataset(coord_data, coord_tokenizer)

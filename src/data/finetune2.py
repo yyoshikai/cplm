@@ -219,26 +219,26 @@ class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
         assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
 
     def __getitem__(self, idx: int):
-        lig_mol = self.mol_data[idx]
+        mol = self.mol_data[idx]
 
         ## randomize
-        nums = np.arange(lig_mol.GetNumAtoms())
+        nums = np.arange(mol.GetNumAtoms())
         self.rstate.shuffle(nums)
-        lig_mol = Chem.RenumberAtoms(lig_mol, nums.tolist())
+        mol = Chem.RenumberAtoms(mol, nums.tolist())
         
         ## remove hydrogen
         if not self.h_atom:
-            lig_mol = Chem.RemoveHs(lig_mol)
+            mol = Chem.RemoveHs(mol)
 
-        lig_smi = Chem.MolToSmiles(lig_mol, canonical=False)
-        conf_pos = lig_mol.GetConformer().GetPositions()
-        atom_idxs = np.array(lig_mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
+        smi = Chem.MolToSmiles(mol, canonical=False)
+        conf_pos = mol.GetConformer().GetPositions()
+        atom_idxs = np.array(mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
         if self.h_atom and not self.h_coord:
-            atom_idxs = [idx for idx in atom_idxs if lig_mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
-            lig_coord = conf_pos[atom_idxs]
+            atom_idxs = [idx for idx in atom_idxs if mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
+            coord = conf_pos[atom_idxs]
         else:
-            lig_coord = conf_pos[atom_idxs]
-        return lig_smi, lig_coord
+            coord = conf_pos[atom_idxs]
+        return smi, coord
     
 class ProteinProcessDataset(WrapDataset[tuple[list[str], np.ndarray]]):
     def __init__(self, protein_data: Dataset[Protein],

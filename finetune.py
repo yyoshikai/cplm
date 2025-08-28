@@ -14,7 +14,8 @@ import transformers.utils.logging
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data.finetune2 import CDDataset, CDProteinDataset, MolProcessDataset, ProteinProcessDataset, CentralizeCoordsDataset, RandomRotateDataset
+from src.data.finetune2 import CDDataset, CDProteinDataset, MolProcessDataset, ProteinProcessDataset
+from src.data.coord_transform2 import CoordTransformDataset
 from src.data import untuple
 from src.data.lmdb import IntLMDBDataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder, \
@@ -122,8 +123,10 @@ rstate = np.random.RandomState(args.seed)
 protein, lig, score = untuple(cddata, 3)
 lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True), 2)
 pocket_atom, pocket_coord = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy, h_atom=True, h_coord=True), 2) # temp!!
-_center, lig_coord, pocket_coord = untuple(CentralizeCoordsDataset(lig_coord, pocket_coord), 3)
-_rotation_matrix, lig_coord, pocket_coord = untuple(RandomRotateDataset(rstate, lig_coord, pocket_coord), 3)
+
+coords = CoordTransformDataset(lig_coord, pocket_coord, normalize_coord=True, random_rotate=True)
+lig_coord, pocket_coord, _center, _rotation_matrix = untuple(coords, 4)
+
 
 ## sentence
 sentence = ['[POCKET]']
