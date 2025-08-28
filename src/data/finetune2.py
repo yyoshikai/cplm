@@ -215,9 +215,9 @@ class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
         self.mol_data = mol_data
         self.h_atom = h_atom
         self.h_coord = h_coord
+        assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
         self.randomize = randomize
         self.rstate = rstate
-        assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
 
     def __getitem__(self, idx: int):
         mol = self.mol_data[idx]

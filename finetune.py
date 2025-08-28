@@ -14,7 +14,8 @@ import transformers.utils.logging
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data.finetune2 import CDDataset, CDProteinDataset, MolProcessDataset, ProteinProcessDataset
+from src.data.finetune2 import CDDataset, CDProteinDataset, ProteinProcessDataset
+from src.data.pretrain2 import MolProcessDataset
 from src.data.coord_transform2 import CoordTransformDataset
 from src.data import untuple
 from src.data.lmdb import IntLMDBDataset
