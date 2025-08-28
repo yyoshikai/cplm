@@ -25,7 +25,8 @@ import filecmp
 import numpy as np
 from torch.utils.data import StackDataset
 sys.path.append('/workspace/cplm')
-from src.data.finetune2 import CDDataset, MolProcessDataset, ProteinProcessDataset
+from src.data.finetune2 import CDDataset, ProteinProcessDataset
+from src.data.pretrain2 import MolProcessDataset
 from src.data.coord_transform2 import CoordTransformDataset
 from src.data import untuple
 
