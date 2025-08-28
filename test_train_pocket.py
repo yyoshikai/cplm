@@ -43,7 +43,7 @@ for coord_follow in [False, True]:
 
     protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
     coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
-    pocket_data = UniMolPocketDataset(args.pocket_data, idx_to_key='str')
+    pocket_data = UniMolPocketDataset()
     pocket_data = ProteinProcessDataset(pocket_data, heavy_atom=not args.no_pocket_atom_heavy, heavy_coord=args.pocket_coord_heavy, h_atom=args.pocket_atom_h, h_coord=args.pocket_coord_h)
 
     atoms, coord, coord_position = untuple(pocket_data, 3)

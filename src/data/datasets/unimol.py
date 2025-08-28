@@ -8,18 +8,20 @@ from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
 from ..lmdb import PickleLMDBDataset
 from ..protein import Protein
+WORKDIR = os.environ.get('WORKDIR', "/workspace")
+DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
 class UniMolLigandDataset(Dataset[Chem.Mol]):
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, lmdb_path, n_conformer, sample_save_dir: Optional[str]=None):
-        self.net_dataset = PickleLMDBDataset(lmdb_path, idx_to_key='str')
-        self.n_conformer = n_conformer
+    def __init__(self, sample_save_dir: Optional[str]=None, unimol_dir=DEFAULT_UNIMOL_DIR):
+        self.dataset = PickleLMDBDataset(f"{unimol_dir}/ligands/train.lmdb", idx_to_key='str')
+        self.n_conformer = 10
         self.getitem_count = 0
         self.sample_save_dir = sample_save_dir
 
     def __getitem__(self, idx) -> Chem.Mol:
         mol_idx, conformer_idx = divmod(idx, self.n_conformer)
-        data = self.net_dataset[mol_idx]
+        data = self.dataset[mol_idx]
 
         smi = data['smi']
         coord: np.ndarray = data['coordinates'][conformer_idx]
@@ -57,11 +59,11 @@ class UniMolLigandDataset(Dataset[Chem.Mol]):
         return mol
     
     def __len__(self):
-        return len(self.net_dataset) * self.n_conformer
+        return len(self.dataset) * self.n_conformer
 
 class UniMolPocketDataset(Dataset[Protein]):
-    def __init__(self, lmdb_path, **kwargs):
-        self.dataset = PickleLMDBDataset(lmdb_path, **kwargs)
+    def __init__(self, unimol_dir=DEFAULT_UNIMOL_DIR):
+        self.dataset = PickleLMDBDataset(f"{unimol_dir}/pockets/train.lmdb", idx_to_key='str')
     
     def __getitem__(self, idx) -> Protein:
         data = self.dataset[idx]
