@@ -14,11 +14,10 @@ from ...utils import logtime
 # Pretrain時, 分子の処理用のデータセット
 class MoleculeDataset(Dataset):
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, dataset: Dataset, coord_transform: CoordTransform, 
+    def __init__(self, dataset: Dataset, 
             smiles_tokenizer: StringTokenizer, coord_tokenizer: FloatTokenizer
         ):
         self.dataset = dataset
-        self.coord_transform = coord_transform
         self.smiles_tokenizer = smiles_tokenizer
         self.coord_tokenizer = coord_tokenizer
 
@@ -27,7 +26,6 @@ class MoleculeDataset(Dataset):
         with logtime(self.logger, f"[{idx}]"):
             smi = data['smi']
             coord = data['coordinate']
-            coord = self.coord_transform(coord)
             return ['[LIGAND]']+self.smiles_tokenizer.tokenize(smi)+['[XYZ]']+self.coord_tokenizer.tokenize_array(coord.ravel())+['[END]']
 
     def __len__(self):
@@ -38,7 +36,7 @@ class MoleculeDataset(Dataset):
 
 class UniMolLigandDataset(Dataset):
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, lmdb_path, n_conformer, seed: int, 
+    def __init__(self, lmdb_path, n_conformer, seed: int, coord_transform: CoordTransform, 
             atom_h: bool=True, coord_h: bool=True, randomize: bool=False, 
             sample_save_dir: Optional[str]=None):
         """
@@ -60,6 +58,7 @@ class UniMolLigandDataset(Dataset):
             raise ValueError(f"atom_h=False and coord_h=True is not supported.")
         self.randomize = randomize
         self.rng = np.random.default_rng(seed)
+        self.coord_transform = coord_transform
 
         self.sample_save_dir = sample_save_dir
         self.getitem_count = 0
@@ -123,6 +122,7 @@ class UniMolLigandDataset(Dataset):
                 pd.DataFrame(coord) \
                     .to_csv(f"{save_dir}/out_coord.csv", header=False, index=False)
 
+            coord = self.coord_transform(coord)
             output = {'smi': smi, 'coordinate': coord}
             self.getitem_count += 1
             return output
