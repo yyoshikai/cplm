@@ -38,42 +38,41 @@ class ProteinDataset(Dataset):
         atoms = data.atoms
         coords = data.coord
 
-        with logtime(self.logger, f"[{idx}]"):
-            assert len(atoms) == len(coords)
+        assert len(atoms) == len(coords)
 
-            # calc mask
-            is_ca = atoms == 'CA'
-            is_h = slice_str(atoms, 1) == 'H'
-            is_heavy = (~is_ca)&(~is_h)
+        # calc mask
+        is_ca = atoms == 'CA'
+        is_h = slice_str(atoms, 1) == 'H'
+        is_heavy = (~is_ca)&(~is_h)
 
-            atom_mask = is_ca.copy()
-            if self.atom_heavy: atom_mask |= is_heavy
-            if self.atom_h: atom_mask |= is_h
-            atoms = atoms[atom_mask]
-            coord_mask = is_ca.copy()
-            if self.coord_heavy: coord_mask |= is_heavy
-            if self.coord_h: coord_mask |= is_h
-            coords = coords[coord_mask]
-            
-            coords = self.coord_transform(coords)
+        atom_mask = is_ca.copy()
+        if self.atom_heavy: atom_mask |= is_heavy
+        if self.atom_h: atom_mask |= is_h
+        atoms = atoms[atom_mask]
+        coord_mask = is_ca.copy()
+        if self.coord_heavy: coord_mask |= is_heavy
+        if self.coord_h: coord_mask |= is_h
+        coords = coords[coord_mask]
+        
+        coords = self.coord_transform(coords)
 
-            # tokenize
-            atom_tokens = self.atom_tokenizer.tokenize(atoms)
-            coord_tokens = self.coord_tokenizer.tokenize_array(coords.ravel())
+        # tokenize
+        atom_tokens = self.atom_tokenizer.tokenize(atoms)
+        coord_tokens = self.coord_tokenizer.tokenize_array(coords.ravel())
 
-            if self.coord_follow_atom:
-                coord_mask = coord_mask[atom_mask]
-                tokens = ['[POCKET]']
-                for atom_token, has_coord in zip(atom_tokens, coord_mask):
-                    tokens.append(atom_token)
-                    if has_coord:
-                        tokens += coord_tokens[:6]
-                        coord_tokens = coord_tokens[6:]
-                assert len(coord_tokens) == 0
-                tokens.append('[END]')
-                return tokens
-            else:
-                return ['[POCKET]']+atom_tokens+['[XYZ]']+coord_tokens+['[END]']
+        if self.coord_follow_atom:
+            coord_mask = coord_mask[atom_mask]
+            tokens = ['[POCKET]']
+            for atom_token, has_coord in zip(atom_tokens, coord_mask):
+                tokens.append(atom_token)
+                if has_coord:
+                    tokens += coord_tokens[:6]
+                    coord_tokens = coord_tokens[6:]
+            assert len(coord_tokens) == 0
+            tokens.append('[END]')
+            return tokens
+        else:
+            return ['[POCKET]']+atom_tokens+['[XYZ]']+coord_tokens+['[END]']
 
     def vocs(self) -> set[str]:
         return self.atom_tokenizer.vocs()|self.coord_tokenizer.vocs()|{'[POCKET]', '[XYZ]', '[END]'}
