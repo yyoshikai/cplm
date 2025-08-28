@@ -22,11 +22,8 @@ class MoleculeDataset(Dataset):
         self.coord_tokenizer = coord_tokenizer
 
     def __getitem__(self, idx):
-        data = self.dataset[idx]
-        with logtime(self.logger, f"[{idx}]"):
-            smi = data['smi']
-            coord = data['coordinate']
-            return ['[LIGAND]']+self.smiles_tokenizer.tokenize(smi)+['[XYZ]']+self.coord_tokenizer.tokenize_array(coord.ravel())+['[END]']
+        smi, coord = self.dataset[idx]
+        return ['[LIGAND]']+self.smiles_tokenizer.tokenize(smi)+['[XYZ]']+self.coord_tokenizer.tokenize_array(coord.ravel())+['[END]']
 
     def __len__(self):
         return len(self.dataset)
@@ -123,9 +120,8 @@ class UniMolLigandDataset(Dataset):
                     .to_csv(f"{save_dir}/out_coord.csv", header=False, index=False)
 
             coord = self.coord_transform(coord)
-            output = {'smi': smi, 'coordinate': coord}
             self.getitem_count += 1
-            return output
+            return smi, coord
     
     def __len__(self):
         return len(self.net_dataset) * self.n_conformer

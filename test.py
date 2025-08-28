@@ -41,7 +41,8 @@ sys.path += ["/workspace", "/workspace/cplm" ]
 from src.utils.logger import get_logger
 logger = get_logger(stream=True)
 from src.data.pretrain2 import UniMolLigandDataset, MoleculeDataset, CoordTransform
-from src.data.tokenizer import StringTokenizer, FloatTokenizer
+from src.data.tokenizer import StringTokenizer, FloatTokenizer, SentenceDataset, TokenizeDataset, ArrayTokenizeDataset
+from src.data import untuple
 
 result_dir = "./tmp"
 os.makedirs(result_dir, exist_ok=True)
@@ -56,7 +57,13 @@ smiles_tokenizer = StringTokenizer(open("/workspace/cplm/src/data/smiles_tokens.
 coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
 
 mol_data = UniMolLigandDataset(args.mol_data, 10, seed=args.seed, coord_transform=coord_transform, atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h, randomize=args.lig_randomize, sample_save_dir=f"{result_dir}/ligand_sample")
-mol_data = MoleculeDataset(mol_data, smiles_tokenizer, coord_tokenizer)
+smi_data, coord_data = untuple(mol_data, 2)
+
+smi_data = TokenizeDataset(smi_data, smiles_tokenizer)
+coord_data = ArrayTokenizeDataset(coord_data, coord_tokenizer)
+
+mol_data = SentenceDataset('[LIGAND]', smi_data, '[XYZ]', coord_data, '[END]')
+
 vocs = mol_data.vocs()
 
 items = []
