@@ -208,6 +208,7 @@ class CDProteinDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
             output += ({key: self.df[key][idx] for key in self.df}, )
         return output
 
+# 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class ProteinProcessDataset(WrapDataset[tuple[list[str], np.ndarray]]):
     def __init__(self, protein_data: Dataset[Protein],
             heavy_atom: bool=True, h_atom: bool=False,
