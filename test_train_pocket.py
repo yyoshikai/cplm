@@ -43,14 +43,14 @@ for coord_follow in [False, True]:
     protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
     coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
     pocket_data = UniMolPocketDataset(args.pocket_data, idx_to_key='str')
-    pocket_data = ProteinDataset(pocket_data, protein_atom_tokenizer, coord_tokenizer, coord_transform, atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, coord_follow_atom=coord_follow)
+    pocket_data = ProteinDataset(pocket_data, coord_transform, atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h)
 
     atoms, coord = untuple(pocket_data, 2)
-    atoms, coord, i_coord2i_atom = untuple(pocket_data, 3)
+    atoms, coord, coord_position = untuple(pocket_data, 3)
     atoms = TokenizeDataset(atoms, protein_atom_tokenizer)
     coord = ArrayTokenizeDataset(coord, coord_tokenizer)
     if coord_follow:
-        pocket_data = CoordFollowDataset(atoms, coord, i_coord2i_atom)
+        pocket_data = CoordFollowDataset(atoms, coord, coord_position)
         pocket_data = SentenceDataset('[POCKET]', pocket_data, '[END]')
     else:
         pocket_data = SentenceDataset('[POCKET]', atoms, '[XYZ]', coord, '[END]')
