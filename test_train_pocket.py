@@ -27,7 +27,7 @@ import sys, os
 import yaml
 from addict import Dict
 sys.path.append("/workspace/cplm")
-from src.data.pretrain import UniMolPocketDataset, ProteinDataset
+from src.data.pretrain2 import UniMolPocketDataset, ProteinDataset
 from src.data.coord_transform import CoordTransform
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer
 
