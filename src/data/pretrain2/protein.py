@@ -87,7 +87,7 @@ class UniMolPocketDataset(Dataset):
     def __getitem__(self, idx):
         data = self.dataset[idx]
         with logtime(self.logger, f"[{idx}]"):
-            data['coordinate'] = data.pop('coordinates')[0]
+            data['coordinate'] = data.pop('coordinates')[0]+1
             return data
 
     def __len__(self):
