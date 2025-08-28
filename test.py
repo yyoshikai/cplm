@@ -55,11 +55,10 @@ coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
 smiles_tokenizer = StringTokenizer(open("/workspace/cplm/src/data/smiles_tokens.txt").read().splitlines())
 coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
 
-mol_data = UniMolLigandDataset(args.mol_data, 10, 
-    sample_save_dir=f"{result_dir}/ligand_sample")
-mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer, seed=args.seed, 
+mol_data = UniMolLigandDataset(args.mol_data, 10, seed=args.seed, 
     atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h, randomize=args.lig_randomize, 
     sample_save_dir=f"{result_dir}/ligand_sample")
+mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
 vocs = mol_data.vocs()
 
 items = []
@@ -69,7 +68,4 @@ for i in range(3):
 assert vocs == vocs0
 for i in range(3):
     assert items[i] == items0[i]
-
-print(f"{items0[0]=}")
-print(f"{items[0]=}")
 
