@@ -29,9 +29,9 @@ for coord_follow in [False, True]:
     import numpy as np
     from addict import Dict
     sys.path.append("/workspace/cplm")
-    from src.data.pretrain2 import UniMolPocketDataset, CoordFollowDataset
-    from src.data.finetune2 import ProteinProcessDataset
-    from src.data.coord_transform2 import CoordTransformDataset
+    from src.data.datasets.unimol import UniMolPocketDataset
+    from src.data.protein import ProteinProcessDataset, CoordFollowDataset
+    from src.data.coord import CoordTransformDataset
     from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
     from src.data import untuple
 

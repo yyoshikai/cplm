@@ -7,68 +7,11 @@ from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
 from ..lmdb import PickleLMDBDataset
-from ..data import WrapDataset
-
-class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
-        super().__init__(mol_data)
-        self.mol_data = mol_data
-        self.h_atom = h_atom
-        self.h_coord = h_coord
-        assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
-        self.randomize = randomize
-        self.rng = rstate
-
-        self.sample_save_dir = sample_save_dir
-        self.getitem_count = 0
-        
-    def __getitem__(self, idx: int):
-        mol = self.mol_data[idx]
-
-        # remove hydrogen
-        if not self.h_atom:
-            mol = Chem.RemoveHs(mol)
-        
-        # randomize
-        if self.randomize:
-            idxs = np.arange(mol.GetNumAtoms(), dtype=int)
-            self.rng.shuffle(idxs)
-            mol = Chem.RenumberAtoms(mol, idxs.tolist())
-            smi = Chem.MolToSmiles(mol, canonical=False)
-        else:
-            smi = Chem.MolToSmiles(mol)
-        atom_order = mol.GetProp('_smilesAtomOutputOrder', autoConvert=True)
-        if self.h_atom and not self.h_coord:
-            atom_order = [o for o in atom_order if mol.GetAtomWithIdx(o).GetSymbol() != 'H']
-        coord = mol.GetConformer().GetPositions()
-        coord = coord[atom_order]
-
-        # save sample
-        if self.sample_save_dir is not None and self.getitem_count < 5:
-            save_dir = f"{self.sample_save_dir}/{idx}"
-            os.makedirs(save_dir, exist_ok=True)
-            with open(f"{save_dir}/out_smi.txt", 'w') as f:
-                f.write(smi)
-            pd.DataFrame(coord) \
-                .to_csv(f"{save_dir}/out_coord.csv", header=False, index=False)
-
-        self.getitem_count += 1
-        return smi, coord
+from ..protein import Protein
 
 class UniMolLigandDataset(Dataset[Chem.Mol]):
     logger = getLogger(f'{__module__}.{__qualname__}')
     def __init__(self, lmdb_path, n_conformer, sample_save_dir: Optional[str]=None):
-        """
-        ややdata specificな処理を行っている。
-        本当はもう少し上の段階でランダム化を行った方がよいかもしれない。
-                    
-        Parameters
-        ----------
-        h_atom: SMILESに水素を追加するかどうか
-        h_coord: 座標に水素を追加するかどうか
-
-        h_atom=True, h_coord=True とするとBindGPT
-        """
         self.net_dataset = PickleLMDBDataset(lmdb_path, idx_to_key='str')
         self.n_conformer = n_conformer
         self.getitem_count = 0
@@ -115,3 +58,16 @@ class UniMolLigandDataset(Dataset[Chem.Mol]):
     
     def __len__(self):
         return len(self.net_dataset) * self.n_conformer
+
+class UniMolPocketDataset(Dataset[Protein]):
+    def __init__(self, lmdb_path, **kwargs):
+        self.dataset = PickleLMDBDataset(lmdb_path, **kwargs)
+    
+    def __getitem__(self, idx) -> Protein:
+        data = self.dataset[idx]
+        atoms = np.array(data['atoms'])
+        coord =  data.pop('coordinates')[0] # * np.array([0, 1, 2])
+        return Protein(atoms=atoms, coord=coord)
+
+    def __len__(self):
+        return len(self.dataset)

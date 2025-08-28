@@ -40,8 +40,9 @@ from tqdm import tqdm
 sys.path += ["/workspace", "/workspace/cplm" ]
 from src.utils.logger import get_logger
 logger = get_logger(stream=True)
-from src.data.pretrain2 import UniMolLigandDataset, MolProcessDataset
-from src.data.coord_transform2 import CoordTransformDataset
+from src.data.datasets.unimol import UniMolLigandDataset
+from src.data.molecule import MolProcessDataset
+from src.data.coord import CoordTransformDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, SentenceDataset, TokenizeDataset, ArrayTokenizeDataset
 from src.data import untuple
 

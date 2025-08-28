@@ -1,30 +1,21 @@
-import os, pickle, io, logging, yaml, random
+import os, pickle, io, logging, yaml
 from logging import getLogger
 from collections import defaultdict
 
-import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset
 from time import time
-from dataclasses import dataclass
 from prody import parsePDB, parsePDBStream, confProDy, Contacts, addMissingAtoms
-from ..utils.lmdb import new_lmdb
-from .coord_transform import get_random_rotation_matrix
-from .lmdb import PickleLMDBDataset
-from .data import WrapDataset
-from ..utils import slice_str
+from ...utils.lmdb import new_lmdb
+from ..lmdb import PickleLMDBDataset
+from ..data import WrapDataset
 from rdkit import Chem
 confProDy(verbosity='none')
-from ..utils.logger import add_file_handler, get_logger
-from ..utils.rdkit import ignore_warning
-from ..utils.utils import CompressedArray
+from ...utils.logger import add_file_handler, get_logger
+from ...utils.rdkit import ignore_warning
+from ...utils.utils import CompressedArray
+from ..protein import Protein
 
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
-
-@dataclass
-class Protein:
-    atoms: np.ndarray
-    coord: np.ndarray
 
 class CDDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
     def __init__(self, save_dir: str, out_filename: bool=False):
@@ -207,84 +198,3 @@ class CDProteinDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
         if self.out_filename:
             output += ({key: self.df[key][idx] for key in self.df}, )
         return output
-
-# 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
-class ProteinProcessDataset(WrapDataset[tuple[list[str], np.ndarray]]):
-    def __init__(self, protein_data: Dataset[Protein],
-            heavy_atom: bool=True, h_atom: bool=False,
-            heavy_coord: bool=False, h_coord: bool=False):
-        super().__init__(protein_data)
-        self.protein_data = protein_data
-        self.heavy_atom = heavy_atom
-        self.h_atom = h_atom
-        self.heavy_coord = heavy_coord
-        self.h_coord = h_coord
-        assert not (self.heavy_coord and not self.heavy_atom)
-        assert not (self.h_coord and not self.h_atom)
-
-    def __getitem__(self, idx: int):
-        protein = self.protein_data[idx]
-        atoms = protein.atoms
-        coord = protein.coord
-
-        # calc mask
-        is_ca = atoms == 'CA'
-        is_h = slice_str(atoms, 1) == 'H'
-        is_heavy = (~is_ca)&(~is_h)
-
-        # atoms 
-        atom_mask = is_ca.copy()
-        if self.heavy_atom: atom_mask |= is_heavy
-        if self.h_atom: atom_mask |= is_h
-        atoms = atoms[atom_mask]
-
-        # coord
-        coord_mask = is_ca.copy()
-        if self.heavy_coord: coord_mask |= is_heavy
-        if self.h_coord: coord_mask |= is_h
-        coord = coord[coord_mask]
-        coord_position = np.where(coord_mask[atom_mask])[0]
-
-        return atoms, coord, coord_position
-    
-class CentralizeCoordsDataset(WrapDataset[tuple[np.ndarray, ...]]):
-    def __init__(self, base_coord_data: Dataset[np.ndarray], *coord_datas: list[Dataset[np.ndarray]]):
-        super().__init__(base_coord_data)
-        self.base_coord_data = base_coord_data
-        self.coord_datas = coord_datas
-    
-    def __getitem__(self, idx: int):
-        base_coord = self.base_coord_data[idx]
-        center = np.mean(base_coord, axis=0)
-        base_coord -= center
-        return (center, base_coord, ) + tuple(coord_data[idx] - center 
-                for coord_data in self.coord_datas)
-
-class RandomRotateDataset(WrapDataset[tuple[np.ndarray, ...]]):
-    def __init__(self, rstate: np.random.RandomState, *coord_datas: list[Dataset[np.ndarray]]):
-        super().__init__(coord_datas[0])
-        self.rstate = rstate
-        self.coord_datas = coord_datas
-
-    def __getitem__(self, idx: int):
-        rotation_matrix = get_random_rotation_matrix(self.rstate)
-        return (rotation_matrix, )+tuple(np.matmul(coord_data[idx], rotation_matrix) 
-                for coord_data in self.coord_datas)
-
-class RandomScoreDataset(Dataset[float]):
-    def __init__(self, min: float, max: float, size: int, seed: int):
-        self.min = min
-        self.max = max
-        self.size = size
-        self.rng = random.Random(seed)
-
-    def __getitem__(self, idx: int):
-        return self.rng.uniform(self.min, self.max)
-
-    def __len__(self):
-        return self.size
-
-
-
-
-

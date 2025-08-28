@@ -25,9 +25,10 @@ import filecmp
 import numpy as np
 from torch.utils.data import StackDataset
 sys.path.append('/workspace/cplm')
-from src.data.finetune2 import CDDataset, ProteinProcessDataset
-from src.data.pretrain2 import MolProcessDataset
-from src.data.coord_transform2 import CoordTransformDataset
+from src.data.datasets.crossdocked import CDDataset
+from src.data.protein import ProteinProcessDataset
+from src.data.molecule import MolProcessDataset
+from src.data.coord import CoordTransformDataset
 from src.data import untuple
 
 sdir = "/workspace/cplm/finetune/results/250628_mamba"
