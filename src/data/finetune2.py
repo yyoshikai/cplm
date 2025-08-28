@@ -208,42 +208,6 @@ class CDProteinDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
             output += ({key: self.df[key][idx] for key in self.df}, )
         return output
 
-class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState,
-            h_atom: bool, h_coord: bool, randomize: bool):
-        super().__init__(mol_data)
-        self.mol_data = mol_data
-        self.h_atom = h_atom
-        self.h_coord = h_coord
-        assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
-        self.randomize = randomize
-        self.rstate = rstate
-
-    def __getitem__(self, idx: int):
-        mol = self.mol_data[idx]
-
-        ## remove hydrogen
-        if not self.h_atom:
-            mol = Chem.RemoveHs(mol)
-
-        ## randomize
-        if self.randomize:
-            nums = np.arange(mol.GetNumAtoms())
-            self.rstate.shuffle(nums)
-            mol = Chem.RenumberAtoms(mol, nums.tolist())
-            smi = Chem.MolToSmiles(mol, canonical=False)
-        else:
-            smi = Chem.MolToSmiles(mol)
-        
-        conf_pos = mol.GetConformer().GetPositions()
-        atom_idxs = np.array(mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
-        if self.h_atom and not self.h_coord:
-            atom_idxs = [idx for idx in atom_idxs if mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
-            coord = conf_pos[atom_idxs]
-        else:
-            coord = conf_pos[atom_idxs]
-        return smi, coord
-    
 class ProteinProcessDataset(WrapDataset[tuple[list[str], np.ndarray]]):
     def __init__(self, protein_data: Dataset[Protein],
             heavy_atom: bool=True, h_atom: bool=False,

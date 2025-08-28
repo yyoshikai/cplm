@@ -54,7 +54,6 @@ class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
 
         self.getitem_count += 1
         return smi, coord
-    
 
 class UniMolLigandDataset(Dataset[Chem.Mol]):
     logger = getLogger(f'{__module__}.{__qualname__}')
