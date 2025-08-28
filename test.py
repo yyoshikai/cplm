@@ -70,5 +70,6 @@ assert vocs == vocs0
 for i in range(3):
     assert items[i] == items0[i]
 
-
+print(f"{items0[0]=}")
+print(f"{items[0]=}")
 
