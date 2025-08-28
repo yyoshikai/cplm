@@ -1,51 +1,70 @@
-# ref
-import sys, os, pickle
-from addict import Dict
+import sys, os, math
+import numpy as np, pandas as pd
 import yaml
-sys.path.append('/workspace/cplm')
-from src.data.finetune import CDDataset
-
-sdir = "/workspace/cplm/finetune/results/250628_mamba"
-with open(f"{sdir}/config.yaml") as f:
-    args = Dict(yaml.safe_load(f))
-args.finetune_save_dir = "/workspace/cplm/ssd/preprocess/results/finetune/r4_all"
-cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
-        mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
-
-os.makedirs("items/ref", exist_ok=True)
-for i in range(3):
-    with open(f"items/ref/{i}.pkl", 'wb') as f:
-        pickle.dump(cddata[i], f)
-
-# ref
-import sys, os, pickle
 from addict import Dict
-import yaml
-import filecmp
-import numpy as np
-from torch.utils.data import StackDataset
-sys.path.append('/workspace/cplm')
-from src.data.finetune2 import CDDataset, MolProcessDataset, ProteinProcessDataset, CentralizeCoordsDataset, RandomRotateDataset
-from src.data import untuple
+from tqdm import tqdm
+sys.path += ["/workspace", "/workspace/cplm" ]
+from src.utils.logger import get_logger
+logger = get_logger(stream=True)
+from src.data.pretrain import UniMolLigandDataset, MoleculeDataset, CoordTransform
+from src.data.tokenizer import StringTokenizer, FloatTokenizer
 
-sdir = "/workspace/cplm/finetune/results/250628_mamba"
-with open(f"{sdir}/config.yaml") as f:
+result_dir = "./tmp"
+os.makedirs(result_dir, exist_ok=True)
+
+org_dir = "/workspace/cplm/training/results/250619_mamba"
+with open(f"{org_dir}/config.yaml") as f:
     args = Dict(yaml.safe_load(f))
-args.finetune_save_dir = "/workspace/cplm/ssd/preprocess/results/finetune/r4_all"
-rstate = np.random.RandomState(args.seed)
-protein, lig, score = untuple(CDDataset(args.finetune_save_dir), 3)
-lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True), 2)
-protein_atoms, protein_coord = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy), 2)
-center, lig_coord, protein_coord = untuple(CentralizeCoordsDataset(lig_coord, protein_coord), 3)
-rotation_matrix, lig_coord, protein_coord = untuple(RandomRotateDataset(rstate, lig_coord, protein_coord), 3)
-cddata = StackDataset(lig_smi, lig_coord, protein_atoms, protein_coord, score, center, rotation_matrix)
+args.mol_data = '/workspace/cheminfodata/unimol/ligands/train.lmdb'
 
+coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
+smiles_tokenizer = StringTokenizer(open("/workspace/cplm/src/data/smiles_tokens.txt").read().splitlines())
+coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
 
-os.makedirs("items/mod", exist_ok=True)
+mol_data = UniMolLigandDataset(args.mol_data, 10, seed=args.seed, 
+    atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h, randomize=args.lig_randomize, 
+    sample_save_dir=f"{result_dir}/ligand_sample" if args.test else None)
+mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
+vocs0 = mol_data.vocs()
+
+items0 = []
 for i in range(3):
-    with open(f"items/mod/{i}.pkl", 'wb') as f:
-        lig_smi, lig_coord, protein_atoms, protein_coord, score, center, rotation_matrix = cddata[i]
-        item = (protein_atoms, protein_coord, lig_smi, lig_coord, score, center, rotation_matrix)
-        pickle.dump(item, f)
-    assert (filecmp.cmp(f"items/ref/{i}.pkl", f"items/mod/{i}.pkl"))
-    print('OK')
+    items0.append(mol_data[i])
+
+# mod
+import sys, os, math
+import numpy as np, pandas as pd
+import yaml
+from addict import Dict
+from tqdm import tqdm
+sys.path += ["/workspace", "/workspace/cplm" ]
+from src.utils.logger import get_logger
+logger = get_logger(stream=True)
+from src.data.pretrain2 import UniMolLigandDataset, MoleculeDataset, CoordTransform
+from src.data.tokenizer import StringTokenizer, FloatTokenizer
+
+result_dir = "./tmp"
+os.makedirs(result_dir, exist_ok=True)
+
+org_dir = "/workspace/cplm/training/results/250619_mamba"
+with open(f"{org_dir}/config.yaml") as f:
+    args = Dict(yaml.safe_load(f))
+args.mol_data = '/workspace/cheminfodata/unimol/ligands/train.lmdb'
+
+coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
+smiles_tokenizer = StringTokenizer(open("/workspace/cplm/src/data/smiles_tokens.txt").read().splitlines())
+coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
+
+mol_data = UniMolLigandDataset(args.mol_data, 10, seed=args.seed, 
+    atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h, randomize=args.lig_randomize, 
+    sample_save_dir=f"{result_dir}/ligand_sample" if args.test else None)
+mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
+vocs = mol_data.vocs()
+
+items = []
+for i in range(3):
+    items.append(mol_data[i])
+
+assert vocs == vocs0
+for i in range(3):
+    assert items[i] == items0[i]

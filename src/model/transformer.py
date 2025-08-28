@@ -229,7 +229,7 @@ def align_embedding(module: nn.Module, state_dict, prefix, local_metadata,
         state_idx = np.array([np.where(state_vocs == v)[0][0] for v in common_vocs])
         self_idx = np.array([np.where(module_vocs == v)[0][0] for v in common_vocs])
         keys = [f'{embedding_name}.weight', f'{predictor_name}.weight']
-        if predictor.bias: keys.append(f'{predictor_name}.bias')
+        if predictor.bias is not None: keys.append(f'{predictor_name}.bias')
         for key in keys:
             state_param = state_dict[prefix+key]
             size = list(state_param.shape)

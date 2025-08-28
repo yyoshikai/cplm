@@ -5,6 +5,7 @@ from glob import glob
 
 import yaml
 from addict import Dict
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.utils.data import Subset
@@ -13,8 +14,8 @@ import transformers.utils.logging
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data.finetune import CDDataset
-from src.data import untuple_dataset
+from src.data.finetune2 import CDDataset, CDProteinDataset, MolProcessDataset, ProteinProcessDataset, CentralizeCoordsDataset, RandomRotateDataset
+from src.data import untuple
 from src.data.lmdb import IntLMDBDataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder, \
         ProteinAtomTokenizer, FloatTokenizer, StringTokenizer
@@ -47,6 +48,7 @@ parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--finetune-save-dir", required=True)
 parser.add_argument("--index-lmdb")
 parser.add_argument("--no-score", action='store_true')
+parser.add_argument('--protein', action='store_true')
 
 ## pretrain
 parser.add_argument("--pretrain-name", required=True)
@@ -108,13 +110,20 @@ transformers.utils.logging.disable_default_handler()
 
 # data
 ## pocket and ligands
-cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
-        mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
+if args.protein:
+    cddata = CDProteinDataset(args.finetune_save_dir)
+else:
+    cddata = CDDataset(args.finetune_save_dir)
 if args.index_lmdb is not None:
     index_data = IntLMDBDataset(args.index_lmdb)
     cddata = Subset(cddata, index_data)
-pocket_atom, pocket_coord, lig_smi, lig_coord, score, _center, _rotatoin_matrix \
-    = untuple_dataset(cddata, 7)
+# , args.seed, mol_atom_h=True, mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy
+rstate = np.random.RandomState(args.seed)
+protein, lig, score = untuple(cddata, 3)
+lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True), 2)
+pocket_atom, pocket_coord = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy, h_atom=True, h_coord=True), 2) # temp!!
+_center, lig_coord, pocket_coord = untuple(CentralizeCoordsDataset(lig_coord, pocket_coord), 3)
+_rotation_matrix, lig_coord, pocket_coord = untuple(RandomRotateDataset(rstate, lig_coord, pocket_coord), 3)
 
 ## sentence
 sentence = ['[POCKET]']

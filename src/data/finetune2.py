@@ -7,7 +7,7 @@ import pandas as pd
 from torch.utils.data import Dataset
 from time import time
 from dataclasses import dataclass
-from prody import parsePDB, parsePDBStream, confProDy, Contacts
+from prody import parsePDB, parsePDBStream, confProDy, Contacts, addMissingAtoms
 from ..utils.lmdb import new_lmdb
 from .coord_transform import get_random_rotation_matrix
 from .lmdb import PickleLMDBDataset
@@ -18,6 +18,8 @@ confProDy(verbosity='none')
 from ..utils.logger import add_file_handler, get_logger
 from ..utils.rdkit import ignore_warning
 from ..utils.utils import CompressedArray
+
+WORKDIR = os.environ.get('WORKDIR', "/workspace")
 
 @dataclass
 class Protein:
@@ -168,7 +170,44 @@ class CDDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
         logger.info(f"# of data: {idx}")
         logger.info(f"# of invalid mols: {n_invalid}")
         logger.info(f"# of far away ligand: {n_far}")
+
+class CDProteinDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, save_dir: str, cddir: str=f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020",  out_filename: bool=False):
+        self.lmdb_dataset = PickleLMDBDataset(f"{save_dir}/main.lmdb", idx_to_key='str')
+        super().__init__(self.lmdb_dataset)
+        self.out_filename = out_filename
+        self.cddir = cddir
+        os.makedirs("tmp", exist_ok=True)
+
+        self.logger.info("Loading filenames.csv.gz ... ")
+        df = pd.read_csv(f"{save_dir}/filenames.csv.gz")
+        self.logger.info("loaded.")
+        self.df = {'idx': df['idx'].values}
+        for key in ['dname', 'lig_name', 'protein_name']:
+            self.df[key] = CompressedArray(df[key].values)
+        self.df['sdf_idx'] = df['sdf_idx'].values
+        del df
+
+    def __getitem__(self, idx: int):
+        data = self.lmdb_dataset[idx]
+
+        # ligand
+        lig_mol: Chem.Mol = data['lig_mol']
+        score = float(data['score'])
+
+        # protein
+        dname = self.df['dname'][idx]
+        protein_name = self.df['protein_name'][idx]
+        addMissingAtoms(f"{self.cddir}/{dname}/{protein_name}", outfile=f"./tmp/{dname}_{protein_name}.pdb")
+        protein = parsePDB(f"./tmp/{dname}_{protein_name}.pdb")
+        protein = Protein(protein.getData('name'), protein.getCoords())
         
+        output = (protein, lig_mol, score)
+        if self.out_filename:
+            output += ({key: self.df[key][idx] for key in self.df}, )
+        return output
+
 class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState,
             h_atom: bool=False, h_coord: bool=True):
@@ -272,3 +311,8 @@ class RandomScoreDataset(Dataset[float]):
 
     def __len__(self):
         return self.size
+
+
+
+
+
