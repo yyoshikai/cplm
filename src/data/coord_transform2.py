@@ -19,7 +19,7 @@ class CoordTransformDataset(WrapDataset[np.ndarray]):
         # normalize
         if self.normalize_coord:
             if coords[0].size > 0:
-                center = np.mean(coords[0], axis=0, keepdims=True)
+                center = np.mean(coords[0], axis=0)
                 coords = [coord - center for coord in coords]
             else:
                 if len(coords) > 1:
