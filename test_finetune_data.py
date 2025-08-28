@@ -40,6 +40,10 @@ center, lig_coord, protein_coord = untuple(CentralizeCoordsDataset(lig_coord, pr
 rotation_matrix, lig_coord, protein_coord = untuple(RandomRotateDataset(rstate, lig_coord, protein_coord), 3)
 cddata = StackDataset(lig_smi, lig_coord, protein_atoms, protein_coord, score, center, rotation_matrix)
 
+"""
+coords = CoordTransformDataset(lig_coord, protein_coord, rstate=rstate, normalize_coord=True, random_rotate=True)
+lig_coord, protein_coord, center, rotation_matrix = untuple(coords, 4)
+"""
 
 os.makedirs("items/mod", exist_ok=True)
 for i in range(3):
