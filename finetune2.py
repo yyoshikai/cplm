@@ -25,7 +25,7 @@ from src.data.tokenizer import TokenEncodeDataset, VocEncoder, \
 from src.data.collator import DDPStringCollateLoader
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, StringTokenizer, \
     TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
-from src.data.pretrain.protein import CoordFollowDataset
+from src.data.protein import CoordFollowDataset
 from src.model import Model, MambaModel
 from src.utils import set_logtime
 from src.utils.path import timestamp
@@ -136,7 +136,7 @@ pocket_atom = TokenizeDataset(pocket_atom, ProteinAtomTokenizer())
 float_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
 pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
 if targs.get('coord_follow_atom', False):
-    sentence.append(CoordFollowDataset(pocket_atom, pocket_coord))
+    sentence.append(CoordFollowDataset(pocket_atom, pocket_coord, pocket_coord_position))
 else:
     sentence += [pocket_atom, '[XYZ]', pocket_coord]
 
