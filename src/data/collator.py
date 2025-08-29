@@ -5,6 +5,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 import torch.distributed as dist
 from ..utils.logger import get_logger
+from .data import IndexDataset
 from .sampler import InfiniteRandomSampler
 
 class StringCollateLoader:
@@ -61,14 +62,18 @@ class DDPStringCollateLoader:
     logger = get_logger(f"{__module__}.{__qualname__}")
     def __init__(self, dataset: Dataset, num_workers:int, pin_memory: bool, prefetch_factor: int, 
             token_per_batch: int, batch_first: bool, padding_value: int,
-            device: torch.device, main_rank: int=0):
+            device: torch.device, main_rank: int=0, seed: int=None):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
         self.device = device
 
         if self.rank == self.main_rank:
-            sampler = InfiniteRandomSampler(dataset)
+
+            # temp
+            dataset = IndexDataset(dataset)
+            generator = torch.Generator().manual_seed(seed) if seed is not None else None
+            sampler = InfiniteRandomSampler(dataset, generator=generator)
             self.token_per_batch = token_per_batch
             self.loader = DataLoader(dataset, batch_size=None, sampler=sampler, num_workers=num_workers, 
                 pin_memory=pin_memory, persistent_workers=True, prefetch_factor=prefetch_factor)
@@ -77,6 +82,8 @@ class DDPStringCollateLoader:
             self.step = 0
             self.batch_first = batch_first
             self.padding_value = padding_value
+            
+            self.i_item = 0
 
     def __next__(self) -> torch.Tensor:
         if self.rank == self.main_rank:
@@ -84,8 +91,10 @@ class DDPStringCollateLoader:
             while True:
                 # get next item
                 if self.next_item is None:
-                    self.next_item = self.iter.__next__()
-
+                    index, self.next_item = self.iter.__next__()
+                    self.logger.debug(f"{self.i_item}: {index}")
+                    self.logger.debug(f"    {self.next_item}")
+                    self.i_item += 1
                 # check maximum size
                 next_size = len(self.next_item)
                 if next_size > self.token_per_batch:

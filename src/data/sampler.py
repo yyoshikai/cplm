@@ -16,6 +16,7 @@ class InfiniteRandomSampler(Sampler):
         self.epoch = 0
         while True:
             self.logger.info('Calculating sample order...')
+            self.logger.info(f'{self.generator=}')
             order = torch.randperm(len(self.dataset), generator=self.generator).tolist()
             self.logger.info('calculated.')
             yield from order
