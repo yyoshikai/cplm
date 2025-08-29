@@ -217,7 +217,7 @@ class ReinforceIter:
 
         if self.rank == self.main_rank:
             loader = DataLoader(dataset, batch_size=None, 
-                sampler=InfiniteRandomSampler(dataset),
+                sampler=InfiniteRandomSampler(dataset, generator=torch.Generator().manual_seed(args.seed)), # reinforce2との比較のため変更
                 num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
             self.logger.info(f"Loading filenames.csv.gz ...")
             self.df_file = pd.read_csv(f"{args.finetune_save_dir}/filenames.csv.gz", index_col=0)
@@ -241,6 +241,7 @@ class ReinforceIter:
                     idx, data, center, rotation = self.idx, self.data, self.center, self.rotation
                 else:
                     idx, data, center, rotation = self.iter.__next__()
+                logger.info(f"{data=}")
                 all_idxs.append(idx)
                 all_datas += [data]*self.repeat_per_sample
                 all_centers.append(center)
