@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np, pandas as pd
 from torch.utils.data import Dataset
 from rdkit import Chem
-from .data import WrapDataset
+from .data import WrapDataset, untuple
 
 class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
@@ -50,6 +50,7 @@ class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
 
         self.getitem_count += 1
         return smi, coord
+    
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):

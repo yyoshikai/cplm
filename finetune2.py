@@ -123,10 +123,11 @@ if args.index_lmdb is not None:
 rstate = np.random.RandomState(args.seed)
 protein, lig, score = untuple(cddata, 3)
 lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True, randomize=True), 2)
-pocket_atom, pocket_coord = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy), 2)
+pocket_atom, pocket_coord, pocket_coord_position \
+    = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy), 3)
 
-coords = CoordTransformDataset(lig_coord, pocket_coord, rstate=rstate, normalize_coord=True, random_rotate=True)
-lig_coord, pocket_coord, _center, _rotation_matrix = untuple(coords, 4)
+lig_coord, pocket_coord, _center, _rotation_matrix \
+    = untuple(CoordTransformDataset(lig_coord, pocket_coord, rstate=rstate, normalize_coord=True, random_rotate=True), 4)
 
 
 ## sentence
