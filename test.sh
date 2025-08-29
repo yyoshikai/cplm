@@ -1,26 +1,40 @@
 
 
-# train
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
+# train
+torchrun --nproc-per-node 1 train2.py --studyname test2 --token-per-step 160000 \
+    --mol-repeat 1 --pocket-repeat 5 --frag-repeat 0 --num-workers 28 \
+    --mol-data /workspace/ssd/cheminfodata/unimol/ligands/train.lmdb \
+    --pocket-data /workspace/ssd/cheminfodata/unimol/pockets/train.lmdb \
+    --test --sdp-kernel FLASH --seed 2\
+    --pocket-coord-heavy --logtime --prefetch-factor 10 --coord-follow-atom
+
+torchrun --nproc-per-node 1 train.py --studyname test --token-per-step 160000 \
+    --mol-repeat 1 --pocket-repeat 5 --frag-repeat 0 --num-workers 28 \
+    --mol-data /workspace/ssd/cheminfodata/unimol/ligands/train.lmdb \
+    --pocket-data /workspace/ssd/cheminfodata/unimol/pockets/train.lmdb \
+    --test --sdp-kernel FLASH --seed 2\
+    --pocket-coord-heavy --logtime --prefetch-factor 10 --coord-follow-atom
+# git add . && git commit -m check_train_train2_follow
+
+<<hist
+
+# train
 torchrun --nproc-per-node 1 train2.py --studyname test2 --token-per-step 160000 \
     --mol-repeat 1 --pocket-repeat 5 --frag-repeat 0 --num-workers 28 \
     --mol-data /workspace/ssd/cheminfodata/unimol/ligands/train.lmdb \
     --pocket-data /workspace/ssd/cheminfodata/unimol/pockets/train.lmdb \
     --test --sdp-kernel FLASH --seed 2\
     --pocket-coord-heavy --logtime --prefetch-factor 10
-   
+
 torchrun --nproc-per-node 1 train.py --studyname test --token-per-step 160000 \
     --mol-repeat 1 --pocket-repeat 5 --frag-repeat 0 --num-workers 28 \
     --mol-data /workspace/ssd/cheminfodata/unimol/ligands/train.lmdb \
     --pocket-data /workspace/ssd/cheminfodata/unimol/pockets/train.lmdb \
     --test --sdp-kernel FLASH --seed 2\
     --pocket-coord-heavy --logtime --prefetch-factor 10 
-
-
 # git add . && git commit -m check_train_train2
-
-<<hist
 
 # finetune coord_follow
 torchrun finetune.py --test --pretrain-name 250424_follow \
