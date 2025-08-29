@@ -10,8 +10,12 @@ from rdkit import Chem, RDLogger
 sys.path += ["/workspace/cplm"]
 from src.data.tokenizer import FloatTokenizer, \
     ProteinAtomTokenizer, VocEncoder, TokenEncodeDataset
-from src.data import untuple_dataset, index_dataset
-from src.data.finetune import  CDDataset, RandomScoreDataset
+from src.data import untuple, index_dataset
+from src.data.datasets.crossdocked import CDDataset, CDProteinDataset
+from src.data.protein import ProteinProcessDataset
+from src.data.molecule import MolProcessDataset, RandomScoreDataset
+from src.data.coord import CoordTransformDataset
+from src.data.protein import CoordFollowDataset
 from src.data.tokenizer import TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
 from src.model import Model
 from src.model.mamba import MambaModel2
@@ -26,7 +30,7 @@ WORKDIR = "/workspace"
 def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batch: int, 
         seed: int, max_len: int, index: str, pocket_coord_heavy: bool, 
         coord_range: float, prompt_score: Literal['data', 'low', 'no_score'], 
-        state_vocs: list, gtype: int=2):
+        state_vocs: list, gtype: int=2, coord_follow_atom: bool=False):
     
     assert prompt_score in ['data', 'low', 'no_score']
 
@@ -54,9 +58,16 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
     logger.info("Preparing data...")
 
     ## CrossDocked
-    data = CDDataset(f"{WORKDIR}/cplm/preprocess/results/finetune/r4_all", seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True, 
-        pocket_coord_heavy=pocket_coord_heavy)
-    pocket_atom, pocket_coord, _, _, score, center  = untuple_dataset(data, 6)
+    cddata = CDDataset(f"{WORKDIR}/cplm/preprocess/results/finetune/r4_all")
+    # seed, random_rotate=False, mol_atom_h=True, mol_coord_h=True,pocket_coord_heavy=pocket_coord_heavy
+    rstate = np.random.RandomState(seed)
+    protein, lig, score = untuple(cddata, 3)
+    lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True, randomize=True), 2)
+    pocket_atom, pocket_coord, pocket_coord_position \
+        = untuple(ProteinProcessDataset(protein, heavy_coord=pocket_coord_heavy), 3)
+
+    lig_coord, pocket_coord, _center, _rotation_matrix \
+        = untuple(CoordTransformDataset(lig_coord, pocket_coord, rstate=rstate, normalize_coord=True, random_rotate=True), 4)
 
     ## Sentence
     float_tokenizer = FloatTokenizer(-coord_range, coord_range)
@@ -64,7 +75,10 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
     pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
     sentence = ['[POCKET]']
 
-    sentence += [pocket_atom, '[XYZ]', pocket_coord]
+    if coord_follow_atom:
+        sentence.append(CoordFollowDataset(pocket_atom, pocket_coord, pocket_coord_position))
+    else:
+        sentence += [pocket_atom, '[XYZ]', pocket_coord]
 
     if prompt_score != 'no_score':
         if prompt_score == 'low':

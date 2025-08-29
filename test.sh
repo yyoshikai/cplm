@@ -2,7 +2,10 @@
 
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
+<<hist
+# reinforce_followはやっていないが, 面倒なので飛ばす
 
+# reinforce
 torchrun reinforce.py --finetune-name 250510_rft_coord --finetune-step 5000 \
     --finetune-save-dir preprocess/results/finetune/r4_all \
     --target qvina --max-step 10000 --record-opt-step 500\
@@ -13,7 +16,6 @@ torchrun reinforce2.py --finetune-name 250510_rft_coord --finetune-step 5000 \
     --target qvina --max-step 10000 --record-opt-step 500\
     --num-workers 20 --num-score-workers 1 --studyname test2 --pin-memory --prefetch-factor 10 --pocket-coord-heavy --sdp-kernel FLASH --reward-scale sample_mean --generate-per-sample 2 --min-score ' -10' --ignore-error --batch-size 16 --tqdm-generate --tqdm
 # git add . && git commit -m check_reinforce_reinforce2
-<<hist
 
 # train_follow
 torchrun --nproc-per-node 1 train2.py --studyname test2 --token-per-step 160000 \

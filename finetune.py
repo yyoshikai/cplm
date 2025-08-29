@@ -5,6 +5,7 @@ from glob import glob
 
 import yaml
 from addict import Dict
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.utils.data import Subset
@@ -13,15 +14,18 @@ import transformers.utils.logging
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
-from src.data.finetune import CDDataset
-from src.data import untuple_dataset
+from src.data.datasets.crossdocked import CDDataset, CDProteinDataset
+from src.data.protein import ProteinProcessDataset
+from src.data.molecule import MolProcessDataset
+from src.data.coord import CoordTransformDataset
+from src.data import untuple
 from src.data.lmdb import IntLMDBDataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder, \
         ProteinAtomTokenizer, FloatTokenizer, StringTokenizer
 from src.data.collator import DDPStringCollateLoader
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, StringTokenizer, \
     TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
-from src.data.pretrain.protein import CoordFollowDataset
+from src.data.protein import CoordFollowDataset
 from src.model import Model, MambaModel
 from src.utils import set_logtime
 from src.utils.path import timestamp
@@ -47,6 +51,7 @@ parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--finetune-save-dir", required=True)
 parser.add_argument("--index-lmdb")
 parser.add_argument("--no-score", action='store_true')
+parser.add_argument('--protein', action='store_true')
 
 ## pretrain
 parser.add_argument("--pretrain-name", required=True)
@@ -108,13 +113,22 @@ transformers.utils.logging.disable_default_handler()
 
 # data
 ## pocket and ligands
-cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
-        mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
+if args.protein:
+    cddata = CDProteinDataset(args.finetune_save_dir)
+else:
+    cddata = CDDataset(args.finetune_save_dir)
 if args.index_lmdb is not None:
     index_data = IntLMDBDataset(args.index_lmdb)
     cddata = Subset(cddata, index_data)
-pocket_atom, pocket_coord, lig_smi, lig_coord, score, _center, _rotatoin_matrix \
-    = untuple_dataset(cddata, 7)
+rstate = np.random.RandomState(args.seed)
+protein, lig, score = untuple(cddata, 3)
+lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True, randomize=True), 2)
+pocket_atom, pocket_coord, pocket_coord_position \
+    = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy), 3)
+
+lig_coord, pocket_coord, _center, _rotation_matrix \
+    = untuple(CoordTransformDataset(lig_coord, pocket_coord, rstate=rstate, normalize_coord=True, random_rotate=True), 4)
+
 
 ## sentence
 sentence = ['[POCKET]']
@@ -122,7 +136,7 @@ pocket_atom = TokenizeDataset(pocket_atom, ProteinAtomTokenizer())
 float_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
 pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
 if targs.get('coord_follow_atom', False):
-    sentence.append(CoordFollowDataset(pocket_atom, pocket_coord))
+    sentence.append(CoordFollowDataset(pocket_atom, pocket_coord, pocket_coord_position))
 else:
     sentence += [pocket_atom, '[XYZ]', pocket_coord]
 
@@ -139,13 +153,13 @@ vocs = train_data.vocs()
 voc_encoder = VocEncoder(vocs)
 
 train_data = TokenEncodeDataset(train_data, voc_encoder)
+
 if not is_main:
     del train_data
-    train_data = None
 
 # Make dataset
 train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_memory, args.prefetch_factor, 
-    args.token_per_batch, batch_first, voc_encoder.pad_token, device, MAIN_RANK, seed=args.seed) # seedはfinetune2との比較のため追加
+    args.token_per_batch, batch_first, voc_encoder.pad_token, device, MAIN_RANK, seed=args.seed)
 
 # model
 if targs.get('mamba', False):

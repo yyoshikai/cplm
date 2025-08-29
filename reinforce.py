@@ -21,10 +21,12 @@ import transformers.utils.logging
 
 from src.data.sampler import InfiniteRandomSampler
 from src.model import Model, MambaModel2
-from src.data.finetune import CDDataset
-from src.data import untuple_dataset, index_dataset
+from src.data.datasets.crossdocked import CDDataset
+from src.data.protein import ProteinProcessDataset, CoordFollowDataset
+from src.data.molecule import MolProcessDataset
+from src.data.coord import CoordTransformDataset
+from src.data import untuple, index_dataset
 from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, VocEncoder, TokenEncodeDataset, SentenceDataset
-from src.data.pretrain.protein import CoordFollowDataset
 from src.train import MAIN_RANK, sync_train_dir, set_sdp_kernel, get_train_logger, get_scheduler
 from src.utils.path import timestamp, cleardir
 from src.utils import set_random_seed
@@ -178,24 +180,28 @@ vocs = state_dict['vocs']
 voc_encoder = VocEncoder(vocs[1:]) # remove '[PAD]'
 
 # data
-cddata = CDDataset(args.finetune_save_dir, args.seed, mol_atom_h=True,
-        mol_coord_h=True, pocket_coord_heavy=args.pocket_coord_heavy)
-pocket_atom_data, pocket_coord_data, _lig_smi, _lig_coord, _score, center_data, \
-    rotation_data = untuple_dataset(cddata, 7)
-pocket_atom_data = TokenizeDataset(pocket_atom_data, ProteinAtomTokenizer())
-pocket_coord_data = ArrayTokenizeDataset(pocket_coord_data, FloatTokenizer(-fargs.coord_range, fargs.coord_range))
+
+rstate = np.random.RandomState(args.seed)
+protein, lig, score = untuple(CDDataset(args.finetune_save_dir), 3)
+lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True, randomize=True), 2)
+protein_atoms, protein_coord, coord_position = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy), 2)
+
+coords = CoordTransformDataset(lig_coord, protein_coord, rstate=rstate, normalize_coord=True, random_rotate=True)
+lig_coord, protein_coord, center, rotation_matrix = untuple(coords, 4)
+
+protein_atoms = TokenizeDataset(protein_atoms, ProteinAtomTokenizer())
+protein_coord = ArrayTokenizeDataset(protein_coord, FloatTokenizer(-fargs.coord_range, fargs.coord_range))
 if coord_follow_atom:
-    train_data = SentenceDataset('[POCKET]', CoordFollowDataset(pocket_atom_data, pocket_coord_data))
+    train_data = SentenceDataset('[POCKET]', CoordFollowDataset(protein_atoms, protein_coord, coord_position))
 else:
-    train_data = SentenceDataset('[POCKET]', pocket_atom_data, '[XYZ]', pocket_coord_data, '[LIGAND]')
+    train_data = SentenceDataset('[POCKET]', protein_atoms, '[XYZ]', protein_coord, '[LIGAND]')
 
 assert train_data.vocs() < set(vocs)
 train_data = TokenEncodeDataset(train_data, voc_encoder)
 index_data, token_data = index_dataset(train_data)
-train_data = StackDataset(index_data, token_data, center_data, rotation_data)
+train_data = StackDataset(index_data, token_data, center, rotation_matrix)
 if not is_main:
     del train_data
-    train_data = None
 
 ## Make dataloader
 class ReinforceIter:
@@ -217,7 +223,7 @@ class ReinforceIter:
 
         if self.rank == self.main_rank:
             loader = DataLoader(dataset, batch_size=None, 
-                sampler=InfiniteRandomSampler(dataset, generator=torch.Generator().manual_seed(args.seed)), # reinforce2との比較のため変更
+                sampler=InfiniteRandomSampler(dataset, generator=torch.Generator().manual_seed(args.seed)),
                 num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
             self.logger.info(f"Loading filenames.csv.gz ...")
             self.df_file = pd.read_csv(f"{args.finetune_save_dir}/filenames.csv.gz", index_col=0)

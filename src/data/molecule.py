@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np, pandas as pd
 from torch.utils.data import Dataset
 from rdkit import Chem
-from .data import WrapDataset, untuple
+from .data import WrapDataset
 
 class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
@@ -21,8 +21,10 @@ class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
     def __getitem__(self, idx: int):
         mol = self.mol_data[idx]
 
-        # remove hydrogen
-        if not self.h_atom:
+        # remove/add hydrogen
+        if self.h_atom:
+            mol = Chem.AddHs(mol, addCoords=True)
+        else:
             mol = Chem.RemoveHs(mol)
         
         # randomize

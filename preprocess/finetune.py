@@ -1,7 +1,7 @@
 import sys, os, logging
 import argparse
 sys.path.append(".")
-from src.data.finetune import CDDataset
+from src.data.datasets.crossdocked import CDDataset
 from src.utils.logger import get_logger, add_stream_handler
 from src.utils.utils import set_logtime
 add_stream_handler(get_logger(), level=logging.ERROR)
