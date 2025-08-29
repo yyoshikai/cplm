@@ -2,12 +2,24 @@
 
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
-# train
+torchrun reinforce2.py --finetune-name 250510_rft_coord --finetune-step 5000 \
+    --finetune-save-dir preprocess/results/finetune/r4_all \
+    --target qvina --max-step 10000 --record-opt-step 500\
+    --num-workers 20 --num-score-workers 1 --studyname test --pin-memory --prefetch-factor 10 --pocket-coord-heavy --sdp-kernel FLASH --reward-scale sample_mean --generate-per-sample 2 --min-score ' -10' --ignore-error --batch-size 16 --tqdm-generate --tqdm
+
+
+<<hist
+torchrun reinforce.py --finetune-name 250510_rft_coord --finetune-step 5000 \
+    --finetune-save-dir preprocess/results/finetune/r4_all \
+    --target qvina --max-step 10000 --record-opt-step 500\
+    --num-workers 20 --num-score-workers 1 --studyname test --pin-memory --prefetch-factor 10 --pocket-coord-heavy --sdp-kernel FLASH --reward-scale sample_mean --generate-per-sample 2 --min-score ' -10' --ignore-error --batch-size 16 --tqdm-generate --tqdm
+
+# train_follow
 torchrun --nproc-per-node 1 train2.py --studyname test2 --token-per-step 160000 \
     --mol-repeat 1 --pocket-repeat 5 --frag-repeat 0 --num-workers 28 \
     --mol-data /workspace/ssd/cheminfodata/unimol/ligands/train.lmdb \
     --pocket-data /workspace/ssd/cheminfodata/unimol/pockets/train.lmdb \
-    --test --sdp-kernel FLASH --seed 2\
+    --test --sdp-kernel FLASH --seed 2 --max-step 5\
     --pocket-coord-heavy --logtime --prefetch-factor 10 --coord-follow-atom
 
 torchrun --nproc-per-node 1 train.py --studyname test --token-per-step 160000 \
@@ -17,8 +29,6 @@ torchrun --nproc-per-node 1 train.py --studyname test --token-per-step 160000 \
     --test --sdp-kernel FLASH --seed 2\
     --pocket-coord-heavy --logtime --prefetch-factor 10 --coord-follow-atom
 # git add . && git commit -m check_train_train2_follow
-
-<<hist
 
 # train
 torchrun --nproc-per-node 1 train2.py --studyname test2 --token-per-step 160000 \
