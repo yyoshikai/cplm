@@ -2,6 +2,7 @@
 import sys, os
 import argparse
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.utils.data import ConcatDataset
@@ -11,11 +12,15 @@ WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
 from src.data import RepeatDataset
-from src.data.lmdb import LMDBDataset
 from src.data.collator import DDPStringCollateLoader
-from src.data.coord_transform import CoordTransform
-from src.data.pretrain import *
-from src.data.tokenizer import *
+from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
+    ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
+    SentenceDataset, VocEncoder, TokenEncodeDataset
+from src.data.coord import CoordTransformDataset
+from src.data.datasets.unimol import UniMolLigandDataset, UniMolPocketDataset
+from src.data.molecule import MolProcessDataset
+from src.data.protein import ProteinProcessDataset, CoordFollowDataset
+from src.data import untuple
 from src.model import Model
 from src.model.mamba import MambaModel
 from src.utils import set_logtime
@@ -91,8 +96,6 @@ transformers.utils.logging.enable_propagation()
 transformers.utils.logging.disable_default_handler()
 
 # data
-coord_transform = CoordTransform(args.seed, True, True, args.coord_noise_std)
-coord_transform_pocket = CoordTransform(args.seed, True, True, args.coord_noise_std) # train2との比較用に変更
 datas = []
 vocs = set()
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
@@ -100,10 +103,18 @@ coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interv
 protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 ## mol data
 if args.mol_repeat > 0:
-    mol_data = UniMolLigandDataset(args.mol_data, 10, seed=args.seed, 
-        atom_h=not args.no_lig_atom_h, coord_h=not args.no_lig_coord_h, randomize=args.lig_randomize, 
-        sample_save_dir=f"{result_dir}/ligand_sample" if args.test else None)
-    mol_data = MoleculeDataset(mol_data, coord_transform, smiles_tokenizer, coord_tokenizer)
+    sample_save_dir = f"{result_dir}/ligand_sample" if args.test else None
+    mol = UniMolLigandDataset(sample_save_dir)
+    mol = MolProcessDataset(mol, np.random.default_rng(args.seed), 
+        h_atom=not args.no_lig_atom_h, h_coord=not args.no_lig_coord_h, randomize=args.lig_randomize, sample_save_dir=sample_save_dir)
+    smi, coord = untuple(mol, 2)
+    coords = CoordTransformDataset(coord, rstate=args.seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std)
+    coord = untuple(coords, 1)[0]
+
+    smi = TokenizeDataset(smi, smiles_tokenizer)
+    coord = ArrayTokenizeDataset(coord, coord_tokenizer)
+    mol_data = SentenceDataset('[LIGAND]', smi, '[XYZ]', coord, '[END]')
+    
     vocs |= mol_data.vocs()
     mol_data = RepeatDataset(mol_data, args.mol_repeat)
     logger.info(f"mol data: {len(mol_data)}")
@@ -111,10 +122,22 @@ if args.mol_repeat > 0:
 
 ## pocket data
 if args.pocket_repeat > 0:
-    pocket_data = UniMolPocketDataset(args.pocket_data, idx_to_key='str')
-    pocket_data = ProteinDataset(pocket_data, protein_atom_tokenizer, coord_tokenizer, coord_transform_pocket, 
-        atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, 
-        atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, coord_follow_atom=args.coord_follow_atom)
+    pocket = UniMolPocketDataset()
+
+    pocket = ProteinProcessDataset(pocket, heavy_atom=not args.no_pocket_atom_heavy, heavy_coord=args.pocket_coord_heavy, h_atom=args.pocket_atom_h, h_coord=args.pocket_coord_h)
+    atoms, coord, coord_position = untuple(pocket, 3)
+    
+    coords = CoordTransformDataset(coord, rstate=np.random.default_rng(args.seed), normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std)
+    coord = untuple(coords, 1)[0]
+
+    atoms = TokenizeDataset(atoms, protein_atom_tokenizer)
+    coord = ArrayTokenizeDataset(coord, coord_tokenizer)
+    if args.coord_follow_atom:
+        pocket_data = CoordFollowDataset(atoms, coord, coord_position)
+        pocket_data = SentenceDataset('[POCKET]', pocket_data, '[END]')
+    else:
+        pocket_data = SentenceDataset('[POCKET]', atoms, '[XYZ]', coord, '[END]')
+
     vocs |= pocket_data.vocs()
     pocket_data = RepeatDataset(pocket_data, args.pocket_repeat)
     logger.info(f"pocket data: {len(pocket_data)}")
@@ -122,6 +145,8 @@ if args.pocket_repeat > 0:
 
 ## fragment data
 if args.frag_repeat > 0:
+    raise NotImplementedError
+    """
     match args.frag_type:
         case '1':
             frag_data = PDBFragmentDataset(args.frag_data)
@@ -138,13 +163,14 @@ if args.frag_repeat > 0:
     frag_data = RepeatDataset(frag_data, args.frag_repeat)
     logger.info(f"frag data: {len(frag_data)}")
     datas.append(frag_data)
+    """
 train_data = ConcatDataset(datas)
 
 voc_encoder = VocEncoder(vocs)
 train_data = TokenEncodeDataset(train_data, voc_encoder)
+
 if not is_main:
     del train_data
-    train_data = None
 
 # Make dataset
 train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_memory, args.prefetch_factor, 

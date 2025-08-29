@@ -3,7 +3,7 @@ import torch
 from collections.abc import Iterator, Sized
 from logging import getLogger
 import numpy as np
-from torch.utils.data import Sampler, BatchSampler
+from torch.utils.data import Sampler
 
 class InfiniteRandomSampler(Sampler):
     logger = getLogger(f"{__module__}.{__qualname__}")
@@ -16,7 +16,6 @@ class InfiniteRandomSampler(Sampler):
         self.epoch = 0
         while True:
             self.logger.info('Calculating sample order...')
-            self.logger.info(f'{self.generator=}')
             order = torch.randperm(len(self.dataset), generator=self.generator).tolist()
             self.logger.info('calculated.')
             yield from order
