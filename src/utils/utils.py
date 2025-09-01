@@ -62,6 +62,8 @@ def slice_str(x: np.ndarray, end: int):
     b = x.view((str,1)).reshape(len(x),-1)[:, :end]
     return np.fromstring(b.tostring(),dtype=(str,end))
 
+
+
 LOGTIME = False
 def set_logtime(logtime: bool):
     global LOGTIME
@@ -134,3 +136,75 @@ class CompressedArray:
 def get_mem():
     mem = psutil.virtual_memory()
     return f"{mem.used/2**30:.03f}GB/{mem.total/2**30:.03f}GB"
+
+
+module_abbrevs = {'numpy': 'np', 'pandas': 'pd'}
+def reveal_data(data, max_iterable_size: int=20, max_str_size: int=160) -> str:
+    
+    t = type(data)
+    module_name = t.__module__
+    tname = t.__name__
+    if module_name == 'builtins':
+        typename = tname
+    else:
+        module_name = t.__module__
+        module_name = module_abbrevs.get(module_name, module_name)
+        typename = f"{module_name}.{tname}"
+    
+    if isinstance(data, str):
+        if len(data) > max_str_size:
+            data = data[:max_str_size-20] + f"...({len(data)-(max_str_size-10)} letters)..."+data[-10:]
+        return data
+    elif isinstance(data, (dict, list, tuple, set)):
+
+        if isinstance(data, dict):
+            keys = list(data.keys())
+            items = list(data.values())
+        else:
+            items = list(data)
+        
+        type2bracket = {list: '[]', tuple: '()', set: '{}', dict: '{}'}
+        for type_, bracket in type2bracket.items():
+            if type(data) == type_:
+                start, end = bracket[0], bracket[1]
+                break
+            if isinstance(data, type_):
+                start, end = f"{typename}({bracket[0]}", f"{bracket[1]})"
+                break
+
+        n_omit = 0
+        n_total = len(items)
+        if n_total > max_iterable_size:
+            n_omit = len(items) - max_iterable_size
+            items = items[:max_iterable_size-1]+[items[-1]]
+            if isinstance(data, dict):
+                keys = keys[:max_iterable_size-1]+[keys[-1]]
+        
+        item_strs = [reveal_data(item, max_iterable_size) for item in items]
+        if isinstance(data, dict):
+            item_strs = [f"{key}: {item_str}" 
+                for key, item_str in zip(keys, item_strs)]
+        if n_omit > 0:
+            item_strs.insert(max_iterable_size-2, f'...({n_total} items in total)...')
+        
+        total_len = sum(len(item_str) for item_str in item_strs)
+
+        if total_len > max_str_size:
+            output = start
+            for i, item_str in enumerate(item_strs):
+                for line in item_str.split('\n'):
+                    output += "\n    "+line
+                if i != len(item_strs)-1:
+                    output += ','
+            output += f'\n{end}'
+
+        else:
+            return start + ', '.join(item_strs) + end
+    elif isinstance(data, (int, float, type)):
+        return str(data)
+    else:
+        data = reveal_data(repr(data), max_iterable_size, max_str_size)
+        if data.startswith(tname):
+            data = typename + data.removeprefix(tname)
+        return data
+    return output

@@ -1,7 +1,7 @@
 import os, random
 from typing import Optional
 import numpy as np, pandas as pd
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 from rdkit import Chem
 from .data import WrapDataset
 
@@ -43,12 +43,14 @@ class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
 
         # save sample
         if self.sample_save_dir is not None and self.getitem_count < 5:
-            save_dir = f"{self.sample_save_dir}/{idx}"
-            os.makedirs(save_dir, exist_ok=True)
-            with open(f"{save_dir}/out_smi.txt", 'w') as f:
-                f.write(smi)
-            pd.DataFrame(coord) \
-                .to_csv(f"{save_dir}/out_coord.csv", header=False, index=False)
+            worker_info = get_worker_info()
+            if worker_info is None or worker_info.id == 0:
+                save_dir = f"{self.sample_save_dir}/{idx}"
+                os.makedirs(save_dir, exist_ok=True)
+                with open(f"{save_dir}/out_smi.txt", 'w') as f:
+                    f.write(smi)
+                pd.DataFrame(coord) \
+                    .to_csv(f"{save_dir}/out_coord.csv", header=False, index=False)
 
         self.getitem_count += 1
         return smi, coord

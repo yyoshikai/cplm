@@ -2,7 +2,7 @@ import sys, os
 from typing import Optional
 from logging import getLogger
 import numpy as np, pandas as pd
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset, get_worker_info
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
@@ -47,19 +47,28 @@ class UniMolLigandDataset(Dataset[Chem.Mol]):
                 conf.SetAtomPosition(i, Point3D(*coord[i]))
             mol.AddConformer(conf)
 
-        # save sample
+        # save sample in main process
         if self.sample_save_dir is not None and self.getitem_count < 5:
-            save_dir = f"{self.sample_save_dir}/{idx}"
-            os.makedirs(save_dir, exist_ok=True)
-            with open(f"{save_dir}/data_smi.txt", 'w') as f:
-                f.write(data['smi'])
-            pd.DataFrame(data['coordinates'][conformer_idx]) \
-                .to_csv(f"{save_dir}/data_coord.csv", header=False, index=False)
+            worker_info = get_worker_info()
+            if worker_info is None or worker_info.id == 0:
+                save_dir = f"{self.sample_save_dir}/{idx}"
+                os.makedirs(save_dir, exist_ok=True)
+                with open(f"{save_dir}/data_smi.txt", 'w') as f:
+                    f.write(data['smi'])
+                pd.DataFrame(data['coordinates'][conformer_idx]) \
+                    .to_csv(f"{save_dir}/data_coord.csv", header=False, index=False)
         self.getitem_count += 1
         return mol
     
     def __len__(self):
         return len(self.dataset) * self.n_conformer
+
+# (TODO: not tested)
+class UniMolLigandNoMolNetDataset(Subset[Chem.Mol]):
+    def __init__(self, sample_save_dir: Optional[str]=None, unimol_dir=DEFAULT_UNIMOL_DIR):
+        dataset = UniMolLigandDataset(sample_save_dir, unimol_dir)
+        indices = np.load(f"{unimol_dir}/ligands_mask/remove_molnet_test/large/train_idxs.npy")
+        super().__init__(dataset, indices)
 
 class UniMolPocketDataset(Dataset[Protein]):
     def __init__(self, unimol_dir=DEFAULT_UNIMOL_DIR):
@@ -73,3 +82,12 @@ class UniMolPocketDataset(Dataset[Protein]):
 
     def __len__(self):
         return len(self.dataset)
+
+# /workspace/cheminfodata/unimol/pocket_mask/remove_targetdif_test.py でこのマスクを作成
+# (not tested)
+class UniMolPocketNoTDTestDataset(Subset[Protein]):
+    def __init__(self, unimol_dir=DEFAULT_UNIMOL_DIR):
+        whole_data = UniMolPocketDataset(unimol_dir)
+        idxs = np.load("/workspace/cheminfodata/unimol/pocket_mask/remove_targetdiff_test/train_idxs.npy")
+        super().__init__(whole_data, idxs)
+

@@ -1,9 +1,9 @@
 import os, pickle, io, logging, yaml
 from logging import getLogger
 from collections import defaultdict
+from time import time
 
 import pandas as pd
-from time import time
 from prody import parsePDB, parsePDBStream, confProDy, Contacts, addMissingAtoms
 from ...utils.lmdb import new_lmdb
 from ..lmdb import PickleLMDBDataset
@@ -16,9 +16,10 @@ from ...utils.utils import CompressedArray
 from ..protein import Protein
 
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
+DEFAULT_SAVE_DIR = f"{WORKDIR}/cplm/ssd/preprocess/results/finetune/r4_all"
 
 class CDDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
-    def __init__(self, save_dir: str, out_filename: bool=False):
+    def __init__(self, save_dir: str=DEFAULT_SAVE_DIR, out_filename: bool=False):
         self.lmdb_dataset = PickleLMDBDataset(f"{save_dir}/main.lmdb", idx_to_key='str')
         super().__init__(self.lmdb_dataset)
         self.out_filename = out_filename

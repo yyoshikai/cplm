@@ -1,6 +1,8 @@
 # 241025 若干argumentを変更した。
+# 250901 argumentを変更
 import sys, os
 import argparse
+from functools import partial
 
 import numpy as np
 import torch
@@ -17,7 +19,8 @@ from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
     SentenceDataset, VocEncoder, TokenEncodeDataset
 from src.data.coord import CoordTransformDataset
-from src.data.datasets.unimol import UniMolLigandDataset, UniMolPocketDataset
+from src.data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, UniMolPocketNoTDTestDataset
+from src.data.datasets.pdb import PDBDataset, PDBNoTDTestDataset
 from src.data.molecule import MolProcessDataset
 from src.data.protein import ProteinProcessDataset, CoordFollowDataset
 from src.data import untuple
@@ -40,25 +43,27 @@ add_train_args(parser)
 
 ## model
 parser.add_argument("--n-layer", type=int, default=8)
-
-## data
-# bool系は何も指定しない場合BindGPTの設定になるようにしている
 parser.add_argument("--coord-range", type=int, default=200)
-parser.add_argument("--mol-repeat", type=int, default=1)
-parser.add_argument("--mol-data", default=f"{WORKDIR}/cheminfodata/unimol/ligands/train.lmdb")
+
+# bool系は何も指定しない場合BindGPTの設定になるようにしている
+## dataset
+parser.add_argument("--UniMolLigand", type=int, default=0)
+parser.add_argument('--UniMolLigandNoMolNet', type=int, default=0)
+parser.add_argument('--UniMolPocket', type=int, default=0)
+parser.add_argument('--UniMolPocketNoTDTest', type=int, default=0)
+parser.add_argument('--PDB', type=int, default=0)
+parser.add_argument('--PDBNoTDTest', type=int, default=0)
+
+## process
+parser.add_argument("--lig-randomize", action='store_true')
 parser.add_argument("--no-lig-coord-h", action='store_true')
 parser.add_argument("--no-lig-atom-h", action='store_true')
-parser.add_argument("--lig-randomize", action='store_true')
-parser.add_argument("--pocket-repeat", type=int, default=1)
-parser.add_argument("--pocket-data", default=f"{WORKDIR}/cheminfodata/unimol/pockets/train.lmdb")
-parser.add_argument("--frag-repeat", type=int, default=1)
-parser.add_argument("--frag-data")
 parser.add_argument("--no-pocket-atom-heavy", action='store_true')
 parser.add_argument("--pocket-coord-heavy", action='store_true')
 parser.add_argument("--pocket-atom-h", action='store_true')
 parser.add_argument("--pocket-coord-h", action='store_true')
+
 parser.add_argument("--coord-follow-atom", action='store_true')
-parser.add_argument("--frag-type", default='1')
 parser.add_argument('--mamba', action='store_true')
 
 args = parser.parse_args()
@@ -96,15 +101,41 @@ transformers.utils.logging.enable_propagation()
 transformers.utils.logging.disable_default_handler()
 
 # data
-datas = []
-vocs = set()
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
 coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
 protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
-## mol data
-if args.mol_repeat > 0:
-    sample_save_dir = f"{result_dir}/ligand_sample" if args.test else None
-    mol = UniMolLigandDataset(sample_save_dir)
+sample_save_dir = f"{result_dir}/ligand_sample" if args.test else None
+
+
+datas = []
+vocs = set()
+mol_data = []
+protein_data = []
+
+## datasets
+for cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset]:
+    repeat = getattr(args, cls.__name__.removesuffix('Dataset'))
+    if repeat > 0:
+        data = cls(sample_save_dir=sample_save_dir)
+        logger.info(f"{cls.__name__}: {len(data)}*{repeat}={len(data)*repeat}")
+        mol_data.append(RepeatDataset(data, repeat))
+
+protein_aname2cls = {
+    'unimol_pocket_whole': UniMolPocketDataset,
+    'unimol_pocket_notest': UniMolPocketNoTDTestDataset,
+    'pdb_protein_whole': PDBDataset,
+    'pdb_protein_notest': PDBNoTDTestDataset,
+}
+for cls in [UniMolPocketDataset, UniMolPocketNoTDTestDataset, PDBDataset, PDBNoTDTestDataset]:
+    repeat = getattr(args, cls.__name__.removesuffix('Dataset'))
+    if repeat > 0:
+        data = cls()
+        logger.info(f"{cls.__name__}: {len(data)}*{repeat}={len(data)*repeat}")
+        protein_data.append(RepeatDataset(data, repeat))
+
+## process
+if len(mol_data) > 0:
+    mol = ConcatDataset(mol_data)
     mol = MolProcessDataset(mol, np.random.default_rng(args.seed), 
         h_atom=not args.no_lig_atom_h, h_coord=not args.no_lig_coord_h, randomize=args.lig_randomize, sample_save_dir=sample_save_dir)
     smi, coord = untuple(mol, 2)
@@ -116,17 +147,13 @@ if args.mol_repeat > 0:
     mol_data = SentenceDataset('[LIGAND]', smi, '[XYZ]', coord, '[END]')
     
     vocs |= mol_data.vocs()
-    mol_data = RepeatDataset(mol_data, args.mol_repeat)
     logger.info(f"mol data: {len(mol_data)}")
     datas.append(mol_data)
 
-## pocket data
-if args.pocket_repeat > 0:
-    pocket = UniMolPocketDataset()
-
+if len(protein_data) > 0:
+    pocket = ConcatDataset(protein_data)
     pocket = ProteinProcessDataset(pocket, heavy_atom=not args.no_pocket_atom_heavy, heavy_coord=args.pocket_coord_heavy, h_atom=args.pocket_atom_h, h_coord=args.pocket_coord_h)
     atoms, coord, coord_position = untuple(pocket, 3)
-    
     coords = CoordTransformDataset(coord, rstate=np.random.default_rng(args.seed), normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std)
     coord = untuple(coords, 1)[0]
 
@@ -139,31 +166,9 @@ if args.pocket_repeat > 0:
         pocket_data = SentenceDataset('[POCKET]', atoms, '[XYZ]', coord, '[END]')
 
     vocs |= pocket_data.vocs()
-    pocket_data = RepeatDataset(pocket_data, args.pocket_repeat)
     logger.info(f"pocket data: {len(pocket_data)}")
     datas.append(pocket_data)
 
-## fragment data
-if args.frag_repeat > 0:
-    raise NotImplementedError
-    """
-    match args.frag_type:
-        case '1':
-            frag_data = PDBFragmentDataset(args.frag_data)
-        case '2':
-            frag_data = PDBFragment2Dataset(args.frag_data)
-        case '3':
-            frag_data = LMDBDataset(args.frag_data, idx_to_key='str')
-        case _:
-            raise ValueError(f'Unsupported args.frag_class: {args.frag_type}')
-    frag_data = ProteinDataset(frag_data, protein_atom_tokenizer, coord_tokenizer, coord_transform, 
-        atom_heavy=not args.no_pocket_atom_heavy, coord_heavy=args.pocket_coord_heavy, 
-        atom_h=args.pocket_atom_h, coord_h=args.pocket_coord_h, )
-    vocs |= frag_data.vocs()
-    frag_data = RepeatDataset(frag_data, args.frag_repeat)
-    logger.info(f"frag data: {len(frag_data)}")
-    datas.append(frag_data)
-    """
 train_data = ConcatDataset(datas)
 
 voc_encoder = VocEncoder(vocs)

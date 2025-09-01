@@ -11,6 +11,10 @@ class Protein:
     atoms: np.ndarray
     coord: np.ndarray
 
+    def __post_init__(self):
+        assert len(self.atoms) == len(self.coord)
+        assert self.coord.ndim == 2 and self.coord.shape[1] == 3
+
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class ProteinProcessDataset(WrapDataset[tuple[list[str], np.ndarray]]):
     def __init__(self, protein_data: Dataset[Protein],
