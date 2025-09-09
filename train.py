@@ -25,7 +25,7 @@ from src.data.molecule import MolProcessDataset
 from src.data.protein import ProteinProcessDataset, CoordFollowDataset
 from src.data import untuple
 from src.model import Model
-from src.model.mamba import MambaModel
+from src.model.mamba import MambaModel2
 from src.utils import set_logtime
 from src.utils.path import timestamp
 from src.train import CELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
@@ -73,7 +73,7 @@ if args.test: args.studyname+='_test'
 if args.record_opt_step is None:
     args.record_opt_step = 1 if args.test else 1000
 if args.tokenizer_log_interval is None:
-    args.tokenizer_log_interval = 10000 if args.test else int(1e7)
+    args.tokenizer_log_interval = 1000000 if args.test else int(1e7)
 log_step = 1 if args.test else 10000
 
 batch_first = False
@@ -177,18 +177,19 @@ train_data = TokenEncodeDataset(train_data, voc_encoder)
 if not is_main:
     del train_data
 
-# Make dataset
-train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_memory, args.prefetch_factor, 
-    args.token_per_batch, batch_first, voc_encoder.pad_token, device, MAIN_RANK, seed=args.seed)
 
 # model
 if args.mamba:
-    model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
+    model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
 else:
     model = Model(args.n_layer, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)
+
+# DataLoader
+train_loader = DDPStringCollateLoader(train_data, model.module, args.num_workers, args.pin_memory, args.prefetch_factor, 
+    args.gpu_size_gb*(2**30), batch_first, voc_encoder.pad_token, True, args.sdp_kernel, device, MAIN_RANK, seed=args.seed)
 
 criterion = CELoss(voc_encoder, args.seed)
 

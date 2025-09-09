@@ -1,4 +1,4 @@
-import random, struct, logging, psutil
+import sys, random, struct, psutil, traceback, warnings
 from functools import partial
 from bisect import bisect_right
 from time import time
@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from .logger import get_logger
+from .time import set_logtime, logtime, logend, rectime # For compatibility
 
 # class RandomStateより
 def set_random_seed(seed: int):
@@ -61,50 +62,6 @@ def load_gninatypes(path, struct_fmt='fffi'):
 def slice_str(x: np.ndarray, end: int):
     b = x.view((str,1)).reshape(len(x),-1)[:, :end]
     return np.fromstring(b.tostring(),dtype=(str,end))
-
-
-
-LOGTIME = False
-def set_logtime(logtime: bool):
-    global LOGTIME
-    LOGTIME = logtime
-
-class logtime:
-    def __init__(self, logger: logging.Logger, prefix: str='', level=logging.DEBUG, thres: float=0):
-        self.logger = logger
-        self.prefix = prefix
-        self.level = level
-        self.thres = thres
-    def __enter__(self):
-        if LOGTIME:
-            self.start = time()
-    def __exit__(self, exc_type, exc_value, traceback):
-        if LOGTIME:
-            elapse = time() - self.start
-            if elapse >= self.thres:
-                self.logger.log(self.level, f"{self.prefix} {elapse:.4f}") 
-class logend:
-    def __init__(self, logger: logging.Logger, process_name: str, level=logging.INFO, thres: float=0.0):
-        self.logger = logger
-        self.process_name = process_name
-        self.level = level
-        self.thres = thres
-    def __enter__(self):
-        self.start = time()
-        self.logger.log(self.level, f"{self.process_name}...")
-    def __exit__(self, exc_type, exc_value, traceback):
-        t = time() - self.start
-        if t >= self.thres:
-            self.logger.log(self.level, f"{self.process_name} ended ({t:.03}s).")
-
-class rectime: 
-    def __init__(self):
-        pass
-    def __enter__(self):
-        self.start = time()
-        return self
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.time = time() - self.start
 
 def remove_module(state: dict):
     new_state = {}
@@ -208,3 +165,12 @@ def reveal_data(data, max_iterable_size: int=20, max_str_size: int=160) -> str:
             data = typename + data.removeprefix(tname)
         return data
     return output
+
+def traceback_warning():
+    def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+
+        log = file if hasattr(file,'write') else sys.stderr
+        traceback.print_stack(file=log)
+        log.write(warnings.formatwarning(message, category, filename, lineno, line))
+
+    warnings.showwarning = warn_with_traceback

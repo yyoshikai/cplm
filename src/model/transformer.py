@@ -1,18 +1,25 @@
-from typing import Optional, Union, Callable
-from collections.abc import Iterable
-from functools import partial
-from tqdm import tqdm as _tqdm
 import logging
+from typing import Optional, Union, Callable
+from collections import defaultdict
+from collections.abc import Iterable
+from functools import partial, lru_cache
+from tqdm import tqdm as _tqdm
+from pathlib import Path
 
+import yaml
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-from torch.nn.modules.transformer import _get_clones, _get_activation_fn
+from torch.nn.modules.transformer import _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
 from torch.nn.parallel import DistributedDataParallel
+
+from ..utils.memory import get_mems
+
 def multi_head_attention_forward(
     query: Tensor,
     num_heads: int,
@@ -59,7 +66,6 @@ def multi_head_attention_forward(
     attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
     attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
     return attn_output
-
 
 class MultiheadAttention(nn.Module):
 
@@ -206,6 +212,7 @@ class TransformerEncoderLayer(nn.Module):
 
 def save_vocs(module, state_dict, prefix, local_metadata):
     state_dict[prefix+'vocs'] = module.vocs
+
 def align_embedding(module: nn.Module, state_dict, prefix, local_metadata, 
         strict, missing_keys, unexpected_keys, error_msgs, 
         embedding_name, predictor_name) -> None:
@@ -255,6 +262,10 @@ class Model(nn.Module):
         num_embeddings = len(vocs)
         
         super().__init__()
+        self.num_layers = num_layers
+        self.d_model = d_model
+        self.nhead = nhead
+        self.d_ff_factor = d_ff_factor
         self.layers = nn.ModuleList([
             TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model*d_ff_factor,
@@ -270,11 +281,20 @@ class Model(nn.Module):
         self.vocs = vocs
 
         self.pos_buffer_len = None
-        self.make_pos_buffer(pos_buffer_len)
+        sin, cos, mask = self.make_pos_buffer(pos_buffer_len)
+        self.register_buffer('sin', sin, persistent=False)
+        self.register_buffer('cos', cos, persistent=False)
+        self.register_buffer('mask', mask, persistent=False)
+        DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(self, ['sin', 'cos', 'mask'])        
+        self.pos_buffer_len = pos_buffer_len
+
 
         self._register_state_dict_hook(save_vocs)
         self._register_load_state_dict_pre_hook(partial(align_embedding, 
                 embedding_name='embedding', predictor_name='predictor'), with_module=True)
+        
+        self.gpuuse_coef = lru_cache(1)(self._gpuuse_coef)
+        
 
     def make_pos_buffer(self, length):
         if self.pos_buffer_len is not None:
@@ -286,28 +306,30 @@ class Model(nn.Module):
         sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
         cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
         mask = nn.Transformer.generate_square_subsequent_mask(length).to(device).to(dtype)
+        return sin, cos, mask
         
-        self.register_buffer('sin', sin, persistent=False)
-        self.register_buffer('cos', cos, persistent=False)
-        self.register_buffer('mask', mask, persistent=False)
-        DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(self, ['sin', 'cos', 'mask'])
-        
-        self.pos_buffer_len = length
 
-    def forward(self, src: torch.Tensor):
+    def forward(self, src: torch.Tensor, get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
         x = self.embedding(src)
         L = x.shape[0]
         if L > self.pos_buffer_len:
-            self.make_pos_buffer(L)
+            sin, cos, mask = self.make_pos_buffer(L)
+        else:
+            sin, cos, mask = self.sin[:L], self.cos[:L], self.mask[:L, :L]
         output = x
         for layer in self.layers:
-            output = layer(output, src_mask=self.mask[:L, :L], sin=self.sin[:L], cos=self.cos[:L])
+            output = layer(output, src_mask=mask, sin=sin, cos=cos)
         if self.norm is not None:
             output = self.norm(output)
         x = output
+        x = self.predictor(x)
 
-        return self.predictor(x)
-    
+        # get_mem
+        if get_mem:
+            return tuple([x]+get_mems(src.device, offset, mem_path))
+        else:
+            return x
+
     def generate(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int) -> torch.Tensor:
         """
         Use kv-cache for generation
@@ -321,8 +343,9 @@ class Model(nn.Module):
         context_len, batch_size = context.shape
         assert context_len >= 1
 
-        if max_len > self.pos_buffer_len:
-            self.make_pos_buffer(max_len)
+        sin_buf, cos_buf, mask_buf = self.sin, self.cos, self.mask \
+            if max_len <= self.pos_buffer_len else self.make_pos_buffer(max_len)
+        del mask_buf
 
         is_finished = torch.full((batch_size,), fill_value=False, device=device)
         input = context[:1] # [1, B]
@@ -332,8 +355,8 @@ class Model(nn.Module):
 
             x = self.embedding(input)
 
-            sin = self.sin[pos:pos+1]
-            cos = self.cos[pos:pos+1]
+            sin = sin_buf[pos:pos+1]
+            cos = cos_buf[pos:pos+1]
 
             layer: TransformerEncoderLayer
             for i_layer, layer in enumerate(self.layers):
@@ -379,8 +402,9 @@ class Model(nn.Module):
         cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
         outputs = input # [1, B]
 
-        if max_len > self.pos_buffer_len:
-            self.make_pos_buffer(max_len)
+        sin_buf, cos_buf, mask_buf = self.sin, self.cos, self.mask \
+            if max_len <= self.pos_buffer_len else self.make_pos_buffer(max_len)
+        del mask_buf
 
         for pos in _tqdm(range(max_len)) if tqdm else range(max_len):
 
@@ -388,7 +412,7 @@ class Model(nn.Module):
 
             layer: TransformerEncoderLayer
             for i_layer, layer in enumerate(self.layers):
-                x, cache[i_layer] = layer.forward_one(x, cache[i_layer], self.sin[pos:pos+1], self.cos[pos:pos+1])
+                x, cache[i_layer] = layer.forward_one(x, cache[i_layer], sin_buf[pos:pos+1], cos_buf[pos:pos+1])
 
             if self.norm is not None:
                 x = self.norm(x)
@@ -450,9 +474,11 @@ class Model(nn.Module):
         rebatch_lens = sorted(list(rebatch_lens))
         assert rebatch_lens[-1] == max_len
 
-        if max_len > self.pos_buffer_len:
-            self.make_pos_buffer(max_len)
         
+        sin_buf, cos_buf, mask_buf = self.sin, self.cos, self.mask \
+            if max_len <= self.pos_buffer_len else self.make_pos_buffer(max_len)
+        del mask_buf
+
         finished_idxs = []
         finished_outputs = []
 
@@ -490,7 +516,7 @@ class Model(nn.Module):
 
                     layer: TransformerEncoderLayer
                     for i_layer, layer in enumerate(self.layers):
-                        x, cache[i_layer] = layer.forward_one(x, cache[i_layer], self.sin[pos:pos+1], self.cos[pos:pos+1])
+                        x, cache[i_layer] = layer.forward_one(x, cache[i_layer], sin_buf[pos:pos+1], cos_buf[pos:pos+1])
 
                     if self.norm is not None:
                         x = self.norm(x)
@@ -546,3 +572,71 @@ class Model(nn.Module):
         outputs.sort(key=lambda x: x[0])
         outputs = [output[1] for output in outputs]
         return outputs
+
+    def _gpuuse_coef(self, bf16: bool, kernel: str) -> dict[tuple[int, int], float]:
+        """
+        
+        Returns
+        -------
+        dim2coefs: dict[tuple[int, int], float]
+        dim2coefs[batch_size_dim, legnth_dim] = coef of memory use
+        """
+
+        if kernel not in ['FLASH', 'EFFICIENT']:
+            raise ValueError(f"Unsupported {kernel=}")
+        if kernel == 'FLASH' and not bf16:
+            raise ValueError("FLASH attention without bf16 is not supported.")
+
+        # calc param sizes
+        ## params
+        d_model = self.d_model
+        num_layers = self.num_layers
+        nhead = self.nhead
+        d_ff_factor = self.d_ff_factor
+        voc_size = len(self.vocs)
+        pos_buffer_len = self.pos_buffer_len
+
+        ## capture rate
+        with open(str(Path(__file__).parent / "gpuuse" / "capture_rates.yaml")) as f:
+            capture_rates = yaml.safe_load(f)
+
+        ## mname
+        mname = f'tf_{kernel.lower()}'
+        if bf16: mname += '_bf16'
+        if kernel == 'FLASH' and (d_model // nhead) % 8 == 0:
+            mname += '_8'
+        capture_rate = capture_rates[mname]
+
+        ## shape
+        t2dim2coefs = {}
+        for t in ['forward', 'backward']:
+            dfp = pd.read_csv(Path(__file__).parent / "gpuuse" / t / (mname+'.csv'), keep_default_na=False)
+            dim2coefs = defaultdict(float)
+            for shape, itemsize, n in zip(dfp['shape'], dfp['itemsize'], dfp['n']):
+                batch_size_dim = length_dim = 0
+                coef = float(eval(n)) * itemsize
+                shape = shape.split(' ') if len(shape) > 0 else []
+                for d in shape:
+                    if d == 'batch_size':
+                        batch_size_dim += 1
+                    elif d == 'length':
+                        length_dim += 1
+                    else:
+                        coef = coef*eval(d)
+                
+                ### capture rate
+                coef = coef / capture_rate
+                dim2coefs[batch_size_dim, length_dim] += coef
+            t2dim2coefs[t] = dict(dim2coefs)
+        return t2dim2coefs
+
+    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str):
+
+        t2dim2coefs = self.gpuuse_coef(bf16, kernel)
+        max_gpuuse = 0
+        for dim2coefs in t2dim2coefs.values():
+            gpuuse = 0
+            for (batch_size_dim, length_dim), coef in dim2coefs.items():
+                gpuuse += (batch_size**batch_size_dim) * (length**length_dim) * coef
+            max_gpuuse = max(gpuuse, max_gpuuse)
+        return max_gpuuse

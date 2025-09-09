@@ -11,7 +11,7 @@ sys.path += ["/workspace/cplm"]
 from src.data.tokenizer import FloatTokenizer, \
     ProteinAtomTokenizer, VocEncoder, TokenEncodeDataset
 from src.data import untuple, index_dataset
-from src.data.datasets.crossdocked import CDDataset, CDProteinDataset
+from src.data.datasets.crossdocked import CDDataset
 from src.data.protein import ProteinProcessDataset
 from src.data.molecule import MolProcessDataset, RandomScoreDataset
 from src.data.coord import CoordTransformDataset
@@ -66,7 +66,7 @@ def generate(model: Model | MambaModel2, rdir: str, n_trial: int, token_per_batc
     pocket_atom, pocket_coord, pocket_coord_position \
         = untuple(ProteinProcessDataset(protein, heavy_coord=pocket_coord_heavy), 3)
 
-    lig_coord, pocket_coord, _center, _rotation_matrix \
+    lig_coord, pocket_coord, center, _rotation_matrix \
         = untuple(CoordTransformDataset(lig_coord, pocket_coord, rstate=rstate, normalize_coord=True, random_rotate=True), 4)
 
     ## Sentence

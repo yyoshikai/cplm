@@ -5,8 +5,6 @@ from logging import getLogger
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from contextlib import nullcontext
-from ..utils import logtime, LOGTIME
 
 class VocEncoder:
     logger = getLogger(f"{__module__}.{__qualname__}")

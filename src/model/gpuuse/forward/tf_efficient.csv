@@ -1,0 +1,26 @@
+shape,dtype,itemsize,n
+3 length batch_size d_model,torch.float32,4,num_layers
+batch_size nhead length d_model//nhead,torch.float32,4,num_layers*3
+batch_size length d_model,torch.float32,4,num_layers
+d_model,torch.float32,4,num_layers*6
+d_model d_model,torch.float32,4,num_layers
+d_model d_model*d_ff_factor,torch.float32,4,num_layers
+d_model*3,torch.float32,4,num_layers
+d_model*3 d_model,torch.float32,4,num_layers
+d_model*d_ff_factor,torch.float32,4,num_layers
+d_model*d_ff_factor d_model,torch.float32,4,num_layers
+length batch_size,torch.int64,8,2
+length batch_size d_model,torch.float32,4,num_layers*4+2
+length batch_size d_model*d_ff_factor,torch.float32,4,num_layers*2
+length batch_size nhead d_model//nhead,torch.float32,4,num_layers
+length batch_size voc_size,torch.float32,4,1
+length d_model//nhead,torch.float32,4,num_layers*2
+length d_model//nhead//2,torch.float32,4,2
+length d_model//nhead//2 2,torch.float32,4,num_layers*2
+length length,torch.float32,4,1
+length batch_size,torch.int64,8,1
+batch_size,torch.int64,8,1
+pos_buffer_len d_model//nhead//2,torch.float32,4,2
+pos_buffer_len pos_buffer_len,torch.float32,4,1
+voc_size,torch.float32,4,1
+voc_size d_model,torch.float32,4,2

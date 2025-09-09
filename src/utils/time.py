@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from typing import TypeVar
@@ -122,3 +123,46 @@ class wtqdm(tqdm):
     def update(self, n=1):
         self.set_postfix_str(', '.join([f"{key}={value:.03f}" for key, value in sorted(self.name2time.items(), key=lambda x: x[1], reverse=True)]), refresh=False)
         super().update(n)
+
+
+LOGTIME = False
+def set_logtime(logtime: bool):
+    global LOGTIME
+    LOGTIME = logtime
+
+class logtime:
+    def __init__(self, logger: logging.Logger, prefix: str='', level=logging.DEBUG, thres: float=0):
+        self.logger = logger
+        self.prefix = prefix
+        self.level = level
+        self.thres = thres
+    def __enter__(self):
+        if LOGTIME:
+            self.start = time()
+    def __exit__(self, exc_type, exc_value, traceback):
+        if LOGTIME:
+            elapse = time() - self.start
+            if elapse >= self.thres:
+                self.logger.log(self.level, f"{self.prefix} {elapse:.4f}") 
+class logend:
+    def __init__(self, logger: logging.Logger, process_name: str, level=logging.INFO, thres: float=0.0):
+        self.logger = logger
+        self.process_name = process_name
+        self.level = level
+        self.thres = thres
+    def __enter__(self):
+        self.start = time()
+        self.logger.log(self.level, f"{self.process_name}...")
+    def __exit__(self, exc_type, exc_value, traceback):
+        t = time() - self.start
+        if t >= self.thres:
+            self.logger.log(self.level, f"{self.process_name} ended ({t:.03}s).")
+
+class rectime: 
+    def __init__(self):
+        pass
+    def __enter__(self):
+        self.start = time()
+        return self
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.time = time() - self.start

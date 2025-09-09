@@ -119,11 +119,12 @@ def sync_train_dir(result_dir):
 
 def set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:
-        assert sdp_kernel in ['FLASH', 'CUDNN', 'MATH', 'EFFICIENT']
-        torch.backends.cuda.enable_flash_sdp(sdp_kernel == 'FLASH')
-        torch.backends.cuda.enable_cudnn_sdp(sdp_kernel == 'CUDNN')
-        torch.backends.cuda.enable_math_sdp(sdp_kernel == 'MATH')
-        torch.backends.cuda.enable_mem_efficient_sdp(sdp_kernel == 'EFFICIENT')
+        assert sdp_kernel in ['FLASH', 'CUDNN', 'MATH', 'EFFICIENT', 'ALL'] # 全て無効にするとエラーになる
+        torch.backends.cuda.enable_flash_sdp(sdp_kernel in ['FLASH', 'ALL'])
+        torch.backends.cuda.enable_cudnn_sdp(sdp_kernel in ['CUDNN', 'ALL'])
+        torch.backends.cuda.enable_math_sdp(sdp_kernel in ['MATH', 'ALL'])
+        torch.backends.cuda.enable_mem_efficient_sdp(sdp_kernel in ['EFFICIENT', 'ALL'])
+
 
 def get_train_logger(result_dir):
     rank = dist.get_rank()
@@ -153,13 +154,13 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
 
     # environments
-    parser.add_argument("--token-per-batch", type=int, default=25000)
+    parser.add_argument("--gpu-size-gb", type=int, required=True)
     parser.add_argument("--record-opt-step", type=int)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--pin-memory", action='store_true')
     parser.add_argument("--prefetch-factor", type=int)
-    parser.add_argument("--sdp-kernel", choices=['FLASH', 'CUDNN', 'MATH', 'EFFICIENT'])
+    parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'])
     parser.add_argument("--gc", action='store_true')
     parser.add_argument("--logtime", action='store_true')
     parser.add_argument("--tokenizer-log-interval", type=int)

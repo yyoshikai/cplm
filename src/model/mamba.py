@@ -1,10 +1,13 @@
-import sys, psutil, gc, copy
+import psutil, copy, math
 from pathlib import Path
-from functools import partial
+from functools import partial, lru_cache
+from collections import defaultdict
 from typing import Optional
 from logging import getLogger
 from tqdm import tqdm
+
 import yaml
+import pandas as pd
 import torch.nn as nn
 import torch
 from torch import Tensor
@@ -12,49 +15,32 @@ from transformers.models.mamba.configuration_mamba import MambaConfig
 from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
 from transformers.generation.streamers import BaseStreamer
 from .transformer import save_vocs, align_embedding
-
-class MambaModel(MambaForCausalLM):
-    logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, vocs: list, padding_idx: int, end_token: str):
-        config = MambaConfig(
-            vocab_size=len(vocs), 
-        )
-        with open(str(Path(__file__).parent / "configs" / "mamba-130m-hf.yaml")) as f:
-            config = yaml.safe_load(f)
-        config = MambaConfig(**config)
-        config.vocab_size = len(vocs)
-        config.pad_token_id = padding_idx
-        config.eos_token_id = vocs.index(end_token)
-        super().__init__(config)
-        self._register_state_dict_hook(save_vocs)
-        self._register_load_state_dict_pre_hook(partial(align_embedding, 
-                embedding_name='backbone.embeddings', predictor_name='lm_head'), with_module=True)
-        self.vocs = vocs
-
-    def forward(self, src: Tensor):
-        """
-        src: [L, B]
-        """
-        output = super().forward(src.T.contiguous(), )
-        x: Tensor = output['logits'] # [B, L, D]
-        return x.transpose(0, 1) # [L, B, D]
-
+from ..utils.memory import get_mems
 
 class MambaModel2(nn.Module):
+    """
+    Contents in ./gpuuse are from /workspace/resource_test/240921_transformer_size
+    """
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, vocs: list, padding_idx: int, end_token: str):
+    def __init__(self, vocs: list, padding_idx: int, end_token: str, **kwargs):
         super().__init__()
 
         # Build mamba model
-        config = MambaConfig(
-            vocab_size=len(vocs), 
-        )
         with open(str(Path(__file__).parent / "configs" / "mamba-130m-hf.yaml")) as f:
             config = yaml.safe_load(f)
+
+        # Other parameters are not supported due to gpu_use()
+        supported_keys = {'num_hidden_layers', 'hidden_size', 'state_size', 'intermediate_size', 'time_step_rank', 'conv_kernel'}
+        keys = set(kwargs.keys())
+        if len(keys - supported_keys) > 0:
+            raise ValueError(f"Following kwargs are not supported: {keys - supported_keys}")
+
+        config.update(kwargs)
         config = MambaConfig(**config)
         config.vocab_size = len(vocs)
         config.pad_token_id = padding_idx
         config.eos_token_id = vocs.index(end_token)
+        self.config = config
         self.model = MambaForCausalLM(config)
 
         # Add hooks
@@ -63,13 +49,21 @@ class MambaModel2(nn.Module):
                 embedding_name='model.backbone.embeddings', predictor_name='model.lm_head'), with_module=True)
         self.vocs = vocs
 
-    def forward(self, src: Tensor):
+        self.gpuuse_coef = lru_cache(1)(self._gpuuse_coef)
+
+    def forward(self, src: Tensor, get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
         """
         src: [L, B]
         """
         output = self.model(src.T.contiguous(), )
         x: Tensor = output['logits'] # [B, L, D]
-        return x.transpose(0, 1) # [L, B, D]
+        x = x.transpose(0, 1) # [L, B, D]
+
+        # get_mem
+        if get_mem:
+            return tuple([x]+get_mems(src.device, offset, mem_path))
+        else:
+            return x
     
     def generate(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True) -> list[torch.Tensor]:
         """
@@ -83,7 +77,6 @@ class MambaModel2(nn.Module):
             if pad_token in item:
                 item = item[:torch.where(item == pad_token)[0][0]]
             output.append(self.model.generate(item.unsqueeze(0), do_sample=True, max_new_tokens=max_len, streamer=ProgressStreamer(str(i), max_len, self) if tqdm else None)[0])
-            gc.collect() # TODO: 必要？
         return output
     
     @torch.no_grad()
@@ -210,7 +203,74 @@ class MambaModel2(nn.Module):
                 "attention_mask": attention_mask,
             }
         return model_inputs
+    
+    def _gpuuse_coef(self, bf16: bool) -> dict[tuple[int, int], float]:
+        """
+        
+        Returns
+        -------
+        dim2coefs: dict[tuple[int, int], float]
+        dim2coefs[batch_size_dim, legnth_dim] = coef of memory use
+        """
 
+        # calc param sizes
+        ## params
+        state_size = self.config.state_size
+        num_hidden_layers = self.config.num_hidden_layers
+        intermediate_size = self.config.intermediate_size
+        hidden_size = self.config.hidden_size
+        voc_size = self.config.vocab_size
+        time_step_rank = self.config.time_step_rank
+        conv_kernel = self.config.conv_kernel
+
+        ## capture rate
+        with open(str(Path(__file__).parent / "gpuuse" / "capture_rates.yaml")) as f:
+            capture_rates = yaml.safe_load(f)
+
+        ## shape
+        mname = 'mamba_bf16' if bf16 else 'mamba'
+
+        t2dim2coefs = {}
+        for t in ['forward', 'backward']:
+            dfp = pd.read_csv(Path(__file__).parent / "gpuuse" / t / (mname+'.csv'), keep_default_na=False)
+            dim2coefs = defaultdict(float)
+            for shape, itemsize, n in zip(dfp['shape'], dfp['itemsize'], dfp['n']):
+                batch_size_dim = length_dim = ceiled_length_dim = 0
+                coef = float(eval(n)) * itemsize
+                shape = shape.split(' ') if len(shape) > 0 else []
+                for d in shape:
+                    if d == 'batch_size':
+                        batch_size_dim += 1
+                    elif d == 'length':
+                        length_dim += 1
+                    elif d == 'math.ceil(length/2048)':
+                        ceiled_length_dim += 1
+                    else:
+                        try:
+                            coef = coef*eval(d)
+                        except Exception as e:
+                            print(f"invalid d: {d}")
+                            raise e
+                ### capture rate
+                coef = coef / capture_rates[mname]
+                dim2coefs[batch_size_dim, length_dim, ceiled_length_dim] += coef
+            t2dim2coefs[t] = dict(dim2coefs)
+        
+        return t2dim2coefs
+
+    def get_gpuuse(self, batch_size: int, length: int, bf16: bool):
+        t2dim2coefs = self.gpuuse_coef(bf16)
+        max_gpuuse = 0
+        for dim2coefs in t2dim2coefs.values():
+            gpuuse = 0
+            ceiled_length = math.ceil(length / 2048)
+            for (batch_size_dim, length_dim, ceiled_length_dim), coef in dim2coefs.items():
+                gpuuse += (batch_size**batch_size_dim) \
+                        * (length**length_dim) \
+                        * (ceiled_length**ceiled_length_dim) \
+                        * coef
+            max_gpuuse = max(gpuuse, max_gpuuse)
+        return max_gpuuse
 
 class ProgressStreamer(BaseStreamer):
     def __init__(self, name, max_len, model):

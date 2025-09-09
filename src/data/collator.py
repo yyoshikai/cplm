@@ -1,4 +1,6 @@
 from bisect import bisect_right
+from collections.abc import Callable
+from functools import partial
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
@@ -7,6 +9,28 @@ import torch.distributed as dist
 from ..utils.logger import get_logger
 from .data import IndexDataset
 from .sampler import InfiniteRandomSampler
+from ..model import Model, MambaModel2
+
+def solve_increasing_fn_left(func: Callable[[int], float], start_sup: int) -> int:
+
+    min = 0
+    sup = start_sup
+
+    # get max
+    while func(sup) <= 0:
+        min = sup
+        sup = sup*2
+
+    # narrow down
+    while sup - min > 1:
+        v = (sup+min) // 2
+        if func(v) <= 0:
+            min = v
+        else:
+            sup = v
+    return min
+
+
 
 class StringCollateLoader:
     logger = get_logger(f"{__module__}.{__qualname__}")
@@ -60,13 +84,14 @@ class StringCollateLoader:
 
 class DDPStringCollateLoader:
     logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, dataset: Dataset, num_workers:int, pin_memory: bool, prefetch_factor: int, 
-            token_per_batch: int, batch_first: bool, padding_value: int,
+    def __init__(self, dataset: Dataset, model: Model|MambaModel2, num_workers:int, pin_memory: bool, prefetch_factor: int, 
+            gpu_size: float, batch_first: bool, padding_value: int, bf16: bool, kernel: str,
             device: torch.device, main_rank: int=0, seed: int=None):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
         self.device = device
+
 
         if self.rank == self.main_rank:
 
@@ -74,9 +99,14 @@ class DDPStringCollateLoader:
             dataset = IndexDataset(dataset)
             generator = torch.Generator().manual_seed(seed) if seed is not None else None
             sampler = InfiniteRandomSampler(dataset, generator=generator)
-            self.token_per_batch = token_per_batch
+            self.gpu_size = gpu_size
             self.loader = DataLoader(dataset, batch_size=None, sampler=sampler, num_workers=num_workers, 
                 pin_memory=pin_memory, persistent_workers=True, prefetch_factor=prefetch_factor)
+            
+            if isinstance(model, Model): self.get_gpuuse = partial(model.get_gpuuse, bf16=bf16, kernel=kernel)
+            elif isinstance(model, MambaModel2): self.get_gpuuse = partial(model.get_gpuuse, bf16=bf16)
+            else: raise ValueError(f"Unsupported model: {type(model)}")
+
             self.iter = self.loader.__iter__()
             self.next_item = None
             self.step = 0
@@ -92,12 +122,13 @@ class DDPStringCollateLoader:
                 # get next item
                 if self.next_item is None:
                     index, self.next_item = self.iter.__next__()
-                    self.logger.debug(f"{self.i_item}: {index}")
-                    self.logger.debug(f"    {self.next_item}")
-                    self.i_item += 1
+                    if self.step < 5:
+                        self.logger.debug(f"{self.i_item}: {index}")
+                        self.logger.debug(f"    {self.next_item}")
+                        self.i_item += 1
                 # check maximum size
                 next_size = len(self.next_item)
-                if next_size > self.token_per_batch:
+                if self.get_gpuuse(batch_size=1, length=next_size) > self.gpu_size:
                     self.logger.warning(f"Item was too large even for single item per batch({len(self.next_item)}), and not used.")
                     self.next_item = None
                     continue
@@ -110,7 +141,8 @@ class DDPStringCollateLoader:
                 i = 0
                 for i_worker in range(self.size):
                     max_len = len(next_data_list[i])
-                    i += self.token_per_batch // max_len
+                    batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
+                    i += batch_size
                     if i >= len(next_data_list): break
                 if i >= len(next_data_list):
                     ## More data may be able to be added.
@@ -122,9 +154,13 @@ class DDPStringCollateLoader:
             # If no data can be added, output batch
             i = 0
             batch = None
+            if self.step < 5:
+                self.logger.info(f"Shape of step {self.step}: (batch_size, max_len)=")
             for dst_rank in range(self.size):
                 max_len = len(data_list[i])
-                batch_size = self.token_per_batch // max_len
+                batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
+                if self.step < 5:
+                    self.logger.info(f"    rank={dst_rank}: ({batch_size}, {max_len}), gpuuse={self.get_gpuuse(batch_size, max_len)/2**30:.03f}GB")
 
                 # 送ってからpad_sequenceとどちらが速い？
                 dst_batch = pad_sequence(data_list[i:i+batch_size],
@@ -141,4 +177,5 @@ class DDPStringCollateLoader:
             dist.recv(batch_shape, src=self.main_rank)
             batch = torch.zeros(batch_shape[0], batch_shape[1], dtype=torch.long, device=self.device)
             dist.recv(batch, src=self.main_rank)
+        self.step += 1
         return batch
