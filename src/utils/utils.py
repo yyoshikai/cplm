@@ -161,8 +161,9 @@ def reveal_data(data, max_iterable_size: int=20, max_str_size: int=160) -> str:
         if len(items) > 10:
             items = items[:8].tolist()+['...']+items[-2:].tolist()
 
-        output = f"{typename}(shape={tuple(data.shape)}, dtype={data.dtype}, data=[" \
+        return f"{typename}(shape={tuple(data.shape)}, dtype={data.dtype}, data=[" \
             +', '.join([str(i) for i in items])+'])'
+        
     else:
         data = reveal_data(repr(data), max_iterable_size, max_str_size)
         if data.startswith(tname):
