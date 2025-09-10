@@ -8,6 +8,7 @@ from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
 from ..lmdb import PickleLMDBDataset
 from ..protein import Protein
+from ..data import is_main_worker
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
@@ -48,7 +49,7 @@ class UniMolLigandDataset(Dataset[Chem.Mol]):
             mol.AddConformer(conf)
 
         # save sample in main process
-        if self.sample_save_dir is not None and self.getitem_count < 5:
+        if self.sample_save_dir is not None and self.getitem_count < 5 and is_main_worker():
             worker_info = get_worker_info()
             if worker_info is None or worker_info.id == 0:
                 save_dir = f"{self.sample_save_dir}/{idx}"

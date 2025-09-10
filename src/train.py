@@ -52,6 +52,9 @@ class CELoss(nn.Module):
 
 class WeightedCELoss(nn.Module):
     logger = getLogger(f"{__module__}.{__qualname__}")
+    token_logger = getLogger(f"{__module__}.{__qualname__}.tokens")
+    token_logger_is_set = False
+
     def __init__(self, voc_encoder: VocEncoder, seed: int, 
                 pocket_atom_weight: float, pocket_coord_weight: float, 
                 lig_smiles_weight: float, lig_coord_weight: float):
@@ -63,6 +66,14 @@ class WeightedCELoss(nn.Module):
         self.pocket_coord_weight = pocket_coord_weight
         self.lig_smiles_weight = lig_smiles_weight
         self.lig_coord_weight = lig_coord_weight
+        
+        # logger
+        self.token_logger.propagate = False
+
+    @classmethod
+    def set_token_logger(cls, log_path: str):
+
+        cls.token_logger_is_set = True
 
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         """
@@ -90,17 +101,10 @@ class WeightedCELoss(nn.Module):
         ], dim=0)
         
         # log tokens in initial few steps
-        if self.step < 5:
-            rstate = np.random.RandomState(self.seed+self.step)
-            idxs = np.arange(target.shape[1])
-            if len(idxs) > 10: 
-                idxs = np.sort(rstate.choice(target.shape[1], size=10, replace=False))
-            self.logger.log(INFO_WORKER, f"target of step {self.step}:")
-            for idx in idxs:
-                self.logger.log(INFO_WORKER, f"  [{idx:3}]={','.join(self.voc_encoder.decode(target[:,idx].cpu().tolist()))}")
-                self.logger.log(INFO_WORKER, f"  weight[{idx:3}]={weight[:,idx].cpu().tolist()}")
+
         self.step += 1
         return torch.sum(F.cross_entropy(input.reshape(-1, self.voc_encoder.voc_size), target.ravel(), reduction='none')*weight.ravel())
+
 
 def sync_train_dir(result_dir):
     if dist.get_rank() == MAIN_RANK:
@@ -117,6 +121,7 @@ def sync_train_dir(result_dir):
         result_dir = result_dirs[0]
     return result_dir
 
+
 def set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:
         assert sdp_kernel in ['FLASH', 'CUDNN', 'MATH', 'EFFICIENT', 'ALL'] # 全て無効にするとエラーになる
@@ -130,13 +135,26 @@ def get_train_logger(result_dir):
     rank = dist.get_rank()
     size = dist.get_world_size()
     fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
+    os.makedirs(f"{result_dir}/logs", exist_ok=True)
+
+    # main logger
     logger = getLogger()
     add_stream_handler(logger, logging.INFO, fmt=fmt)
-    add_file_handler(logger, f"{result_dir}/debug.log", logging.DEBUG, fmt=fmt, mode='a')
-    add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/logs/main_info.log", logging.DEBUG, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/logs/main_debug.log", logging.INFO, fmt=fmt, mode='a')
     logger.setLevel(logging.NOTSET if rank == MAIN_RANK else INFO_WORKER)
+
+    # data logger
+    data_logger = getLogger('dexs')
+    add_file_handler(data_logger, f"{result_dir}/logs/data_examples.log", fmt=fmt, mode='a')
+    data_logger.setLevel(logging.NOTSET)
+    data_logger.propagate = False
+
+    # third-party modules
     set_rdkit_logger()
-    return logger
+
+    return logger, data_logger
+
 
 def add_train_args(parser: ArgumentParser):
     # training
@@ -167,6 +185,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
 
+
 def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int, 
         warmup_step: int=2000):
     match scheduler:
@@ -195,8 +214,9 @@ def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int,
     return LambdaLR(optimizer, schedule)
 
 
-def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.Module, result_dir: str, pad_token: int, device: torch.device, log_step):
+def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_encoder: VocEncoder, model: Model, result_dir: str, device: torch.device, log_step, seed: int):
     logger = getLogger('train')
+    data_logger = getLogger('dexs.train')
 
     # Environment
     ## rank
@@ -223,6 +243,9 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
     logger.info(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
     logger.info(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
     
+    ## criterion
+    criterion = nn.CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
+
     ## optimizer
     optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
     optimizer.zero_grad()
@@ -261,9 +284,9 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
 
         # get batch
         with rectime() as data_timer:
-            batch = train_loader.__next__()
+            batch, weight_batch = train_loader.__next__()
             batch = batch.to(device)
-            n_token = torch.sum(batch != pad_token).item()
+            n_token = torch.sum(batch != voc_encoder.pad_token).item()
             n_accum_token += n_token
 
             batch_sizes.append(batch.shape[1])
@@ -273,8 +296,23 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
         with rectime() as loss_timer:
             with torch.autocast('cuda', dtype=torch.bfloat16):
                 pred = model(batch[:-1])
-                loss = criterion(pred, batch[1:]) * loss_scale
-            
+                loss = (criterion(pred.ravel(), batch[1:].ravel())*weight_batch.ravel()).sum() * loss_scale
+
+                # Log output for final check
+                if step < 5:
+                    batch_size = batch.shape[1]
+                    idxs = np.arange(batch_size)
+                    if len(idxs) > 10: 
+                        rstate = np.random.RandomState(seed+step)
+                        idxs = np.sort(rstate.choice(batch_size, size=10, replace=False))
+                    data_logger.info(f"target of step {step}:")
+                    for idx in idxs:
+                        msg = f"  [{idx:3}]="
+                        tokens = voc_encoder.decode(batch[1:,idx].cpu().tolist())
+                        for t, w in zip(tokens, weight_batch[:,idx]):
+                            msg += f"{t}[{w}],"
+                        data_logger.info(msg)
+
             loss.backward()
             l = loss.item()
             accum_loss += l
@@ -293,7 +331,7 @@ def train(args: Namespace, train_loader: Iterator, model: Model, criterion: nn.M
 
                     ## save situation
                     if is_main and not nan_grad_step_saved:
-                        nan_dir = f"{result_dir}/nan_step_{step}/{rank}"
+                        nan_dir = f"{result_dir}/nan_steps/{step}/{rank}"
                         os.makedirs(nan_dir, exist_ok=True)
                         torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
                         torch.save(model.state_dict(), f"{nan_dir}/model.pth")

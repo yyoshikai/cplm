@@ -102,7 +102,7 @@ if is_main:
     shutil.copytree('src', f"{result_dir}/cplm/src")
 
 ## logger
-logger = get_train_logger(result_dir)
+logger, data_logger = get_train_logger(result_dir)
 logger.info(f"num_workers={args.num_workers}")
 if auto_pretrain_step:
     logger.info(f"pretrain_step was set to {args.pretrain_step}")
@@ -180,6 +180,6 @@ criterion = WeightedCELoss(voc_encoder, args.seed,
         args.lig_smiles_weight, args.lig_coord_weight)
 
 train(args, train_loader, model, criterion, result_dir, voc_encoder.pad_token, device, 
-        1 if args.test else 10000)
+        1 if args.test else 10000, args.seed)
 
 dist.destroy_process_group()

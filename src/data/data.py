@@ -1,12 +1,14 @@
+import queue
+import multiprocessing as mp
 from functools import lru_cache
-from typing import TypeVar
+from typing import TypeVar, Generic, Optional
 from collections.abc import Callable
 from logging import getLogger
 
 import numpy as np
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -162,4 +164,33 @@ class TensorDataset(Dataset[Tensor]):
 
     def __len__(self):
         return self.tensor.size(0)
-    
+
+def is_main_worker() -> bool:
+    worker_info = get_worker_info()
+    return worker_info is None or worker_info.id == 0
+
+class WorkerAggregator(Generic[T_co]):
+    def __init__(self, init_value: T_co, aggregate_fn: Callable[[T_co, T_co], T_co]):
+        
+        # This value is maintained only in main process
+        self.value = init_value
+        self.aggregate_fn = aggregate_fn
+        self.queue = mp.Queue()
+
+    def add(self, value: T_co) -> None:
+        if is_main_worker():
+            self.value = self.aggregate_fn(self.value, value)
+        else:
+            self.queue.put(value)
+
+
+    def get(self) -> Optional[T_co]:
+        if is_main_worker():
+            while True:
+                try:
+                    q_value = self.queue.get(block=False)
+                    self.value = self.aggregate_fn(self.value, q_value)
+                except queue.Empty:
+                    break
+            return self.value
+        return None

@@ -1,10 +1,18 @@
-import itertools, math, re
+import itertools, re, queue
+import multiprocessing as mp
 from collections.abc import Iterable
 from collections import defaultdict
 from logging import getLogger
+from typing import TypeVar
+
 import numpy as np
 import torch
+from torch import Tensor
 from torch.utils.data import Dataset
+
+from .data import WorkerAggregator, is_main_worker
+
+T_co = TypeVar('T_co', covariant=True)
 
 class VocEncoder:
     logger = getLogger(f"{__module__}.{__qualname__}")
@@ -29,7 +37,7 @@ class VocEncoder:
     def voc_size(self) -> int:
         return len(self.i2voc)
 
-class TokenEncodeDataset(Dataset):
+class TokenEncodeDataset(Dataset[Tensor]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, dataset, encoder: VocEncoder):
         self.dataset = dataset
@@ -58,9 +66,18 @@ class ProteinAtomTokenizer(Tokenizer):
     def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN', 'BR', 'MG'], unk_voc='[UNK]', log_interval: int=1000000):
         self.atom_vocs = sorted(atom_vocs, key=len, reverse=True)
         self.unk_voc = unk_voc
+        self.log_interval = log_interval
+
+        # Process-specific attributes
         self.n_tokenized = 0
         self.unk_count = defaultdict(int)
-        self.log_interval = log_interval
+        def agg_count(x: defaultdict[str, int], y: defaultdict[str, int]):
+            for k, v in y.items():
+                x[k] += v
+            return x
+        self.unk_count_agg = WorkerAggregator(defaultdict(int), agg_count)
+        self.n_tokenized_agg = WorkerAggregator(0, lambda x, y: x+y)
+
     def tokenize(self, atoms: list[str]):
         tokens = []
         for atom in atoms:
@@ -72,13 +89,23 @@ class ProteinAtomTokenizer(Tokenizer):
                 self.unk_count[atom] += 1
                 tokens.append(self.unk_voc)
         self.n_tokenized += len(atoms)
+
+        # Log unknown tokens
         if (self.n_tokenized%self.log_interval) < len(atoms):
-            if len(self.unk_count) == 0:
-                self.logger.info(f"No unknown atoms in {self.n_tokenized} atoms.")
-            else:
-                self.logger.info(f"Unknown atoms in {self.n_tokenized} atoms:")
-                for atom, n in sorted(self.unk_count.items(), key=lambda x: x[1], reverse=True):
-                    self.logger.info(f"  {atom}: {n}")
+            self.unk_count_agg.add(self.unk_count)
+            self.n_tokenized_agg.add(self.n_tokenized)
+            self.unk_count.clear()
+            self.n_tokenized = 0
+
+            if is_main_worker():
+                unk_count = self.unk_count_agg.get()
+                n_tokenized = self.n_tokenized_agg.get()
+                if len(self.unk_count) == 0:
+                    self.logger.info(f"No unknown atoms in {n_tokenized} atoms.")
+                else:
+                    self.logger.info(f"Unknown atoms in {n_tokenized} atoms:")
+                    for atom, n in sorted(unk_count.items(), key=lambda x: x[1], reverse=True):
+                        self.logger.info(f"  {atom}: {n}")
         
         return tokens
 
@@ -129,7 +156,6 @@ class StringTokenizer2(Tokenizer):
     def vocs(self):
         return self.tokenizer.vocs()
 
-
 class FloatTokenizer(Tokenizer):
     logger = getLogger(f"{__module__}.{__qualname__}")
 
@@ -140,6 +166,9 @@ class FloatTokenizer(Tokenizer):
         self.n_tokenized = 0
         self.n_over = 0
         self.n_under = 0
+        self.n_agg = WorkerAggregator((0, 0, 0), 
+                lambda x, y: tuple(x0+y0 for x0, y0 in zip(x, y)))
+
         self.log_interval = log_interval
         self.float_format = "{:.0"+str(self.decimal)+"f}"
 
@@ -153,7 +182,13 @@ class FloatTokenizer(Tokenizer):
             x = self.vmax
         self.n_tokenized += 1
         if self.n_tokenized % self.log_interval == 0:
-            self.logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
+            self.n_agg.add((self.n_tokenized, self.n_over, self.n_under))
+            self.n_tokenized = self.n_over = self.n_under = 0
+
+            n = self.n_agg.get()
+            if n is not None:
+                n_tokenized, n_over, n_under = n
+                self.logger.info(f"{n_over}/{n_tokenized} are over vmax, {n_under}/{n_tokenized} are under vmin")
         x = self.float_format.format(x)
         xi = x[:-4]
         xf = x[-4:]
@@ -227,3 +262,27 @@ class SentenceDataset(Dataset[list[str]]):
             else:
                     vocs |= word.vocs()
         return vocs
+
+class TokenWeightDataset(Dataset[Tensor]):
+    def __init__(self, token_dataset: Dataset[list[str]], separates: set[str], separates2weight: dict[tuple[str], float]):
+        self.token_dataset = token_dataset
+        self.separates = set(separates)
+        self.separates2weight = separates2weight
+
+    def __getitem__(self, idx):
+        tokens = self.token_dataset[idx]
+        weights = []
+        separates = tuple()
+        cur_weight = self.separates2weight.get(separates, None)
+        for token in tokens:
+            if token in self.separates:
+                separates = separates + (token,)
+                cur_weight = self.separates2weight[separates]
+            weights.append(cur_weight)
+        return torch.tensor(weights, dtype=torch.float)
+
+class RemoveLastDataset(Dataset[T_co]):
+    def __init__(self, dataset: Dataset[T_co]):
+        self.dataset = dataset
+    def __getitem__(self, idx: int):
+        return self.dataset[idx][:-1]

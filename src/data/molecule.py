@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np, pandas as pd
 from torch.utils.data import Dataset, get_worker_info
 from rdkit import Chem
-from .data import WrapDataset
+from .data import WrapDataset, is_main_worker
 
 class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
@@ -42,7 +42,7 @@ class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
         coord = coord[atom_order]
 
         # save sample
-        if self.sample_save_dir is not None and self.getitem_count < 5:
+        if self.sample_save_dir is not None and self.getitem_count < 5 and is_main_worker():
             worker_info = get_worker_info()
             if worker_info is None or worker_info.id == 0:
                 save_dir = f"{self.sample_save_dir}/{idx}"
