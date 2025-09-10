@@ -87,8 +87,9 @@ class DDPStringCollateLoader:
                 if self.next_item is None:
                     index, self.next_item = self.iter.__next__()
                     if self.step < 5:
-                        self.data_logger.debug(f"item {self.i_item}: idx={index}")
+                        self.data_logger.info(f"item {self.i_item}: idx={index}")
                         self.data_logger.info(f"    {reveal_data(self.next_item)}")
+
                         msg = "    "
                         tokens = self.voc_encoder.decode(self.next_item[0].cpu().tolist())
                         weights = self.next_item[1].cpu().tolist()+['none']
@@ -99,6 +100,7 @@ class DDPStringCollateLoader:
                 
                 # check maximum size
                 next_size = len(self.next_item[0])
+                self.data_logger.info(f"{next_size=}")
                 if self.get_gpuuse(batch_size=1, length=next_size) > self.gpu_size:
                     self.logger.warning(f"Item was too large even for 1 item per batch({len(self.next_item)}), and not used.")
                     self.next_item = None
