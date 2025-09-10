@@ -176,7 +176,8 @@ def traceback_warning():
 
 # Git
 def git_commit() -> bool:
-    subprocess.run('git add . && git commit -m checkpoint_for_training', shell=True, capture_output=True)
+    p = subprocess.run('git add . && git commit -m checkpoint_for_training', shell=True, capture_output=True)
+    if p.returncode == 1: # nothi
 
 
 def git_get_hash() -> str:
