@@ -151,17 +151,23 @@ def reveal_data(data, max_iterable_size: int=20, max_str_size: int=160) -> str:
                 if i != len(item_strs)-1:
                     output += ','
             output += f'\n{end}'
-
+            return output
         else:
             return start + ', '.join(item_strs) + end
     elif isinstance(data, (int, float, type)):
         return str(data)
+    elif isinstance(data, (np.ndarray, torch.Tensor)):
+        items = data.ravel()
+        if len(items) > 10:
+            items = items[:8].tolist()+['...']+items[-2:].tolist()
+
+        output = f"{typename}(shape={tuple(data.shape)}, dtype={data.dtype}, data=[" \
+            +', '.join([str(i) for i in items])+'])'
     else:
         data = reveal_data(repr(data), max_iterable_size, max_str_size)
         if data.startswith(tname):
             data = typename + data.removeprefix(tname)
         return data
-    return output
 
 def traceback_warning():
     def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
