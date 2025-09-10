@@ -154,6 +154,7 @@ def get_train_logger(result_dir):
 
     # third-party modules
     set_rdkit_logger()
+    getLogger('.prody').disabled = True
 
     return logger, data_logger
 

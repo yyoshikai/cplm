@@ -109,7 +109,6 @@ sample_save_dir = f"{result_dir}/ligand_sample" if args.test else None
 
 if is_main:
     ## datasets
-    print('datasets started.', flush=True)
     ### Molecule
     mol_data = []
     for cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset]:
@@ -129,7 +128,6 @@ if is_main:
             protein_data.append(RepeatDataset(data, repeat))
 
     ## process
-    print('Process started.', flush=True)
     vocs = set()
     datas = []
     weight_datas = []
@@ -157,7 +155,6 @@ if is_main:
         datas.append(mol_data)
         weight_datas.append(mol_weight_data)
     ### Process proteins
-    print('Process protein started', flush=True)
     if len(protein_data) > 0:
         pocket = ConcatDataset(protein_data)
         pocket = ProteinProcessDataset(pocket, heavy_atom=not args.no_pocket_atom_heavy, heavy_coord=args.pocket_coord_heavy, h_atom=args.pocket_atom_h, h_coord=args.pocket_coord_h)
@@ -183,26 +180,16 @@ if is_main:
         logger.debug(f"pocket data: {len(pocket_data)}")
         datas.append(pocket_data)
         weight_datas.append(pocket_weight_data)
-    print('Process ended', flush=True)
 
     voc_encoder = VocEncoder(vocs)
-    print(1, flush=True)
     datas = ConcatDataset(datas)
-    print(2, flush=True)
     datas = TokenEncodeDataset(datas, voc_encoder)
-    print(3, flush=True)
     weight_datas = ConcatDataset(weight_datas)
-    print(4, flush=True)
-    print(len(datas), len(weight_datas), flush=True)
     train_data = StackDataset(datas, weight_datas)
-    print(5, flush=True)
     voc_encoder_d = [voc_encoder]
-    print(6, flush=True)
 else:
     voc_encoder_d = [None]
-print('broadcast started.', flush=True)
 dist.broadcast_object_list(voc_encoder_d, src=MAIN_RANK)
-print('broadcast ended', flush=True)
 voc_encoder = voc_encoder_d[0]
 
 # model
@@ -215,10 +202,8 @@ model.to(device)
 model = DistributedDataParallel(model)
 
 # DataLoader
-print('train_loader', flush=True)
 train_loader = DDPStringCollateLoader(train_data, voc_encoder, model.module, args.num_workers, args.pin_memory, args.prefetch_factor, 
     args.gpu_size_gb*(2**30), batch_first, voc_encoder.pad_token, True, args.sdp_kernel, device,  main_rank=MAIN_RANK, seed=args.seed)
-print('train started.', flush=True)
 train(args, train_loader, voc_encoder, model, result_dir, device, log_step, args.seed)
 
 dist.destroy_process_group()
