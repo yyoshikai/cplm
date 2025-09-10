@@ -107,7 +107,7 @@ class DDPStringCollateLoader:
                     continue
 
                 # insert size
-                i = bisect_right(data_list, -len(self.next_item[0]), key=lambda x: -len(x))
+                i = bisect_right(data_list, -next_size, key=lambda x: -len(x[0]))
                 next_data_list = data_list[:i]+[self.next_item]+data_list[i:] # most slow
 
                 # check more data can be added
@@ -117,6 +117,7 @@ class DDPStringCollateLoader:
                     batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
                     i += batch_size
                     if i >= len(next_data_list): break
+                
                 if i >= len(next_data_list):
                     ## More data may be able to be added.
                     data_list = next_data_list
