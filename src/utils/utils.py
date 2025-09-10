@@ -5,7 +5,9 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from .logger import get_logger
-from .time import set_logtime, logtime, logend, rectime # For compatibility
+# For compatibility
+from .time import set_logtime, logtime, logend, rectime 
+from .memory import get_mem
 
 # random
 def set_random_seed(seed: int):
@@ -90,10 +92,6 @@ class CompressedArray:
     def __len__(self):
         return self.size
 
-def get_mem():
-    mem = psutil.virtual_memory()
-    return f"{mem.used/2**30:.03f}GB/{mem.total/2**30:.03f}GB"
-
 module_abbrevs = {'numpy': 'np', 'pandas': 'pd'}
 def reveal_data(data, max_iterable_size: int=20, max_str_size: int=160) -> str:
     
@@ -177,8 +175,7 @@ def traceback_warning():
 # Git
 def git_commit() -> bool:
     p = subprocess.run('git add . && git commit -m checkpoint_for_training', shell=True, capture_output=True)
-    if p.returncode == 1: # nothi
-
+    return p.returncode == 0 # 1=nothing to commit, working tree clean
 
 def git_get_hash() -> str:
     p = subprocess.run('git rev-parse --short HEAD', shell=True, capture_output=True)

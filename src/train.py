@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 from .data.tokenizer import VocEncoder
-from .utils import git_get_hash
+from .utils import git_commit, git_get_hash
 from .utils.logger import INFO_WORKER, add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .model import Model
@@ -141,13 +141,14 @@ def get_train_logger(result_dir):
     # main logger
     logger = getLogger()
     add_stream_handler(logger, logging.INFO, fmt=fmt)
-    add_file_handler(logger, f"{result_dir}/logs/main_info.log", logging.DEBUG, fmt=fmt, mode='a')
-    add_file_handler(logger, f"{result_dir}/logs/main_debug.log", logging.INFO, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/main.log", logging.INFO, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/logs/main_debug.log", logging.DEBUG, fmt=fmt, mode='a')
     logger.setLevel(logging.NOTSET if rank == MAIN_RANK else INFO_WORKER)
 
     # data logger
     data_logger = getLogger('dexs')
-    add_file_handler(data_logger, f"{result_dir}/logs/data_examples.log", fmt=fmt, mode='a')
+    add_file_handler(data_logger, f"{result_dir}/logs/data_examples.log", logging.INFO, fmt=fmt, mode='a')
+    add_file_handler(data_logger, f"{result_dir}/logs/data_examples_debug.log", logging.DEBUG, fmt=fmt, mode='a')
     data_logger.setLevel(logging.NOTSET)
     data_logger.propagate = False
 
@@ -231,8 +232,9 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
 
     ## commit & log hash of git
     if is_main:
-        logger.debug(git_get_hash(True))
-
+        committed = git_commit()
+        logger.debug('git committed.' if committed else 'git not committed.')
+        logger.debug(f"git hash={git_get_hash(True)}")
 
     ## fix seed
     set_random_seed(args.seed)
@@ -287,6 +289,9 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
 
     logger.info("Training started.")
     for step in range(args.max_step):
+        # reset gpu to watch gpu use
+        if step < 5:
+            torch.cuda.reset_peak_memory_stats(device)
 
         # get batch
         with rectime() as data_timer:
@@ -397,6 +402,11 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
 
             if opt_step >= args.max_opt_step:
                 break
+        
+        # Log gpuuse
+        logger.debug(f"GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
+
+
         if (step+1) % log_step == 0:
             logger.info(f"{step+1} step finished.")
     logger.info("Training finished!")

@@ -9,6 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 import torch.distributed as dist
 from .data import IndexDataset
+from .tokenizer import VocEncoder
 from .sampler import InfiniteRandomSampler
 from ..model import Model, MambaModel2
 
@@ -45,7 +46,7 @@ def dist_recv_tensor(src: int, recv_device: torch.device):
 class DDPStringCollateLoader:
     logger = getLogger(f"{__module__}.{__qualname__}")
     data_logger = getLogger(f"dexs.{__module__}.{__qualname__}")
-    def __init__(self, dataset: Dataset[tuple[Tensor, Tensor]], model: Model|MambaModel2, num_workers:int, pin_memory: bool, prefetch_factor: int, 
+    def __init__(self, dataset: Dataset[tuple[Tensor, Tensor]], voc_encoder: VocEncoder, model: Model|MambaModel2, num_workers:int, pin_memory: bool, prefetch_factor: int, 
             gpu_size: float, batch_first: bool, padding_value: int, bf16: bool, kernel: str,
             device: torch.device, padding_weight: float=0.0, main_rank: int=0, seed: int=None):
         self.size = dist.get_world_size()
@@ -60,6 +61,7 @@ class DDPStringCollateLoader:
             generator = torch.Generator().manual_seed(seed) if seed is not None else None
             sampler = InfiniteRandomSampler(dataset, generator=generator)
             self.gpu_size = gpu_size
+            self.voc_encoder = voc_encoder
             self.loader = DataLoader(dataset, batch_size=None, sampler=sampler, num_workers=num_workers, 
                 pin_memory=pin_memory, persistent_workers=True, prefetch_factor=prefetch_factor)
             
@@ -84,7 +86,13 @@ class DDPStringCollateLoader:
                 if self.next_item is None:
                     index, self.next_item = self.iter.__next__()
                     if self.step < 5:
-                        self.data_logger.debug(f"{self.i_item}: {index}")
+                        self.data_logger.debug(f"item {self.i_item}: idx={index}")
+                        msg = "    "
+                        tokens = self.voc_encoder.decode(self.next_item[0].cpu().tolist())
+                        weights = self.next_item[1].cpu().tolist()+['none']
+                        for t, w in zip(tokens, weights):
+                            msg += f"{t}[{w}],"
+                        self.data_logger.debug(msg)
                         self.i_item += 1
                 
                 # check maximum size

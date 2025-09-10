@@ -1,4 +1,4 @@
-import os, subprocess, math, gc
+import os, subprocess, math, gc, psutil
 from collections import defaultdict
 
 import torch
@@ -39,3 +39,7 @@ def get_mems(device, offset = None, mem_path = None):
     if offset is not None:
         output = [out - off for out, off in zip(output, offset)]
     return output
+
+def get_mem():
+    mem = psutil.virtual_memory()
+    return f"{mem.used/2**30:.03f}GB/{mem.total/2**30:.03f}GB"

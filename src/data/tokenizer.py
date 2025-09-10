@@ -280,9 +280,13 @@ class TokenWeightDataset(Dataset[Tensor]):
                 cur_weight = self.separates2weight[separates]
             weights.append(cur_weight)
         return torch.tensor(weights, dtype=torch.float)
+    def __len__(self):
+        return len(self.token_dataset)
 
 class RemoveLastDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset[T_co]):
         self.dataset = dataset
     def __getitem__(self, idx: int):
         return self.dataset[idx][:-1]
+    def __len__(self):
+        return len(self.dataset)
