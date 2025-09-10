@@ -252,6 +252,7 @@ def align_embedding(module: nn.Module, state_dict, prefix, local_metadata,
 
 class Model(nn.Module):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
+    data_logger = logging.getLogger(f"dexs.{__module__}.{__qualname__}")
     __constants__ = ['norm']
     def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, 
             activation, norm: bool, vocs: list, padding_idx: int, pos_buffer_len: int=100):
@@ -298,7 +299,7 @@ class Model(nn.Module):
 
     def make_pos_buffer(self, length):
         if self.pos_buffer_len is not None:
-            self.logger.info(f"Length of positional buffers will be reset to {length}.")
+            self.data_logger.debug(f"New pos buffer was created: {length}.")
         position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
                 for pos in range(length)])
         device = self.embedding.weight.device

@@ -66,9 +66,12 @@ class DDPStringCollateLoader:
             self.loader = DataLoader(dataset, batch_size=None, sampler=sampler, num_workers=num_workers, 
                 pin_memory=pin_memory, persistent_workers=True, prefetch_factor=prefetch_factor)
             
-            if isinstance(model, Model): self.get_gpuuse = partial(model.get_gpuuse, bf16=bf16, kernel=kernel)
-            elif isinstance(model, MambaModel2): self.get_gpuuse = partial(model.get_gpuuse, bf16=bf16)
-            else: raise ValueError(f"Unsupported model: {type(model)}")
+            if isinstance(model, Model): 
+                self.get_gpuuse = partial(model.get_gpuuse, bf16=bf16, kernel=kernel)
+            elif isinstance(model, MambaModel2): 
+                self.get_gpuuse = partial(model.get_gpuuse, bf16=bf16)
+            else: 
+                raise ValueError(f"Unsupported model: {type(model)}")
 
             self.iter = self.loader.__iter__()
             self.next_item = None
@@ -77,7 +80,8 @@ class DDPStringCollateLoader:
             self.padding_value = padding_value
             self.padding_weight = padding_weight
             
-            self.i_item = 0
+            self.n_item = 0
+            self.n_large_item = 0
 
     def __next__(self) -> torch.Tensor:
         if self.rank == self.main_rank:
@@ -87,22 +91,15 @@ class DDPStringCollateLoader:
                 if self.next_item is None:
                     index, self.next_item = self.iter.__next__()
                     if self.step < 5:
-                        self.data_logger.info(f"item {self.i_item}: idx={index}")
+                        self.data_logger.info(f"item {self.n_item}: idx={index}")
                         self.data_logger.info(f"    {reveal_data(self.next_item)}")
-
-                        msg = "    "
-                        tokens = self.voc_encoder.decode(self.next_item[0].cpu().tolist())
-                        weights = self.next_item[1].cpu().tolist()+['none']
-                        for t, w in zip(tokens, weights):
-                            msg += f"{t}[{w}],"
-                        self.data_logger.debug(msg)
-                        self.i_item += 1
+                    self.n_item += 1
                 
                 # check maximum size
                 next_size = len(self.next_item[0])
-                self.data_logger.info(f"{next_size=}")
                 if self.get_gpuuse(batch_size=1, length=next_size) > self.gpu_size:
-                    self.logger.warning(f"Item was too large even for 1 item per batch({len(self.next_item)}), and not used.")
+                    self.n_large_item += 1
+                    self.logger.warning(f"Item was too large even for 1 item per batch({len(self.next_item[0])}), and not used ({self.n_large_item}/{self.n_item}).")
                     self.next_item = None
                     continue
 
@@ -132,7 +129,6 @@ class DDPStringCollateLoader:
             if self.step < 5:
                 self.logger.debug(f"Shape of step {self.step}: (batch_size, max_len)=")
             for dst_rank in range(self.size):
-                self.logger.debug(reveal_data(data_list)) # TODO: temp
                 max_len = len(data_list[i][0])
                 batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
                 if self.step < 5:
@@ -141,7 +137,7 @@ class DDPStringCollateLoader:
                 # 送ってからpad_sequenceとどちらが速い？
                 dst_batch = pad_sequence([data[0] for data in data_list[i:i+batch_size]],
                     batch_first=self.batch_first, padding_value=self.padding_value).to(self.device)
-                dst_weight_batch = pad_sequence([data[0] for data in data_list[i:i+batch_size]],
+                dst_weight_batch = pad_sequence([data[1] for data in data_list[i:i+batch_size]],
                     batch_first=self.batch_first, padding_value=self.padding_weight).to(self.device)
 
                 if dst_rank == self.rank:
@@ -156,7 +152,4 @@ class DDPStringCollateLoader:
             batch = dist_recv_tensor(self.main_rank, self.device)
             weight_batch = dist_recv_tensor(self.main_rank, self.device)
         self.step += 1
-        if self.step < 5:
-            self.logger.debug(f"    rank={dst_rank}: {batch.shape=}")
-            self.logger.debug(f"    rank={dst_rank}: {dst_batch.shape=}")
         return batch, weight_batch

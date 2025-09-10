@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 from .data.tokenizer import VocEncoder
-from .utils import git_commit, git_get_hash
+from .utils import git_commit, git_get_hash, reveal_data
 from .utils.logger import INFO_WORKER, add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .model import Model
@@ -23,89 +23,6 @@ MAIN_RANK = 0
 from torch import Tensor
 a = torch.tensor([0])
 a.item()
-
-class CELoss(nn.Module):
-    logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, voc_encoder: VocEncoder, seed: int):
-        super().__init__()
-        self.voc_encoder = voc_encoder
-        self.step = 0
-        self.seed = seed
-
-    def forward(self, input: Tensor, target: Tensor) -> Tensor:
-        """
-        input: Tensor[L-1, B, N]
-        target: Tensor[L-1, B]    
-        
-        """
-        # log tokens in initial few steps
-        if self.step < 5:
-            rstate = np.random.RandomState(self.seed+self.step)
-            idxs = np.arange(target.shape[1])
-            if len(idxs) > 10: 
-                idxs = np.sort(rstate.choice(target.shape[1], size=10, replace=False))
-            self.logger.log(INFO_WORKER, f"target of step {self.step}:")
-            for idx in idxs:
-                self.logger.log(INFO_WORKER, f"  [{idx:3}]={','.join(self.voc_encoder.decode(target[:,idx].cpu().tolist()))}")
-        self.step += 1
-
-        return F.cross_entropy(input.reshape(-1, self.voc_encoder.voc_size), target.ravel(), reduction='sum', ignore_index=self.voc_encoder.pad_token)
-
-class WeightedCELoss(nn.Module):
-    logger = getLogger(f"{__module__}.{__qualname__}")
-    token_logger = getLogger(f"{__module__}.{__qualname__}.tokens")
-    token_logger_is_set = False
-
-    def __init__(self, voc_encoder: VocEncoder, seed: int, 
-                pocket_atom_weight: float, pocket_coord_weight: float, 
-                lig_smiles_weight: float, lig_coord_weight: float):
-        super().__init__()
-        self.step = 0
-        self.voc_encoder = voc_encoder
-        self.seed = seed
-        self.pocket_atom_weight = pocket_atom_weight
-        self.pocket_coord_weight = pocket_coord_weight
-        self.lig_smiles_weight = lig_smiles_weight
-        self.lig_coord_weight = lig_coord_weight
-        
-        # logger
-        self.token_logger.propagate = False
-
-    @classmethod
-    def set_token_logger(cls, log_path: str):
-
-        cls.token_logger_is_set = True
-
-    def forward(self, input: Tensor, target: Tensor) -> Tensor:
-        """
-        input: Tensor[L-1, B, N]
-        target: Tensor[L-1, B]
-        
-        """
-        
-        # make weight
-        L, B = target.shape
-        weight = torch.full_like(target, fill_value=self.pocket_atom_weight, 
-                dtype=torch.float, device=target.device) # [L, B]
-        coord_count = torch.cumsum(target == self.voc_encoder.voc2i['[XYZ]'], dim=0)
-        lig_count = torch.cumsum(target == self.voc_encoder.voc2i['[LIGAND]'], dim=0)
-        end_count = torch.cumsum(target == self.voc_encoder.voc2i['[END]'], dim=0)
-        
-        weight[coord_count >= 1] = self.pocket_coord_weight
-        weight[lig_count >= 1] = self.lig_smiles_weight
-        weight[coord_count >= 2] = self.lig_coord_weight
-        weight[end_count >= 1] = 0
-        weight = torch.cat([
-            torch.full((1, B), fill_value=self.pocket_atom_weight, dtype=torch.float, 
-                    device=target.device), 
-            weight[:-1]
-        ], dim=0)
-        
-        # log tokens in initial few steps
-
-        self.step += 1
-        return torch.sum(F.cross_entropy(input.reshape(-1, self.voc_encoder.voc_size), target.ravel(), reduction='none')*weight.ravel())
-
 
 def sync_train_dir(result_dir):
     if dist.get_rank() == MAIN_RANK:
@@ -147,10 +64,13 @@ def get_train_logger(result_dir):
 
     # data logger
     data_logger = getLogger('dexs')
-    add_file_handler(data_logger, f"{result_dir}/logs/data_examples.log", logging.INFO, fmt=fmt, mode='a')
-    add_file_handler(data_logger, f"{result_dir}/logs/data_examples_debug.log", logging.DEBUG, fmt=fmt, mode='a')
-    data_logger.setLevel(logging.NOTSET)
+    add_file_handler(data_logger, f"{result_dir}/logs/data_examples.log", fmt=fmt, mode='a')
     data_logger.propagate = False
+
+    # unknown logger
+    unk_logger = getLogger('unk')
+    add_file_handler(unk_logger, f"{result_dir}/logs/unknowns.log", fmt=fmt, mode='a')
+    unk_logger.propagate = False
 
     # third-party modules
     set_rdkit_logger()
@@ -233,7 +153,7 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
 
     ## commit & log hash of git
     if is_main:
-        committed = git_commit()
+        committed = git_commit() if not args.test else False
         logger.debug('git committed.' if committed else 'git not committed.')
         logger.debug(f"git hash={git_get_hash()}")
 
@@ -290,14 +210,14 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
 
     logger.info("Training started.")
     for step in range(args.max_step):
+        is_starting = step < 5
         # reset gpu to watch gpu use
-        if step < 5:
+        if is_starting:
             torch.cuda.reset_peak_memory_stats(device)
 
         # get batch
         with rectime() as data_timer:
             batch, weight_batch = train_loader.__next__()
-            logger.info(f"{batch.shape=}")
             batch = batch.to(device)
             n_token = torch.sum(batch != voc_encoder.pad_token).item()
             n_accum_token += n_token
@@ -308,11 +228,12 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
         
         with rectime() as loss_timer:
             with torch.autocast('cuda', dtype=torch.bfloat16):
+                target = batch[1:]
                 pred = model(batch[:-1])
-                loss = (criterion(pred.ravel(), batch[1:].ravel())*weight_batch.ravel()).sum() * loss_scale
+                loss = (criterion(pred.reshape(target.numel(), -1), target.ravel())*weight_batch.ravel()).sum() * loss_scale
 
                 # Log output for final check
-                if step < 5:
+                if is_starting:
                     batch_size = batch.shape[1]
                     idxs = np.arange(batch_size)
                     if len(idxs) > 10: 
@@ -324,6 +245,7 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
                         tokens = voc_encoder.decode(batch[1:,idx].cpu().tolist())
                         for t, w in zip(tokens, weight_batch[:,idx]):
                             msg += f"{t}[{w}],"
+                        msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
                         data_logger.info(msg)
 
             loss.backward()
@@ -406,7 +328,8 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
                 break
         
         # Log gpuuse
-        logger.debug(f"GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
+        if is_starting:
+            logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
 
 
         if (step+1) % log_step == 0:

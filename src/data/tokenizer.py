@@ -62,7 +62,7 @@ class Tokenizer:
         raise NotImplementedError
 
 class ProteinAtomTokenizer(Tokenizer):
-    logger = getLogger(f"{__module__}.{__qualname__}")
+    unk_logger = getLogger(f"unk.{__module__}.{__qualname__}")
     def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN', 'BR', 'MG'], unk_voc='[UNK]', log_interval: int=1000000):
         self.atom_vocs = sorted(atom_vocs, key=len, reverse=True)
         self.unk_voc = unk_voc
@@ -100,12 +100,12 @@ class ProteinAtomTokenizer(Tokenizer):
             if is_main_worker():
                 unk_count = self.unk_count_agg.get()
                 n_tokenized = self.n_tokenized_agg.get()
-                if len(self.unk_count) == 0:
-                    self.logger.info(f"No unknown atoms in {n_tokenized} atoms.")
+                if len(unk_count) == 0:
+                    self.unk_logger.info(f"No unknown atoms in {n_tokenized} atoms.")
                 else:
-                    self.logger.info(f"Unknown atoms in {n_tokenized} atoms:")
+                    self.unk_logger.info(f"Unknown atoms in {n_tokenized} atoms:")
                     for atom, n in sorted(unk_count.items(), key=lambda x: x[1], reverse=True):
-                        self.logger.info(f"  {atom}: {n}")
+                        self.unk_logger.info(f"  {atom}: {n}")
         
         return tokens
 
@@ -157,7 +157,7 @@ class StringTokenizer2(Tokenizer):
         return self.tokenizer.vocs()
 
 class FloatTokenizer(Tokenizer):
-    logger = getLogger(f"{__module__}.{__qualname__}")
+    unk_logger = getLogger(f"unk.{__module__}.{__qualname__}")
 
     def __init__(self, vmin: float, vmax: float, decimal: int=3, log_interval: int=1000000):
         self.decimal = decimal
@@ -188,7 +188,7 @@ class FloatTokenizer(Tokenizer):
             n = self.n_agg.get()
             if n is not None:
                 n_tokenized, n_over, n_under = n
-                self.logger.info(f"{n_over}/{n_tokenized} are over vmax, {n_under}/{n_tokenized} are under vmin")
+                self.unk_logger.info(f"{n_over}/{n_tokenized} are over vmax, {n_under}/{n_tokenized} are under vmin")
         x = self.float_format.format(x)
         xi = x[:-4]
         xf = x[-4:]
