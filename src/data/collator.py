@@ -130,13 +130,14 @@ class DDPStringCollateLoader:
                 max_len = len(data_list[i][0])
                 batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
                 if self.step < 5:
-                    self.logger.info(f"    rank={dst_rank}: ({batch_size}, {max_len}), gpuuse={self.get_gpuuse(batch_size, max_len)/2**30:.03f}GB")
+                    self.logger.debug(f"    rank={dst_rank}: ({batch_size}, {max_len}), gpuuse={self.get_gpuuse(batch_size, max_len)/2**30:.03f}GB")
 
                 # 送ってからpad_sequenceとどちらが速い？
                 dst_batch = pad_sequence([data[0] for data in data_list[i:i+batch_size]],
                     batch_first=self.batch_first, padding_value=self.padding_value).to(self.device)
                 dst_weight_batch = pad_sequence([data[0] for data in data_list[i:i+batch_size]],
                     batch_first=self.batch_first, padding_value=self.padding_weight).to(self.device)
+
                 if dst_rank == self.rank:
                     batch = dst_batch
                     weight_batch = dst_weight_batch
@@ -149,4 +150,7 @@ class DDPStringCollateLoader:
             batch = dist_recv_tensor(self.main_rank, self.device)
             weight_batch = dist_recv_tensor(self.main_rank, self.device)
         self.step += 1
+        if self.step < 5:
+            self.logger.debug(f"    rank={dst_rank}: {batch.shape=}")
+            self.logger.debug(f"    rank={dst_rank}: {dst_batch.shape=}")
         return batch, weight_batch
