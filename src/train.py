@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 from .data.tokenizer import VocEncoder
+from .utils import git_get_hash
 from .utils.logger import INFO_WORKER, add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .model import Model
@@ -228,6 +229,11 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
         with open(f"{result_dir}/config.yaml", 'w') as f:
             yaml.dump(vars(args), f)
 
+    ## commit & log hash of git
+    if is_main:
+        logger.debug(git_get_hash(True))
+
+
     ## fix seed
     set_random_seed(args.seed)
     if args.test:
@@ -237,11 +243,11 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
 
     ## scaled dot product attention kernel
     set_sdp_kernel(args.sdp_kernel)
-    logger.info(f"{torch.backends.cuda.cudnn_sdp_enabled()=}")
-    logger.info(f"{torch.backends.cuda.flash_sdp_enabled()=}")
-    logger.info(f"{torch.backends.cuda.math_sdp_enabled()=}")
-    logger.info(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
-    logger.info(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
+    logger.debug(f"{torch.backends.cuda.cudnn_sdp_enabled()=}")
+    logger.debug(f"{torch.backends.cuda.flash_sdp_enabled()=}")
+    logger.debug(f"{torch.backends.cuda.math_sdp_enabled()=}")
+    logger.debug(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
+    logger.debug(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
     
     ## criterion
     criterion = nn.CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)

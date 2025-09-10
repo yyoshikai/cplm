@@ -1,14 +1,13 @@
-import sys, random, struct, psutil, traceback, warnings
+import sys, random, struct, psutil, traceback, warnings, subprocess
 from functools import partial
 from bisect import bisect_right
-from time import time
 import numpy as np
 import torch
 import torch.distributed as dist
 from .logger import get_logger
 from .time import set_logtime, logtime, logend, rectime # For compatibility
 
-# class RandomStateより
+# random
 def set_random_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
@@ -51,6 +50,7 @@ def ddp_set_random_seed(seed: int, device: torch.device):
     torch.cuda.manual_seed_all(seed)
     dist.broadcast(torch.tensor(0, device=device), src=0) # dist.barrierだとwarningが出るので, 代わりに
 
+# others
 def load_gninatypes(path, struct_fmt='fffi'):
     struct_len = struct.calcsize(struct_fmt)
     struct_unpack = struct.Struct(struct_fmt).unpack_from
@@ -93,7 +93,6 @@ class CompressedArray:
 def get_mem():
     mem = psutil.virtual_memory()
     return f"{mem.used/2**30:.03f}GB/{mem.total/2**30:.03f}GB"
-
 
 module_abbrevs = {'numpy': 'np', 'pandas': 'pd'}
 def reveal_data(data, max_iterable_size: int=20, max_str_size: int=160) -> str:
@@ -174,3 +173,12 @@ def traceback_warning():
         log.write(warnings.formatwarning(message, category, filename, lineno, line))
 
     warnings.showwarning = warn_with_traceback
+
+# Git
+def git_commit() -> bool:
+    subprocess.run('git add . && git commit -m checkpoint_for_training', shell=True, capture_output=True)
+
+
+def git_get_hash() -> str:
+    p = subprocess.run('git rev-parse --short HEAD', shell=True, capture_output=True)
+    return p.stdout.decode().strip()
