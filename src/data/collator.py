@@ -88,6 +88,7 @@ class DDPStringCollateLoader:
                     index, self.next_item = self.iter.__next__()
                     if self.step < 5:
                         self.data_logger.debug(f"item {self.i_item}: idx={index}")
+                        self.data_logger.info(f"    {reveal_data(self.next_item)}")
                         msg = "    "
                         tokens = self.voc_encoder.decode(self.next_item[0].cpu().tolist())
                         weights = self.next_item[1].cpu().tolist()+['none']
@@ -128,7 +129,7 @@ class DDPStringCollateLoader:
             if self.step < 5:
                 self.logger.debug(f"Shape of step {self.step}: (batch_size, max_len)=")
             for dst_rank in range(self.size):
-                self.logger.debug(reveal_data(data_list))
+                self.logger.debug(reveal_data(data_list)) # TODO: temp
                 max_len = len(data_list[i][0])
                 batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
                 if self.step < 5:
