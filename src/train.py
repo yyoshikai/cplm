@@ -234,7 +234,7 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
     if is_main:
         committed = git_commit()
         logger.debug('git committed.' if committed else 'git not committed.')
-        logger.debug(f"git hash={git_get_hash(True)}")
+        logger.debug(f"git hash={git_get_hash()}")
 
     ## fix seed
     set_random_seed(args.seed)
