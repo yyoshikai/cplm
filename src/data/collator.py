@@ -12,6 +12,7 @@ from .data import IndexDataset
 from .tokenizer import VocEncoder
 from .sampler import InfiniteRandomSampler
 from ..model import Model, MambaModel2
+from ..utils import reveal_data
 
 def solve_increasing_fn_left(func: Callable[[int], float], start_sup: int) -> int:
 
@@ -127,6 +128,7 @@ class DDPStringCollateLoader:
             if self.step < 5:
                 self.logger.debug(f"Shape of step {self.step}: (batch_size, max_len)=")
             for dst_rank in range(self.size):
+                self.logger.debug(reveal_data(data_list))
                 max_len = len(data_list[i][0])
                 batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
                 if self.step < 5:
