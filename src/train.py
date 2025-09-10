@@ -297,6 +297,7 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
         # get batch
         with rectime() as data_timer:
             batch, weight_batch = train_loader.__next__()
+            logger.info(f"{batch.shape=}")
             batch = batch.to(device)
             n_token = torch.sum(batch != voc_encoder.pad_token).item()
             n_accum_token += n_token
