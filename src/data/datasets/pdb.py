@@ -25,9 +25,3 @@ class PDBDataset(Dataset[Protein]):
     
     def __len__(self):
         return len(self.fnames)
-
-class PDBNoTDTestDataset(Subset[Protein]):
-    def __init__(self, pdb_dir: str=DEFAULT_PDB_DIR):
-        dataset = PDBDataset(pdb_dir)
-        idxs = np.load(f"{pdb_dir}/remove_targetdiff_test.npy")
-        super().__init__(dataset, idxs)

@@ -1,10 +1,13 @@
 import numpy as np
 from torch.utils.data import Dataset
-from .data import WrapDataset
+from .data import WrapTupleDataset
 
-class CoordTransformDataset(WrapDataset[np.ndarray]):
+class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
     def __init__(self, base_coord_data: Dataset[np.ndarray], *coord_datas: tuple[Dataset[np.ndarray]], rstate: np.random.RandomState|int = 0, normalize_coord=False, random_rotate=False, coord_noise_std=0.0):
-        super().__init__(base_coord_data)
+        tuple_size = 1+len(coord_datas) \
+            + (1 if self.normalize_coord else 0) \
+            + (1 if self.random_rotate else 0)
+        super().__init__(base_coord_data, tuple_size)
         self.coord_datas = (base_coord_data,)+(coord_datas)
         self.rng = rstate
         if isinstance(self.rng, int):
@@ -13,7 +16,7 @@ class CoordTransformDataset(WrapDataset[np.ndarray]):
         self.random_rotate = random_rotate
         self.coord_noise_std = coord_noise_std
     
-    def __getitem__(self, idx: int) -> tuple[np.ndarray]:
+    def __getitem__(self, idx: int) -> tuple[np.ndarray,...]:
         coords = [coord_data[idx] for coord_data in self.coord_datas]
 
         # normalize

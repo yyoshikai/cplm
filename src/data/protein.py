@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import numpy as np
 from torch.utils.data import Dataset
-from .data import WrapDataset
+from .data import WrapTupleDataset
 from .tokenizer import TokenizeDataset, ArrayTokenizeDataset
 from ..utils import slice_str
 
@@ -16,11 +16,11 @@ class Protein:
         assert self.coord.ndim == 2 and self.coord.shape[1] == 3
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
-class ProteinProcessDataset(WrapDataset[tuple[list[str], np.ndarray]]):
+class ProteinProcessDataset(WrapTupleDataset[tuple[list[str], np.ndarray]]):
     def __init__(self, protein_data: Dataset[Protein],
             heavy_atom: bool=True, h_atom: bool=False,
             heavy_coord: bool=False, h_coord: bool=False):
-        super().__init__(protein_data)
+        super().__init__(protein_data, 3)
         self.protein_data = protein_data
         self.heavy_atom = heavy_atom
         self.h_atom = h_atom

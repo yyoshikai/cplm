@@ -3,11 +3,11 @@ from typing import Optional
 import numpy as np, pandas as pd
 from torch.utils.data import Dataset, get_worker_info
 from rdkit import Chem
-from .data import WrapDataset, is_main_worker
+from .data import WrapTupleDataset, is_main_worker
 
-class MolProcessDataset(WrapDataset[tuple[str, np.ndarray]]):
+class MolProcessDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
-        super().__init__(mol_data)
+        super().__init__(mol_data, 2)
         self.mol_data = mol_data
         self.h_atom = h_atom
         self.h_coord = h_coord

@@ -1,5 +1,5 @@
 import sys, os
-from typing import Optional
+from typing import Optional, Literal
 from logging import getLogger
 import numpy as np, pandas as pd
 from torch.utils.data import Dataset, Subset, get_worker_info
@@ -14,8 +14,8 @@ DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
 class UniMolLigandDataset(Dataset[Chem.Mol]):
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, sample_save_dir: Optional[str]=None, unimol_dir=DEFAULT_UNIMOL_DIR):
-        self.dataset = PickleLMDBDataset(f"{unimol_dir}/ligands/train.lmdb", idx_to_key='str')
+    def __init__(self, split: Literal['train', 'valid'], sample_save_dir: Optional[str]=None, unimol_dir=DEFAULT_UNIMOL_DIR):
+        self.dataset = PickleLMDBDataset(f"{unimol_dir}/ligands/{split}.lmdb", idx_to_key='str')
         self.n_conformer = 10
         self.getitem_count = 0
         self.sample_save_dir = sample_save_dir
@@ -66,14 +66,14 @@ class UniMolLigandDataset(Dataset[Chem.Mol]):
 
 # (TODO: not tested)
 class UniMolLigandNoMolNetDataset(Subset[Chem.Mol]):
-    def __init__(self, sample_save_dir: Optional[str]=None, unimol_dir=DEFAULT_UNIMOL_DIR):
-        dataset = UniMolLigandDataset(sample_save_dir, unimol_dir)
-        indices = np.load(f"{unimol_dir}/ligands_mask/remove_molnet_test/large/train_idxs.npy")
+    def __init__(self, split: Literal['train', 'valid'], sample_save_dir: Optional[str]=None, unimol_dir=DEFAULT_UNIMOL_DIR):
+        dataset = UniMolLigandDataset(split, sample_save_dir, unimol_dir)
+        indices = np.load(f"{unimol_dir}/ligands_mask/remove_molnet_test/large/{split}_idxs.npy")
         super().__init__(dataset, indices)
 
 class UniMolPocketDataset(Dataset[Protein]):
-    def __init__(self, unimol_dir=DEFAULT_UNIMOL_DIR):
-        self.dataset = PickleLMDBDataset(f"{unimol_dir}/pockets/train.lmdb", idx_to_key='str')
+    def __init__(self, split: Literal['train', 'valid'], unimol_dir=DEFAULT_UNIMOL_DIR):
+        self.dataset = PickleLMDBDataset(f"{unimol_dir}/pockets/{split}.lmdb", idx_to_key='str')
     
     def __getitem__(self, idx) -> Protein:
         data = self.dataset[idx]
@@ -87,8 +87,8 @@ class UniMolPocketDataset(Dataset[Protein]):
 # /workspace/cheminfodata/unimol/pocket_mask/remove_targetdif_test.py でこのマスクを作成
 # (not tested)
 class UniMolPocketNoTDTestDataset(Subset[Protein]):
-    def __init__(self, unimol_dir=DEFAULT_UNIMOL_DIR):
-        whole_data = UniMolPocketDataset(unimol_dir)
-        idxs = np.load("/workspace/cheminfodata/unimol/pocket_mask/remove_targetdiff_test/train_idxs.npy")
+    def __init__(self, split: Literal['train', 'valid'], unimol_dir=DEFAULT_UNIMOL_DIR):
+        whole_data = UniMolPocketDataset(split, unimol_dir)
+        idxs = np.load(f"/workspace/cheminfodata/unimol/pocket_mask/remove_targetdiff_test/{split}_idxs.npy")
         super().__init__(whole_data, idxs)
 

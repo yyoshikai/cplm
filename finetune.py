@@ -107,10 +107,6 @@ logger.info(f"num_workers={args.num_workers}")
 if auto_pretrain_step:
     logger.info(f"pretrain_step was set to {args.pretrain_step}")
 
-### logging on other libraries
-transformers.utils.logging.enable_propagation()
-transformers.utils.logging.disable_default_handler()
-
 # data
 ## pocket and ligands
 if args.protein:
@@ -165,7 +161,7 @@ train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_mem
 if targs.get('mamba', False):
     model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
 else:
-    model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+    model = Model(12, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)

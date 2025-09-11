@@ -13,13 +13,28 @@ from torch.utils.data import Dataset, get_worker_info
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
 
+class TupleDataset(Dataset[T_co]):
+    def __init__(self, tuple_size: int):
+        self.tuple_size = tuple_size
+    def untuple(self):
+        return untuple(self, self.tuple_size)
+
 class WrapDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset[T]):
         self.dataset = dataset
-    def __getitem__(self, idx: int) -> T_co:
-        raise NotImplementedError
     def __len__(self):
         return len(self.dataset)
+
+class WrapTupleDataset(Dataset[T_co]):
+    def __init__(self, dataset: Dataset[T], tuple_size: int):
+        self.tuple_size = tuple_size
+        self.dataset = dataset
+    def __len__(self):
+        return len(self.dataset)
+    def untuple(self):
+        return untuple(self, self.tuple_size)
+        
+        
 
 class ApplyDataset(WrapDataset[T_co]):
     def __init__(self, dataset: Dataset[T], func: Callable[[T], T_co]):

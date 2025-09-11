@@ -328,8 +328,8 @@ if pargs.mamba:
     net_model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
     init_model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
 else:
-    net_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
-    init_model = Model(8, 768, 12, 4, 0.1, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+    net_model = Model(12, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+    init_model = Model(12, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 net_model.to(torch.bfloat16)
 init_model.to(torch.bfloat16)
 net_model.to(device)

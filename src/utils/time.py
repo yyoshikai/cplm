@@ -1,9 +1,11 @@
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import TypeVar
+from typing import TypeVar, Optional
 from logging import getLogger
 from time import time
+
+import pandas as pd
 from tqdm import tqdm
 T_co = TypeVar('T_co', covariant=True)
 
@@ -108,7 +110,7 @@ class wtqdm(tqdm):
             yield from self.iterable
             return
 
-        self.start('first_iter_data')
+        self.start('iter_data')
         for item in super().__iter__():
             self.start('after_iter')
             yield item
@@ -123,6 +125,82 @@ class wtqdm(tqdm):
     def update(self, n=1):
         self.set_postfix_str(', '.join([f"{key}={value:.03f}" for key, value in sorted(self.name2time.items(), key=lambda x: x[1], reverse=True)]), refresh=False)
         super().update(n)
+
+class TimerTqdm(tqdm):
+    logger = getLogger(f'{__module__}.{__qualname__}')
+
+    def __init__(self, iterable: Optional[Iterable]=None,
+            time_path: Optional[str]=None, log_interval: Optional[int]=None, *args, **kwargs):
+        super().__init__(iterable, *args, **kwargs)
+        self.name2time = defaultdict(float)
+
+        # For file output
+        self.time_path = time_path
+        if self.time_path is not None:
+            self.initialized = False
+
+        # For logging
+        self.log_interval = log_interval
+
+        self.cur_job = 'after_init'
+        self.start_ = time()
+
+    def __iter__(self):
+        self.start('iter_data')
+        for item in super().__iter__():
+            self.start('after_iter')
+            yield item
+            self.start('iter_data')
+        
+
+    def start(self, name):
+        t = time()
+        self.name2time[self.cur_job] += t - self.start_
+        self.cur_job = name
+        self.start_ = t
+
+    def print_items(self) -> list[tuple[str, float]]:
+        return sorted(self.name2time.items(), key=lambda x: x[1], reverse=True)
+
+    def update(self, n=1):
+
+        # set postfix
+        if not self.disable:
+            self.set_postfix_str(', '.join([f"{key}={value:.03f}" for key, value in self.print_items()]), refresh=False)
+
+        super().update(n)
+
+        # Add cur_time
+        if self.time_path is not None:
+            if not self.initialized: ## Initial process
+                df = pd.DataFrame({self.n: self.name2time}).T
+                df.to_csv(self.time_path, index_label='n')
+                self.df_cols = list(df.columns)
+                self.initialized = True
+            else:
+                ## create new column
+                if not set(self.name2time.keys()) < set(self.df_cols): 
+                    df = pd.read_csv(self.time_path, index_col=0)
+                    self.df_cols = list(self.name2time.keys())
+                    df = pd.DataFrame({col: df.get(col, None) for col in self.df_cols})
+                    df.to_csv(self.time_path, index_label='n')
+                
+                ## Add current row
+                times = [self.name2time[key]-self.name2prev_time.get(key, 0) for key in self.df_cols]
+                items = [self.n]+['' if t == 0 else t for t in times]
+                with open(self.time_path, 'a') as f:
+                    f.write(','.join(map(str, items))+'\n')
+            self.name2prev_time = self.name2time.copy()
+
+        # log
+        if self.log_interval is not None and \
+                ((self.n-n) // self.log_interval) != (self.n // self.log_interval):
+            self.logger.debug(f"{self.desc} after {self.n} step (s):")
+            name_times = self.print_items()
+            max_name_len = max([len(name) for name, _ in name_times])
+            for name, time in name_times:
+                self.logger.debug(f"    {name.ljust(max_name_len)}:{time:5.2f}")
+
 
 
 LOGTIME = False
