@@ -29,11 +29,6 @@ from src.utils import set_random_seed, TimerTqdm
 from torch.optim import Optimizer
 MAIN_RANK = 0
 
-## criterion, optimizer
-from torch import Tensor
-a = torch.tensor([0])
-a.item()
-
 def sync_train_dir(result_dir):
     if dist.get_rank() == MAIN_RANK:
         cleardir(result_dir)
@@ -418,13 +413,15 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             scheduler.step()
 
             # evaluate
-            step_pbar.start('evaluation')
             if opt_step % args.eval_opt == 0:
+                step_pbar.start('evaluation')
+                
                 # validation
+                logger.info(f"Validation at {opt_step=}...")
                 total_weights = []
                 total_losses = []
                 for valid_data in valid_datas:
-                    
+                    logger.info(f"    Validating ")
                     ## Make Loader
                     if is_main:
                         valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_data, batch_size=None, shuffle=False, 
