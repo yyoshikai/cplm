@@ -2,15 +2,11 @@
 # 250901 argumentを変更
 import sys, os
 import argparse
-from functools import partial
-from logging import Logger
 
 import numpy as np
 import torch
 import torch.distributed as dist
 from torch.utils.data import ConcatDataset, StackDataset
-from torch.nn.parallel import DistributedDataParallel
-import transformers.utils.logging
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
@@ -19,8 +15,8 @@ from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
     SentenceDataset, VocEncoder, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from src.data.coord import CoordTransformDataset
-from src.data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, UniMolPocketNoTDTestDataset
-from src.data.datasets.pdb import PDBDataset
+from src.data.datasets.unimol import UniMolLigandNoMolNetDataset, UniMolPocketDataset
+from src.data.datasets.pdb import PDBUniMolDataset
 from src.data.molecule import MolProcessDataset
 from src.data.protein import ProteinProcessDataset, CoordFollowDataset
 from src.data import CacheDataset
@@ -41,22 +37,20 @@ parser.add_argument("--test", action='store_true')
 add_train_args(parser)
 
 # bool系は何も指定しない場合BindGPTの設定になるようにしている
+# pocket-heavy-coordはデフォルトで入れるようにした。
 ## dataset
-parser.add_argument("--UniMolLigand", type=int, default=0)
-parser.add_argument('--UniMolLigandNoMolNet', type=int, default=0)
-parser.add_argument('--UniMolPocket', type=int, default=0)
-parser.add_argument('--UniMolPocketNoTDTest', type=int, default=0)
-parser.add_argument('--PDB', type=int, default=0)
-parser.add_argument('--PDBNoTDTest', type=int, default=0)
+for cls in [UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolDataset]:
+    aname = cls.__name__.removesuffix('Dataset')
+    parser.add_argument(f'--{aname}', type=int, default=0)
 
 ## process
 parser.add_argument("--lig-randomize", action='store_true')
-parser.add_argument("--no-lig-coord-h", action='store_true')
-parser.add_argument("--no-lig-atom-h", action='store_true')
-parser.add_argument("--no-pocket-atom-heavy", action='store_true')
-parser.add_argument("--pocket-coord-heavy", action='store_true')
-parser.add_argument("--pocket-atom-h", action='store_true')
-parser.add_argument("--pocket-coord-h", action='store_true')
+parser.add_argument("--no-lig-h-atom", action='store_true')
+parser.add_argument("--no-lig-h-coord", action='store_true')
+parser.add_argument("--no-pocket-heavy-atom", action='store_true')
+parser.add_argument("--no-pocket-heavy-coord", action='store_true')
+parser.add_argument("--pocket-h-atom", action='store_true') # Datasetによっては無効？
+parser.add_argument("--pocket-h-coord", action='store_true') # Datasetによっては無効？
 parser.add_argument("--coord-range", type=int, default=200)
 parser.add_argument("--coord-follow-atom", action='store_true')
 
@@ -105,7 +99,7 @@ if is_main:
         weight_datas = []
         datas_to_log = []
         ## Molecule
-        for cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset]:
+        for cls in [UniMolLigandNoMolNetDataset]:
             repeat = getattr(args, cls.__name__.removesuffix('Dataset'))
             if repeat == 0: continue
             
@@ -120,7 +114,7 @@ if is_main:
             
             ### process
             smi, coord = MolProcessDataset(mol, np.random.default_rng(args.seed+seed_a), 
-                h_atom=not args.no_lig_atom_h, h_coord=not args.no_lig_coord_h, randomize=args.lig_randomize, sample_save_dir=sample_save_dir).untuple()
+                h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize, sample_save_dir=sample_save_dir).untuple()
             coord = CoordTransformDataset(coord, rstate=args.seed+seed_a, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
 
             ### tokenize
@@ -141,7 +135,7 @@ if is_main:
 
         ## Protein
         protein_data = []
-        for cls in [UniMolPocketDataset, UniMolPocketNoTDTestDataset, PDBDataset]:
+        for cls in [UniMolPocketDataset, PDBUniMolDataset]:
             repeat = getattr(args, cls.__name__.removesuffix('Dataset'))
             if repeat == 0: continue
 
@@ -155,7 +149,7 @@ if is_main:
             datas_to_log.append(pocket)
 
             ### process
-            atoms, coord, coord_position = ProteinProcessDataset(pocket, heavy_atom=not args.no_pocket_atom_heavy, heavy_coord=args.pocket_coord_heavy, h_atom=args.pocket_atom_h, h_coord=args.pocket_coord_h).untuple()
+            atoms, coord, coord_position = ProteinProcessDataset(pocket, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
             coords = CoordTransformDataset(coord, rstate=np.random.default_rng(args.seed+seed_a), normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
 
             ### tokenize
@@ -205,10 +199,7 @@ if args.mamba:
     model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
 else:
     model = Model(12, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
-model.to(torch.bfloat16)
-model.to(device)
-model = DistributedDataParallel(model)
 
-train(args, train_data, valid_datas, train2valid_r, voc_encoder, model, result_dir, device, log_step, args.seed)
+train(args, train_data, valid_datas, train2valid_r, voc_encoder, model, result_dir, device, log_step)
 
 dist.destroy_process_group()

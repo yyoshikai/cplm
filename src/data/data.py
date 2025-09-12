@@ -2,13 +2,15 @@ import queue
 import multiprocessing as mp
 from functools import lru_cache
 from typing import TypeVar, Generic, Optional
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from logging import getLogger
 
 import numpy as np
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset, get_worker_info
+
+from ..utils.utils import reveal_data
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -57,20 +59,6 @@ class RepeatDataset(Dataset):
 
     def __len__(self):
         return self.net_size * self.n_repeat
-    
-class SliceDataset(Dataset):
-    def __init__(self, net_dataset, step, start):
-        self.net_dataset = net_dataset
-        net_size = len(self.net_dataset)
-        self.size = net_size // step + (1 if (net_size % step) > start else 0)
-        self.step = step
-        self.start = start
-    
-    def __getitem__(self, idx):
-        return self.net_dataset[idx*self.step+self.start]
-
-    def __len__(self):
-        return self.size
 
 class SampleDataset(Dataset[T_co]):
     epoch: int = 0
@@ -210,3 +198,19 @@ class WorkerAggregator(Generic[T_co]):
                     break
             return self.value
         return None
+
+
+class RevealIterator(Iterable[T]):
+    logger = getLogger(f'dexs.{__module__}.{__qualname__}')
+    def __init__(self, iterable: Iterable[T], name):
+        self.iterable = iterable
+        self.name = name
+        self.enabled = True
+
+    def __iter__(self):
+        for i, item in enumerate(self.iterable):
+            if self.enabled: 
+                self.logger.debug(f"Iterator[{self.name}] {i}: {reveal_data(item)}")
+            yield item
+
+

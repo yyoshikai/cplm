@@ -69,8 +69,9 @@ class StringCollateIterator(Iterable[list[T_in]]):
     def batch_data_list(self, data_list: list[T_in]) -> tuple[list[list[T_in]], bool]:
         datas = []
         for _ in range(self.n_batch):
-            batch_size = self.get_batch_size(self.get_length(data_list[0]))
+            batch_size = self.get_batch_size(self.length_getter(data_list[0]))
             datas.append(data_list[:batch_size])
+            data_list = data_list[batch_size:]
             if len(data_list) == 0: break
         return datas, len(data_list) == 0
 
@@ -96,15 +97,15 @@ class StringCollateIterator(Iterable[list[T_in]]):
                 n_item += 1
             
             # check maximum size
-            next_length = self.get_length(next_item)
-            if self.get_gpuuse(1, next_length) > self.gpu_size:
+            next_length = self.length_getter(next_item)
+            if self.gpuuse_getter(1, next_length) > self.gpu_size:
                 n_large_item += 1
                 self.logger.warning(f"Item was too large even for 1 item per batch({next_length}), and not used ({n_large_item}/{n_item}).")
                 next_item = None
                 continue
 
             # insert size
-            i = bisect_right(data_list, -next_length, key=self.get_length)
+            i = bisect_right(data_list, -next_length, key=lambda x: -self.length_getter(x))
             next_data_list = data_list[:i]+[next_item]+data_list[i:] # most slow
 
             # check more data can be added
@@ -117,13 +118,9 @@ class StringCollateIterator(Iterable[list[T_in]]):
                 data_list = []
 
     def get_batch_size(self, length: int):
-        return solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, length)-self.gpu_size, 16)
+        return solve_increasing_fn_left(lambda bsz: self.gpuuse_getter(bsz, length)-self.gpu_size, 16)
 
-    def get_gpuuse(self, batch_size: int, length: int):
-        raise NotImplementedError
 
-    def get_length(self, item: T_in):
-        raise NotImplementedError
 
 class DDPStringCollateLoader(Iterable[T_out]):
     logger = getLogger(f"{__module__}.{__qualname__}")
@@ -145,18 +142,21 @@ class DDPStringCollateLoader(Iterable[T_out]):
             assert len(batches) <= self.size
 
             # Send batch info
-            batch_infos = [torch.tensor(0 if rank < len(batches) else 1) for rank in range(self.size)]
+            batch_infos = [torch.tensor(0 if rank < len(batches) else 1, device=self.device) 
+                    for rank in range(self.size)]
             dist.scatter(torch.tensor(0, device=self.device), batch_infos, src=self.main_rank)
 
             # Send batch
             this_data = None
             for dst_rank, dst_data in enumerate(batches):
                 data = self.collator(dst_data)
+                token, weight = data
+                token = token.to(self.device)
+                weight = weight.to(self.device)
+                ## ここはspecialized
                 if dst_rank == self.rank:
-                    this_data = data
+                    this_data = token, weight
                 else:
-                    ## collate ここはspecialized
-                    token, weight = data
                     dist_send_tensor(token, dst_rank)
                     dist_send_tensor(weight, dst_rank)
             return this_data
@@ -190,15 +190,3 @@ class DDPStringCollateLoader(Iterable[T_out]):
         if self.rank == self.main_rank:
             stop_iteration = torch.tensor(True, device=self.device)
             dist.scatter(stop_iteration, [stop_iteration for rank in range(self.size)], src=self.main_rank)
-
-class RevealIterator(Iterable[T]):
-    logger = getLogger(f'dexs.{__module__}.{__qualname__}')
-    def __init__(self, iterable: Iterable[T], name):
-        self.iterable = iterable
-        self.name = name
-
-    def __iter__(self):
-        for i, item in enumerate(self.iterable):
-            if self.enabled: 
-                self.logger.debug(f"Iterator[{self.name}] {i}: {reveal_data(item)}")
-            yield item

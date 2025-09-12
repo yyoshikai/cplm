@@ -1,6 +1,8 @@
-import sys, os, math, yaml, psutil, logging
+import os, math, yaml, psutil, logging
+import itertools as itr
 from argparse import ArgumentParser, Namespace
 from logging import Logger, getLogger
+from typing import Literal
 import numpy as np
 import pandas as pd
 import transformers
@@ -11,8 +13,9 @@ from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import LambdaLR
+from torch.nn.parallel import DistributedDataParallel
 
-from .data import RepeatDataset
+from .data import RepeatDataset, RevealIterator
 from .data.tokenizer import VocEncoder
 from .data.sampler import InfiniteRandomSampler
 from .data.collator import DDPStringCollateLoader
@@ -90,8 +93,8 @@ def get_train_logger(result_dir):
 
 def add_train_args(parser: ArgumentParser):
     # training
-    parser.add_argument("--token-per-opt", type=int, default=int(1.6e6))
-    parser.add_argument("--max-opt", type=int, default=float('inf'))
+    parser.add_argument("--weight-per-opt", type=int, default=int(1.6e6))
+    parser.add_argument("--max-opt", type=int, required=True) # TODO: decide default value
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--clip-grad-value", type=float, default=None)
     parser.add_argument("--clip-grad-norm", type=float, default=1.0)
@@ -155,26 +158,26 @@ def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int,
             raise ValueError
     return LambdaLR(optimizer, schedule)
 
+def just_data(datas: list, side: Literal['l', 'r']) -> list[str]:
+    strings = [str(d) for d in datas]
+    max_len = max(len(s) for s in strings)
+    return [s.ljust(max_len) if side == 'l' else s.rjust(max_len) for s in strings]
+
 def log_dataset(logger: Logger, split: str, datasets: list[Dataset]):
     # info
     n_data = len(datasets)
-    data = np.array([[
-        type(d).__name__, 
-        len(d),
-        d.n_repeat if isinstance(d, RepeatDataset) else 1, # n_repeat
-        0
-    ] for d in datasets])
+    data_names = [type(d).__name__ for d in datasets]
+    lens = [len(d) for d in datasets]
+    repeats = [d.n_repeat if isinstance(d, RepeatDataset) else 1 for d in datasets]
+    net_lens = [len_ // repeat for len_, repeat in zip(lens, repeats)]
 
-    data[:,3] = data[:,1] // data[:,2] # net_size
-    data = data.astype(str)
-    data_len = np.vectorize(len, data.ravel()).reshape(n_data, 4)
-    lens = data_len.max(axis=0)
+    # just data
+    data_names, lens, repeats, net_lens = map(just_data, [data_names, lens, repeats, net_lens], 'lrrr')
 
     # log
     logger.info(f"{split} data:")
     for i in range(n_data):
-        logger.info(f"    {data[i,0].ljust(lens[0])}: {data[i,3].rjust(lens[3])}*"
-                f"{data[i,2].rjust(lens[2])}={data[i,1].rjust(lens[1])}")    
+        logger.info(f"    {data_names[i]}: {net_lens[i]}*{repeats[i]}={lens[i]}")
 
 class CrossEntropyLoss(nn.CrossEntropyLoss):
     def forward(self, input: Tensor, target: Tensor):
@@ -183,7 +186,28 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
-def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], valid2train_r: np.ndarray, voc_encoder: VocEncoder, model: Model, result_dir: str, device: torch.device, log_step, seed: int):
+def log_target_weight(logger: Logger, target: Tensor, weight: Tensor, voc_encoder: VocEncoder, seed: int):
+
+    batch_size = weight.shape[1]
+    if batch_size > 10: 
+        rstate = np.random.RandomState(seed)
+        idxs = np.sort(rstate.choice(batch_size, size=10, replace=False))
+    else:
+        idxs = np.arange(batch_size)
+    for idx in idxs:
+        msg = f"    [{idx:3}]="
+        tokens = voc_encoder.decode(target[:,idx].cpu().tolist())
+        for t, w in zip(tokens, weight[:,idx]):
+            msg += f"{t}[{w}],"
+        msg += f" remaining weights= {reveal_data(weight[len(tokens):,idx])}"
+        logger.info(msg)
+
+def reduce_float(value: float, device: torch.device) -> float:
+    tensor = torch.tensor(value, dtype=torch.float, device=device)
+    dist.all_reduce(tensor)
+    return tensor.item()
+
+def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], valid2train_r: np.ndarray, voc_encoder: VocEncoder, model: Model, result_dir: str, device: torch.device, log_step):
     
     # Environment
     ## logging
@@ -220,11 +244,17 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     logger.debug(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
     logger.debug(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
     
+    # Model
+    model.to(torch.bfloat16)
+    model.to(device)
+    model = DistributedDataParallel(model)
+
     # DataLoader
     if is_main:
         sampler = InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
         train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=True, prefetch_factor=args.prefetch_factor)
-
+        train_loader = RevealIterator(train_loader, 'train_loader')
+        reveal_loader = train_loader
     else:
         train_loader = None
     
@@ -238,9 +268,9 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     
     def get_gpuuse(batch_size: int, length: int):
         if isinstance(model.module, Model):
-            return model.get_gpuuse(batch_size, length, True)
+            return model.module.get_gpuuse(batch_size, length, True, args.sdp_kernel)
         else:
-            return model.get_gpuuse(batch_size, length, True, args.sdp_kernel)
+            return model.module.get_gpuuse(batch_size, length, True)
     def get_length(item: tuple[Tensor, Tensor]):
         return len(item[0])
     
@@ -258,34 +288,38 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     match args.loss_scale:
         case None:
             loss_scale = 1
-        case 'token_per_batch':
-            loss_scale = 1/args.token_per_opt
         case _:
             loss_scale = float(args.loss_scale)
     ## scheduler
     scheduler = get_scheduler(optimizer, args.scheduler, 55000)
 
-    accum_loss = 0
+    # Initial state
     opt_step = 0
-    n_accum_token = 0
-    accum_losses = []
-    accum_n_tokens = []
+    worker_opt_accum_loss = 0.0
+    worker_opt_accum_weight = 0.0
+    nan_grad_step_saved = False
+
+    ## opt info
+    opt_losses = []
+    opt_weights = []
     lrs = []
     mems = []
 
+    # step info
     batch_sizes = []
     max_lens = []
-    nan_grad_step_saved = False
+    worker_step_losses = []
+    worker_step_weights = []
 
     # Evaluate & early stopping
     valid2train_r = torch.tensor(valid2train_r, device=device)
-    valid_opts = []
+    valid_opt_steps = []
     valid_mean_losses = []
     early_stop = False
 
     # save at step 0
     if is_main:
-        torch.save(model.state_dict(), f"{result_dir}/models/{opt_step}.pth")
+        torch.save(model.module.state_dict(), f"{result_dir}/models/{opt_step}.pth")
         cleardir(f"{result_dir}/optimizers")
         torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
 
@@ -296,7 +330,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
 
     logger.info("Training started.")
-    for step in (step_pbar:=TimerTqdm(range(args.max_step), 
+    for step in (step_pbar:=TimerTqdm(itr.count(), 
             time_path=f"{result_dir}/time/steps.csv" if is_main else None,
             log_interval=1, desc='batch')):
         is_starting = step < 5
@@ -306,40 +340,33 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
         # get batch
         step_pbar.start('get_batch')
-        batch, weight_batch = train_iter.__next__()
-        n_token = torch.sum(batch != voc_encoder.pad_token).item()
-        n_accum_token += n_token
+        token_batch, weight_batch = train_iter.__next__()
 
-        batch_sizes.append(batch.shape[1])
-        max_lens.append(batch.shape[0])
+        batch_sizes.append(token_batch.shape[1])
+        max_lens.append(token_batch.shape[0])
         
         step_pbar.start('forward')
         with torch.autocast('cuda', torch.bfloat16):
-            target = batch[1:]
-            pred = model(batch[:-1])
+            target = token_batch[1:]
+            pred = model(token_batch[:-1])
             loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
 
-            ## Log target for final check
-            if is_starting:
-                batch_size = batch.shape[1]
-                idxs = np.arange(batch_size)
-                if len(idxs) > 10: 
-                    rstate = np.random.RandomState(seed+step)
-                    idxs = np.sort(rstate.choice(batch_size, size=10, replace=False))
-                data_logger.info(f"target of step {step}:")
-                for idx in idxs:
-                    msg = f"  [{idx:3}]="
-                    tokens = voc_encoder.decode(target[1:,idx].cpu().tolist())
-                    for t, w in zip(tokens, weight_batch[:,idx]):
-                        msg += f"{t}[{w}],"
-                    msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
-                    data_logger.info(msg)
+        ## Log target for final check
+        if is_starting:
+            data_logger.debug(f"Train step {step} data:")
+            log_target_weight(data_logger, target, weight_batch, voc_encoder, args.seed+step)
 
         step_pbar.start('backward')
         loss.backward()
-        l = loss.item()
-        accum_loss += l
-        
+
+        ## add step record
+        worker_step_loss = loss.item()
+        worker_step_weight = weight_batch.sum().item()
+        worker_step_losses.append(worker_step_loss)
+        worker_step_weights.append(worker_step_weight)
+        worker_opt_accum_loss += worker_step_loss
+        worker_opt_accum_weight += worker_step_weight
+
         # check nan
         if args.reset_nan_grad:
             grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
@@ -361,16 +388,12 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                     nan_grad_step_saved = True
                 
                 ## reset grad
-                n_accum_token = 0
-                accum_loss = 0
+                worker_opt_accum_loss = 0
                 optimizer.zero_grad()
         
-        # sum accum_token
-        reduced_accum_token = torch.tensor(n_accum_token, dtype=torch.int, device=device)
-        dist.all_reduce(reduced_accum_token)
-        
         # optimizer step
-        if reduced_accum_token >= args.token_per_opt:
+        opt_accum_weight = reduce_float(worker_opt_accum_weight, device)
+        if opt_accum_weight >= args.weight_per_opt:
 
             ## optimizer
             step_pbar.start('optim')
@@ -381,9 +404,12 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             optimizer.zero_grad()
             opt_step += 1
 
+            ## sum opt_accum_loss
+            opt_accum_loss = reduce_float(worker_opt_accum_loss, device)
+
             ## save step data
-            accum_losses.append(accum_loss)
-            accum_n_tokens.append(n_accum_token)
+            opt_losses.append(opt_accum_loss)
+            opt_weights.append(opt_accum_weight)
             lrs.append(scheduler.get_last_lr()[0])
             mems.append(psutil.virtual_memory().used/(2**30))
 
@@ -412,11 +438,11 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                     with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
                         for batch in valid_loader:
                             if batch is None: continue
-                            token, weight = batch
-                            input, target = token[:-1], token[1:]
+                            token_batch, weight_batch = batch
+                            input, target = token_batch[:-1], token_batch[1:]
                             loss = criterion(model(input), target)
-                            total_loss += (loss*weight).sum()
-                            total_weight += weight.sum()
+                            total_loss += (loss*weight_batch).sum()
+                            total_weight += weight_batch.sum()
                     total_weights.append(total_weight)
                     total_losses.append(total_loss)
 
@@ -432,19 +458,21 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 # save
                 dfstep = pd.DataFrame({
                     'batch_size': batch_sizes,
-                    'max_len': max_lens
+                    'max_len': max_lens, 
+                    'step_weight': worker_step_weights,
+                    'step_loss': worker_step_loss
                 })
-                dfstep.to_csv(f"{result_dir}/steps/{rank}_step.csv")
+                dfstep.to_csv(f"{result_dir}/steps/{rank}.csv")
                 dfopt = pd.DataFrame({
-                    'loss': accum_losses,
-                    'n_token': accum_n_tokens,
+                    'loss': opt_losses,
+                    'n_token': opt_weights,
                     'lr': lrs,
                     'memory': mems
                 })
-                dfopt.to_csv(f"{result_dir}/opt/{rank}.csv")
+                dfopt.to_csv(f"{result_dir}/opt/{rank}.csv") # 多分全てのworkerで同じものだが, 念のため確認
                 if is_main:
                     dfeval = pd.DataFrame({
-                        'opt': valid_opts,
+                        'opt': valid_opt_steps,
                         'mean_loss': valid_mean_losses
                     })
                     dfeval.to_csv(f"{result_dir}/eval.csv")
@@ -454,15 +482,14 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                     torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
 
                 # Judge early stopping
-                valid_opts.append(opt_step)
+                valid_opt_steps.append(opt_step)
                 valid_mean_losses.append(mean_loss)
-                best_opt = valid_opts[np.argmin(valid_mean_losses)]
+                best_opt = valid_opt_steps[np.argmin(valid_mean_losses)]
                 if opt_step - best_opt >= args.patiance_opt:
                     logger.info(f"Early stop.")
                     early_stop = True
 
-            n_accum_token = 0
-            accum_loss = 0
+            worker_opt_accum_loss = worker_opt_accum_weight = 0.0
 
             if opt_step >= args.max_opt or early_stop:
                 break
@@ -472,8 +499,10 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
 
         # End starting
-        if step+1 == 5: step_pbar.log_interval = 10000
-
+        if step+1 == 5: 
+            step_pbar.log_interval = 10000
+            if is_main:
+                reveal_loader.enabled = False
 
         if (step+1) % log_step == 0:
             logger.info(f"{step+1} step finished.")

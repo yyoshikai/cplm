@@ -4,17 +4,19 @@ from .data import WrapTupleDataset
 
 class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
     def __init__(self, base_coord_data: Dataset[np.ndarray], *coord_datas: tuple[Dataset[np.ndarray]], rstate: np.random.RandomState|int = 0, normalize_coord=False, random_rotate=False, coord_noise_std=0.0):
-        tuple_size = 1+len(coord_datas) \
-            + (1 if self.normalize_coord else 0) \
-            + (1 if self.random_rotate else 0)
-        super().__init__(base_coord_data, tuple_size)
+        self.normalize_coord = normalize_coord
+        self.random_rotate = random_rotate
         self.coord_datas = (base_coord_data,)+(coord_datas)
         self.rng = rstate
         if isinstance(self.rng, int):
             self.rng = np.random.default_rng(self.rng)
-        self.normalize_coord = normalize_coord
-        self.random_rotate = random_rotate
         self.coord_noise_std = coord_noise_std
+
+        # Initialize TupleDataset
+        tuple_size = 1+len(coord_datas) \
+            + (1 if self.normalize_coord else 0) \
+            + (1 if self.random_rotate else 0)
+        super().__init__(base_coord_data, tuple_size)
     
     def __getitem__(self, idx: int) -> tuple[np.ndarray,...]:
         coords = [coord_data[idx] for coord_data in self.coord_datas]
