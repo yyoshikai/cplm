@@ -1,25 +1,28 @@
-import sys, os, math, gc, yaml, psutil, logging
+import sys, os, math, yaml, psutil, logging
 from argparse import ArgumentParser, Namespace
 from logging import Logger, getLogger
-from collections.abc import Iterator
 import numpy as np
 import pandas as pd
 import transformers
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from torch.utils.data import Dataset
+from torch import Tensor
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import LambdaLR
 
 from .data import RepeatDataset
 from .data.tokenizer import VocEncoder
+from .data.sampler import InfiniteRandomSampler
+from .data.collator import DDPStringCollateLoader
 from .utils import git_commit, git_get_hash, reveal_data
 from .utils.logger import INFO_WORKER, add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
 from .model import Model
 from .utils.path import cleardir
-from src.utils import rectime, set_random_seed, TimerTqdm
+from src.utils import set_random_seed, TimerTqdm
 from torch.optim import Optimizer
 MAIN_RANK = 0
 
@@ -32,7 +35,8 @@ def sync_train_dir(result_dir):
     if dist.get_rank() == MAIN_RANK:
         cleardir(result_dir)
         os.makedirs(f"{result_dir}/models", exist_ok=True)
-        os.makedirs(f"{result_dir}/step_data", exist_ok=True)
+        os.makedirs(f"{result_dir}/steps", exist_ok=True)
+        os.makedirs(f"{result_dir}/opts", exist_ok=True)
         os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
         os.makedirs(f"{result_dir}/time")
         for dst in range(dist.get_world_size()):
@@ -86,9 +90,8 @@ def get_train_logger(result_dir):
 
 def add_train_args(parser: ArgumentParser):
     # training
-    parser.add_argument("--token-per-step", type=int, default=int(1.6e6))
-    parser.add_argument("--max-step", type=int, default=1000000)
-    parser.add_argument("--max-opt-step", type=int, default=float('inf'))
+    parser.add_argument("--token-per-opt", type=int, default=int(1.6e6))
+    parser.add_argument("--max-opt", type=int, default=float('inf'))
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--clip-grad-value", type=float, default=None)
     parser.add_argument("--clip-grad-norm", type=float, default=1.0)
@@ -100,26 +103,29 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
 
     # environments
-    parser.add_argument("--gpu-size-gb", type=int, required=True)
-    parser.add_argument("--record-opt-step", type=int)
+    parser.add_argument("--eval-opt", type=int, required=True) # temp
+    parser.add_argument("--patience-opt", type=int, required=True)
+    parser.add_argument("--patience-eval", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--pin-memory", action='store_true')
     parser.add_argument("--prefetch-factor", type=int)
-    parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'])
-    parser.add_argument("--gc", action='store_true')
     parser.add_argument("--logtime", action='store_true')
     parser.add_argument("--tokenizer-log-interval", type=int)
     parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
+    ## hardware
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
+    parser.add_argument("--gpu-size-gb", type=float, required=True)
     
 def set_default_args(args: Namespace):
-    if args.record_opt_step is None:
-        args.record_opt_step = 1 if args.test else 1000
+    if args.eval_opt is None:
+        args.eval_opt = 1 if args.test else 1000
     if args.tokenizer_log_interval is None:
-        args.tokenizer_log_interval = 1000000 if args.test else int(1e7)
+        args.tokenizer_log_interval = int(1e6) if args.test else int(1e7)
     if args.num_workers > 0 and args.prefetch_factor is None:
         args.prefetch_factor = 10
+    args.gpu_size = args.gpu_size_gb * (2**30)
     return args
 
 def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int, 
@@ -170,11 +176,20 @@ def log_dataset(logger: Logger, split: str, datasets: list[Dataset]):
         logger.info(f"    {data[i,0].ljust(lens[0])}: {data[i,3].rjust(lens[3])}*"
                 f"{data[i,2].rjust(lens[2])}={data[i,1].rjust(lens[1])}")    
 
-def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_encoder: VocEncoder, model: Model, result_dir: str, device: torch.device, log_step, seed: int):
+class CrossEntropyLoss(nn.CrossEntropyLoss):
+    def forward(self, input: Tensor, target: Tensor):
+        output = super().forward(input.reshape(target.numel(), -1), target.ravel())
+        if self.reduction == 'none':
+            output = output.reshape_as(target)
+        return output
+
+def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], valid2train_r: np.ndarray, voc_encoder: VocEncoder, model: Model, result_dir: str, device: torch.device, log_step, seed: int):
+    
+    # Environment
+    ## logging
     logger = getLogger('train')
     data_logger = getLogger('dexs.train')
 
-    # Environment
     ## rank
     rank = dist.get_rank()
     is_main = rank == MAIN_RANK
@@ -205,8 +220,37 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
     logger.debug(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
     logger.debug(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
     
+    # DataLoader
+    if is_main:
+        sampler = InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
+        train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=True, prefetch_factor=args.prefetch_factor)
+
+    else:
+        train_loader = None
+    
+    ## Define functions for batch collation
+    def collate(data_list: list[tuple[Tensor, Tensor]]):
+        batch = pad_sequence([data[0] for data in data_list],
+            batch_first=False, padding_value=voc_encoder.pad_token)
+        weight_batch = pad_sequence([data[1] for data in data_list],
+            batch_first=False, padding_value=0.0)
+        return batch, weight_batch
+    
+    def get_gpuuse(batch_size: int, length: int):
+        if isinstance(model.module, Model):
+            return model.get_gpuuse(batch_size, length, True)
+        else:
+            return model.get_gpuuse(batch_size, length, True, args.sdp_kernel)
+    def get_length(item: tuple[Tensor, Tensor]):
+        return len(item[0])
+    
+    ## collated data loader
+    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, args.gpu_size, device, MAIN_RANK)
+    train_iter = train_loader.__iter__()
+
+    # Model
     ## criterion
-    criterion = nn.CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
+    criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
 
     ## optimizer
     optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
@@ -215,7 +259,7 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
         case None:
             loss_scale = 1
         case 'token_per_batch':
-            loss_scale = 1/args.token_per_step
+            loss_scale = 1/args.token_per_opt
         case _:
             loss_scale = float(args.loss_scale)
     ## scheduler
@@ -232,6 +276,12 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
     batch_sizes = []
     max_lens = []
     nan_grad_step_saved = False
+
+    # Evaluate & early stopping
+    valid2train_r = torch.tensor(valid2train_r, device=device)
+    valid_opts = []
+    valid_mean_losses = []
+    early_stop = False
 
     # save at step 0
     if is_main:
@@ -256,8 +306,7 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
 
         # get batch
         step_pbar.start('get_batch')
-        batch, weight_batch = train_loader.__next__()
-        batch = batch.to(device)
+        batch, weight_batch = train_iter.__next__()
         n_token = torch.sum(batch != voc_encoder.pad_token).item()
         n_accum_token += n_token
 
@@ -265,12 +314,12 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
         max_lens.append(batch.shape[0])
         
         step_pbar.start('forward')
-        with torch.autocast('cuda', dtype=torch.bfloat16):
+        with torch.autocast('cuda', torch.bfloat16):
             target = batch[1:]
             pred = model(batch[:-1])
-            loss = (criterion(pred.reshape(target.numel(), -1), target.ravel())*weight_batch.ravel()).sum() * loss_scale
+            loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
 
-            # Log output for final check
+            ## Log target for final check
             if is_starting:
                 batch_size = batch.shape[1]
                 idxs = np.arange(batch_size)
@@ -280,7 +329,7 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
                 data_logger.info(f"target of step {step}:")
                 for idx in idxs:
                     msg = f"  [{idx:3}]="
-                    tokens = voc_encoder.decode(batch[1:,idx].cpu().tolist())
+                    tokens = voc_encoder.decode(target[1:,idx].cpu().tolist())
                     for t, w in zip(tokens, weight_batch[:,idx]):
                         msg += f"{t}[{w}],"
                     msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
@@ -321,7 +370,7 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
         dist.all_reduce(reduced_accum_token)
         
         # optimizer step
-        if reduced_accum_token >= args.token_per_step:
+        if reduced_accum_token >= args.token_per_opt:
 
             ## optimizer
             step_pbar.start('optim')
@@ -341,30 +390,81 @@ def train(args: Namespace, train_loader: Iterator[tuple[Tensor, Tensor]], voc_en
             ## scheduler
             scheduler.step()
 
-            ## save
-            if opt_step % args.record_opt_step == 0:
-                df = pd.DataFrame({
+            # evaluate
+            step_pbar.start('evaluation')
+            if opt_step % args.eval_opt == 0:
+                # validation
+                total_weights = []
+                total_losses = []
+                for valid_data in valid_datas:
+                    
+                    ## Make Loader
+                    if is_main:
+                        valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_data, batch_size=None, shuffle=False, 
+                                num_workers=args.num_workers, pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
+                    else:
+                        valid_loader = None
+                    valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, get_length, args.gpu_size, device, MAIN_RANK)
+
+                    ## Accumulate losses
+                    total_weight = 0.0
+                    total_loss = 0.0
+                    with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
+                        for batch in valid_loader:
+                            if batch is None: continue
+                            token, weight = batch
+                            input, target = token[:-1], token[1:]
+                            loss = criterion(model(input), target)
+                            total_loss += (loss*weight).sum()
+                            total_weight += weight.sum()
+                    total_weights.append(total_weight)
+                    total_losses.append(total_loss)
+
+                ## reduce all weights & losses
+                total_weight = (torch.stack(total_weights)*valid2train_r).sum()
+                total_loss = (torch.stack(total_losses)*valid2train_r).sum()
+                dist.all_reduce(total_weight, dst=MAIN_RANK)
+                dist.all_reduce(total_loss, dst=MAIN_RANK)
+                mean_loss = total_loss.item() / total_weight.item()
+                logger.info(f"opt={opt_step} {mean_loss=}")
+
+                    
+                # save
+                dfstep = pd.DataFrame({
+                    'batch_size': batch_sizes,
+                    'max_len': max_lens
+                })
+                dfstep.to_csv(f"{result_dir}/steps/{rank}_step.csv")
+                dfopt = pd.DataFrame({
                     'loss': accum_losses,
                     'n_token': accum_n_tokens,
                     'lr': lrs,
                     'memory': mems
                 })
-                df.to_csv(f"{result_dir}/step_data/{rank}.csv")
-                df = pd.DataFrame({
-                    'batch_size': batch_sizes,
-                    'max_len': max_lens
-                })
-                df.to_csv(f"{result_dir}/step_data/{rank}_step.csv")
+                dfopt.to_csv(f"{result_dir}/opt/{rank}.csv")
+                if is_main:
+                    dfeval = pd.DataFrame({
+                        'opt': valid_opts,
+                        'mean_loss': valid_mean_losses
+                    })
+                    dfeval.to_csv(f"{result_dir}/eval.csv")
                 if is_main:
                     torch.save(model.state_dict(), f"{result_dir}/models/{opt_step}.pth")
                     cleardir(f"{result_dir}/optimizers")
                     torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
-                if args.gc:
-                    gc.collect()
+
+                # Judge early stopping
+                valid_opts.append(opt_step)
+                valid_mean_losses.append(mean_loss)
+                best_opt = valid_opts[np.argmin(valid_mean_losses)]
+                if opt_step - best_opt >= args.patiance_opt:
+                    logger.info(f"Early stop.")
+                    early_stop = True
+
             n_accum_token = 0
             accum_loss = 0
 
-            if opt_step >= args.max_opt_step:
+            if opt_step >= args.max_opt or early_stop:
                 break
         
         # Log gpuuse

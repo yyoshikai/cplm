@@ -15,7 +15,6 @@ WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path.append(WORKDIR)
 
 from src.data import RepeatDataset
-from src.data.collator import DDPStringCollateLoader
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
     SentenceDataset, VocEncoder, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
@@ -187,17 +186,19 @@ if is_main:
         ### merge weight
         datas = [StackDataset(data, weight_data) for data, weight_data in zip(datas, weight_datas)]
 
-        split2sizes[split] = [len(data) for data in datas]
         if split == 'train':
+            train_data_sizes = np.array([len(data) for data in datas])
             train_data = ConcatDataset(datas)
         else:
+            valid_data_sizes = np.array([len(data) for data in datas])
             valid_datas = datas
-    sharings = [voc_encoder, split2sizes]
+    train2valid_r = train_data_sizes / valid_data_sizes
+    sharings = [voc_encoder, split2sizes, train2valid_r]
 else:
     train_data, valid_datas = None, None
-    sharings = [None, None]
+    sharings = [None, None, None]
 dist.broadcast_object_list(sharings, src=MAIN_RANK)
-voc_encoder, split2sizes = sharings
+voc_encoder, split2sizes, train2valid_r = sharings
 
 # model
 if args.mamba:
@@ -208,9 +209,6 @@ model.to(torch.bfloat16)
 model.to(device)
 model = DistributedDataParallel(model)
 
-# DataLoader
-train_loader = DDPStringCollateLoader(train_data, model.module, args.num_workers, args.pin_memory, args.prefetch_factor, 
-    args.gpu_size_gb*(2**30), batch_first, voc_encoder.pad_token, True, args.sdp_kernel, device,  main_rank=MAIN_RANK, seed=args.seed)
-train(args, train_loader, voc_encoder, model, result_dir, device, log_step, args.seed)
+train(args, train_data, valid_datas, train2valid_r, voc_encoder, model, result_dir, device, log_step, args.seed)
 
 dist.destroy_process_group()

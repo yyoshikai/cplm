@@ -1,18 +1,17 @@
+import itertools as itr
 from bisect import bisect_right
 from collections.abc import Callable, Iterable, Generator
-from functools import partial
 from logging import getLogger
+from typing import Optional, TypeVar
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.utils.rnn import pad_sequence
 
 import torch.distributed as dist
-from .data import IndexDataset
-from .tokenizer import VocEncoder
-from .sampler import InfiniteRandomSampler
-from ..model import Model, MambaModel2
 from ..utils import reveal_data
+
+T = TypeVar('T')
+T1 = TypeVar('T')
+T_co = TypeVar('T_co', covariant=True)
 
 def solve_increasing_fn_left(func: Callable[[int], float], start_sup: int) -> int:
 
@@ -44,214 +43,162 @@ def dist_recv_tensor(src: int, recv_device: torch.device) -> Tensor:
     dist.recv(tensor, src=src)
     return tensor
 
-class StringCollateIterator(Iterable[Tensor]):
+def batched(iterable: Iterable[T_co], n: int) -> Generator[T_co, None, None]: # Same as itr.batched in python >= 3.12
+    # batched('ABCDEFG', 3) → ABC DEF G
+    if n < 1:
+        raise ValueError('n must be at least one')
+    iterator = iter(iterable)
+    while batch := tuple(itr.islice(iterator, n)):
+        yield batch
+
+T_in = TypeVar('T_in')
+T_out = TypeVar('T_out')
+class StringCollateIterator(Iterable[list[T_in]]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     data_logger = getLogger(f"dexs.{__module__}.{__qualname__}")
-    def __init__(self, dataset: Dataset[tuple[Tensor, Tensor]], n_batch: int, model: Model|MambaModel2, num_workers:int, pin_memory: bool, prefetch_factor: int, 
-            gpu_size: float, batch_first: bool, padding_value: int, bf16: bool, kernel: str,
-            padding_weight: float=0.0, seed: int=None, ):
+    def __init__(self, loader: Iterable[T_in], n_batch: int, gpu_size: float, 
+            gpuuse_getter: Callable[[int, int], float], 
+            length_getter: Callable[[T_in], int]):
 
-        dataset = IndexDataset(dataset)
-        generator = torch.Generator().manual_seed(seed) if seed is not None else None
-        sampler = InfiniteRandomSampler(dataset, generator=generator)
+        self.loader = loader
         self.n_batch = n_batch
         self.gpu_size = gpu_size
-        self.loader = DataLoader(dataset, batch_size=None, sampler=sampler, num_workers=num_workers, 
-            pin_memory=pin_memory, persistent_workers=True, prefetch_factor=prefetch_factor)
-        
-        if isinstance(model, Model): 
-            self.get_gpuuse = partial(model.get_gpuuse, bf16=bf16, kernel=kernel)
-        elif isinstance(model, MambaModel2): 
-            self.get_gpuuse = partial(model.get_gpuuse, bf16=bf16)
-        else: 
-            raise ValueError(f"Unsupported model: {type(model)}")
+        self.gpuuse_getter = gpuuse_getter
+        self.length_getter = length_getter
 
-        self.next_item = None
-        self.step = 0
-        self.batch_first = batch_first
-        self.padding_value = padding_value
-        self.padding_weight = padding_weight
-        
-        self.n_item = 0
-        self.n_large_item = 0
-
-    def split_data_list(self, data_list: list[tuple[Tensor, Tensor]]) -> tuple[list[list[tuple[Tensor, Tensor]], bool]]:
+    def batch_data_list(self, data_list: list[T_in]) -> tuple[list[list[T_in]], bool]:
         datas = []
         for _ in range(self.n_batch):
-            max_len = len(data_list[0][0])
-            batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
-
+            batch_size = self.get_batch_size(self.get_length(data_list[0]))
             datas.append(data_list[:batch_size])
             if len(data_list) == 0: break
         return datas, len(data_list) == 0
 
-
-    def collate(self, data_list: list[tuple[Tensor, Tensor]]) -> list[tuple[Tensor, Tensor]]:
-        padded_batches = []
-        data_lists, can_be_batched = self.split_data_list(data_list)
+    def collates(self, data_list: list[T_in]) -> list[T_out]:
+        data_lists, can_be_batched = self.batch_data_list(data_list)
         assert can_be_batched
-        for data_list in data_lists:
-            # 送ってからpad_sequenceとどちらが速い？
-            batch = pad_sequence([data[0] for data in data_list],
-                batch_first=self.batch_first, padding_value=self.padding_value)
-            weight_batch = pad_sequence([data[1] for data in data_list],
-                batch_first=self.batch_first, padding_value=self.padding_weight)
-            padded_batches.append((batch, weight_batch))
-        return padded_batches
+        return data_lists
 
     def __iter__(self) -> Generator[Tensor, None, None]:
         data_list = []
         loader_iter = self.loader.__iter__()
+        next_item = None
+        n_large_item = n_item = 0
         while True:
             # get next item
-            if self.next_item is None:
+            if next_item is None:
                 try:
-                    index, self.next_item = loader_iter.__next__()
+                    next_item = loader_iter.__next__()
                 except StopIteration:
                     if len(data_list) > 0:
-                        yield from self.collate(data_list)
+                        yield from self.collates(data_list)
                     raise StopIteration
-
-                if self.step < 5:
-                    self.data_logger.info(f"item {self.n_item}: idx={index}")
-                    self.data_logger.info(f"    {reveal_data(self.next_item)}")
-                self.n_item += 1
+                n_item += 1
             
             # check maximum size
-            next_size = len(self.next_item[0])
-            if self.get_gpuuse(batch_size=1, length=next_size) > self.gpu_size:
-                self.n_large_item += 1
-                self.logger.warning(f"Item was too large even for 1 item per batch({len(self.next_item[0])}), and not used ({self.n_large_item}/{self.n_item}).")
-                self.next_item = None
+            next_length = self.get_length(next_item)
+            if self.get_gpuuse(1, next_length) > self.gpu_size:
+                n_large_item += 1
+                self.logger.warning(f"Item was too large even for 1 item per batch({next_length}), and not used ({n_large_item}/{n_item}).")
+                next_item = None
                 continue
 
             # insert size
-            i = bisect_right(data_list, -next_size, key=lambda x: -len(x[0]))
-            next_data_list = data_list[:i]+[self.next_item]+data_list[i:] # most slow
+            i = bisect_right(data_list, -next_length, key=self.get_length)
+            next_data_list = data_list[:i]+[next_item]+data_list[i:] # most slow
 
             # check more data can be added
-            _, can_be_batched = self.split_data_list(next_data_list)
+            _, can_be_batched = self.batch_data_list(next_data_list)
             if can_be_batched:
                 data_list = next_data_list
-                self.next_item = None
+                next_item = None
             else:
-                yield from self.collate(data_list)
+                yield from self.collates(data_list)
                 data_list = []
 
-class DDPStringCollateLoader:
+    def get_batch_size(self, length: int):
+        return solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, length)-self.gpu_size, 16)
+
+    def get_gpuuse(self, batch_size: int, length: int):
+        raise NotImplementedError
+
+    def get_length(self, item: T_in):
+        raise NotImplementedError
+
+class DDPStringCollateLoader(Iterable[T_out]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     data_logger = getLogger(f"dexs.{__module__}.{__qualname__}")
-    def __init__(self, dataset: Dataset[tuple[Tensor, Tensor]], model: Model|MambaModel2, num_workers:int, pin_memory: bool, prefetch_factor: int, 
-            gpu_size: float, batch_first: bool, padding_value: int, bf16: bool, kernel: str,
-            device: torch.device, padding_weight: float=0.0, main_rank: int=0, seed: int=None):
+    def __init__(self, loader: Optional[Iterable[T_in]], collator: Callable[[T_in], T_out]|None, gpuuse_getter: Callable[[int, int], T_out]|None, length_getter: Callable[[T_in], int]|None, gpu_size: float, device: torch.device, main_rank: int=0):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
         self.device = device
+        self.collator = collator
 
         if self.rank == self.main_rank:
-            self.batch_iterator = StringCollateIterator(dataset, self.size, model, num_workers, pin_memory, prefetch_factor, gpu_size, batch_first, padding_value, bf16, kernel, padding_weight, seed)
-            
-
-
-    def __iter__(self) -> Generator[Tensor, None, None]:
-        if self.rank == self.main_rank:
-            batches = []
-            for batch in self.batch_iterator:
-                batches.append(batch)
-
-                # Output batch
-                if len(batches) == self.size:
-                    for dst_rank, batch in enumerate(batches):
-                        if dst_rank == self.rank:
-                            this_batch = batch
-                        else:
-                            dist_send_tensor(batch)
-                    batches = []
-            
-            if len(batches) > 0:
-                
-
-
-        if self.rank == self.main_rank:
-            data_list = []
-            while True:
-                # get next item
-                if self.next_item is None:
-                    try:
-                        index, self.next_item = self.iter.__next__()
-                    except StopIteration:
-                        break
-                    if self.step < 5:
-                        self.data_logger.info(f"item {self.n_item}: idx={index}")
-                        self.data_logger.info(f"    {reveal_data(self.next_item)}")
-                    self.n_item += 1
-                
-                # check maximum size
-                next_size = len(self.next_item[0])
-                if self.get_gpuuse(batch_size=1, length=next_size) > self.gpu_size:
-                    self.n_large_item += 1
-                    self.logger.warning(f"Item was too large even for 1 item per batch({len(self.next_item[0])}), and not used ({self.n_large_item}/{self.n_item}).")
-                    self.next_item = None
-                    continue
-
-                # insert size
-                i = bisect_right(data_list, -next_size, key=lambda x: -len(x[0]))
-                next_data_list = data_list[:i]+[self.next_item]+data_list[i:] # most slow
-
-                # check more data can be added
-                i = 0
-                for i_worker in range(self.size):
-                    max_len = len(next_data_list[i][0])
-                    batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
-                    i += batch_size
-                    if i >= len(next_data_list): break
-                
-                if i >= len(next_data_list):
-                    ## More data may be able to be added.
-                    data_list = next_data_list
-                    self.next_item = None
-                else:
-                    break
-
-            # len(data_list) == 0 means loop was broken by first self.iter.__next__().
-            if len(data_list) == 0:
-                # Send empty tensor to tell StopIteration to other process
-                for dst_rank in range(self.size):
-                    if dst_rank != self.rank:
-                        dist_send_tensor(torch.tensor([],device=self.device), dst_rank)
-                raise StopIteration
-                
-            # Otherwise, loop was broken by either self.iter.__next__() or no more data can be added.
-            i = 0
-            batch = None
-            weight_batch = None
-            if self.step < 5:
-                self.logger.debug(f"Shape of step {self.step}: (batch_size, max_len)=")
-            for dst_rank in range(self.size):
-                max_len = len(data_list[i][0])
-                batch_size = solve_increasing_fn_left(lambda bsz: self.get_gpuuse(bsz, max_len)-self.gpu_size, 16)
-                if self.step < 5:
-                    self.logger.debug(f"    rank={dst_rank}: ({batch_size}, {max_len}), gpuuse={self.get_gpuuse(batch_size, max_len)/2**30:.03f}GB")
-
-                # 送ってからpad_sequenceとどちらが速い？
-                dst_batch = pad_sequence([data[0] for data in data_list[i:i+batch_size]],
-                    batch_first=self.batch_first, padding_value=self.padding_value).to(self.device)
-                dst_weight_batch = pad_sequence([data[1] for data in data_list[i:i+batch_size]],
-                    batch_first=self.batch_first, padding_value=self.padding_weight).to(self.device)
-
-                if dst_rank == self.rank:
-                    batch = dst_batch
-                    weight_batch = dst_weight_batch
-                else:
-                    dist_send_tensor(dst_batch, dst=dst_rank)
-                    dist_send_tensor(weight_batch, dst=dst_rank)                    
-                i += batch_size
-            assert i >= len(data_list)
+            self.batch_iterator = StringCollateIterator(loader, self.size, gpu_size, gpuuse_getter, length_getter)
         else:
-            batch = dist_recv_tensor(self.main_rank, self.device)
-            if batch.numel() == 0:
-                raise StopIteration
-            weight_batch = dist_recv_tensor(self.main_rank, self.device)
-        self.step += 1
-        return batch, weight_batch
+            self.batch_iterator = itr.repeat(None)
+
+    def scatter_batches(self, batches: Optional[list[list[T_in]]]) -> Optional[T_out]:
+        if self.rank == self.main_rank:
+            assert len(batches) <= self.size
+
+            # Send batch info
+            batch_infos = [torch.tensor(0 if rank < len(batches) else 1) for rank in range(self.size)]
+            dist.scatter(torch.tensor(0, device=self.device), batch_infos, src=self.main_rank)
+
+            # Send batch
+            this_data = None
+            for dst_rank, dst_data in enumerate(batches):
+                data = self.collator(dst_data)
+                if dst_rank == self.rank:
+                    this_data = data
+                else:
+                    ## collate ここはspecialized
+                    token, weight = data
+                    dist_send_tensor(token, dst_rank)
+                    dist_send_tensor(weight, dst_rank)
+            return this_data
+        else:
+            # Receive batch info
+            batch_info = torch.tensor(0, device=self.device)
+            dist.scatter(batch_info, src=self.main_rank)
+
+            # Receive batch
+            if batch_info.item() == 0:
+                ## ここもspecialized
+                token = dist_recv_tensor(self.main_rank, self.device)
+                weight = dist_recv_tensor(self.main_rank, self.device)
+                this_data = token, weight
+            else:
+                this_data = None
+            return this_data
+
+
+    def __iter__(self) -> Generator[Optional[T_out], None, None]:
+        for batches in batched(self.batch_iterator, self.size):
+            # Sync StopIteration
+            stop_iteration = torch.tensor(False, device=self.device)
+            dist.scatter(stop_iteration, [stop_iteration for rank in range(self.size)], src=self.main_rank)
+            if stop_iteration.item(): break
+
+            # Send & yield batch
+            yield self.scatter_batches(batches)
+
+        # Sync StopIteration from main_rank
+        if self.rank == self.main_rank:
+            stop_iteration = torch.tensor(True, device=self.device)
+            dist.scatter(stop_iteration, [stop_iteration for rank in range(self.size)], src=self.main_rank)
+
+class RevealIterator(Iterable[T]):
+    logger = getLogger(f'dexs.{__module__}.{__qualname__}')
+    def __init__(self, iterable: Iterable[T], name):
+        self.iterable = iterable
+        self.name = name
+
+    def __iter__(self):
+        for i, item in enumerate(self.iterable):
+            if self.enabled: 
+                self.logger.debug(f"Iterator[{self.name}] {i}: {reveal_data(item)}")
+            yield item
