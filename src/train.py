@@ -292,7 +292,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         case _:
             loss_scale = float(args.loss_scale)
     ## scheduler
-    scheduler = get_scheduler(optimizer, args.scheduler, 55000)
+    scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt)
 
     # Initial state
     opt_step = 0
