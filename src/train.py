@@ -64,18 +64,19 @@ def get_train_logger(result_dir):
     rank = dist.get_rank()
     size = dist.get_world_size()
     fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
-    os.makedirs(f"{result_dir}/logs", exist_ok=True)
+    os.makedirs(f"{result_dir}/logs/main_debug", exist_ok=True)
+    os.makedirs(f"{result_dir}/logs/data_examples", exist_ok=True)
 
     # main logger
     logger = getLogger()
     add_stream_handler(logger, logging.INFO, fmt=fmt)
     add_file_handler(logger, f"{result_dir}/main.log", logging.INFO, fmt=fmt, mode='a')
-    add_file_handler(logger, f"{result_dir}/logs/main_debug.log", logging.DEBUG, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/logs/main_debug/{rank}.log", logging.DEBUG, fmt=fmt, mode='a')
     logger.setLevel(logging.NOTSET if rank == MAIN_RANK else INFO_WORKER)
 
     # data logger
     data_logger = getLogger('dexs')
-    add_file_handler(data_logger, f"{result_dir}/logs/data_examples.log", fmt=fmt, mode='a')
+    add_file_handler(data_logger, f"{result_dir}/logs/data_examples/{rank}.log", fmt=fmt, mode='a')
     data_logger.propagate = False
 
     # unknown logger
