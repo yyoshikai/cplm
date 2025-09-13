@@ -15,35 +15,34 @@ from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel
 
-from .data import RepeatDataset, RevealIterator
+from .data import RepeatDataset, FixedSampleDataset, SampleDataset, RevealIterator
 from .data.tokenizer import VocEncoder
 from .data.sampler import InfiniteRandomSampler
 from .data.collator import DDPStringCollateLoader
 from .utils import git_commit, git_get_hash, reveal_data
-from .utils.logger import INFO_WORKER, add_stream_handler, add_file_handler
+from .utils.logger import add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
 from .model import Model
 from .utils.path import cleardir
 from src.utils import set_random_seed, TimerTqdm
 from torch.optim import Optimizer
-MAIN_RANK = 0
+
+MAIN_RANK = 1
+SAVE_RANK = 0
+DATA_RANK = {'train': 2, 'valid': 3}
 
 def sync_train_dir(result_dir):
-    if dist.get_rank() == MAIN_RANK:
+    size = dist.get_world_size()
+    main_rank = MAIN_RANK % size
+    if dist.get_rank() == main_rank:
         cleardir(result_dir)
-        os.makedirs(f"{result_dir}/models", exist_ok=True)
-        os.makedirs(f"{result_dir}/steps", exist_ok=True)
-        os.makedirs(f"{result_dir}/opts", exist_ok=True)
-        os.makedirs(f"{result_dir}/optimizers", exist_ok=True)
-        os.makedirs(f"{result_dir}/time")
-        for dst in range(dist.get_world_size()):
-            if dst != MAIN_RANK:
-                dist.send_object_list([result_dir], dst=dst)
+        for subdir in ['models', 'opts', 'vals', 'optimizers', 'steps/times']:
+            os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
+        result_dirs = [result_dir]
     else:
         result_dirs = [None]
-        dist.recv_object_list(result_dirs, src=MAIN_RANK)
-        result_dir = result_dirs[0]
+    dist.broadcast_object_list(result_dirs, src=main_rank)
     return result_dir
 
 
@@ -65,9 +64,8 @@ def get_train_logger(result_dir):
     # main logger
     logger = getLogger()
     add_stream_handler(logger, logging.INFO, fmt=fmt)
-    add_file_handler(logger, f"{result_dir}/main.log", logging.INFO, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/main_info.log", logging.INFO, fmt=fmt, mode='a')
     add_file_handler(logger, f"{result_dir}/logs/main_debug/{rank}.log", logging.DEBUG, fmt=fmt, mode='a')
-    logger.setLevel(logging.NOTSET if rank == MAIN_RANK else INFO_WORKER)
 
     # data logger
     data_logger = getLogger('dexs')
@@ -81,7 +79,7 @@ def get_train_logger(result_dir):
 
     # third-party modules
     set_rdkit_logger()
-    getLogger('.prody').disabled = True
+    getLogger('.prody').setLevel(logging.CRITICAL)
     transformers.utils.logging.enable_propagation()
     transformers.utils.logging.disable_default_handler()
 
@@ -109,21 +107,32 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--pin-memory", action='store_true')
     parser.add_argument("--prefetch-factor", type=int)
     parser.add_argument("--logtime", action='store_true')
-    parser.add_argument("--tokenizer-log-interval", type=int)
     parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
     ## hardware
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
     parser.add_argument("--gpu-size-gb", type=float, required=True)
-    
+    ## log interval
+    parser.add_argument("--tokenizer-log-interval", type=int)
+    parser.add_argument("--log-step", type=int)
+    parser.add_argument("--log-opt", type=int)
+
 def set_default_args(args: Namespace):
     if args.eval_opt is None:
-        args.eval_opt = 1 if args.test else 1000
-    if args.tokenizer_log_interval is None:
-        args.tokenizer_log_interval = int(1e6) if args.test else int(1e7)
+        args.eval_opt = 2 if args.test else 1000
     if args.num_workers > 0 and args.prefetch_factor is None:
         args.prefetch_factor = 10
+
+    # log interval
+    if args.tokenizer_log_interval is None:
+        args.tokenizer_log_interval = int(1e6) if args.test else int(1e7)
+    if args.log_step is None:
+        args.log_step = 1 if args.test else 50000
+    if args.log_opt is None:
+        args.log_opt = 1 if args.test else min(1, args.eval_opt//5)
+
+    # post_init
     args.gpu_size = args.gpu_size_gb * (2**30)
     return args
 
@@ -159,21 +168,41 @@ def just_data(datas: list, side: Literal['l', 'r']) -> list[str]:
     max_len = max(len(s) for s in strings)
     return [s.ljust(max_len) if side == 'l' else s.rjust(max_len) for s in strings]
 
+def just_nums(datas: list[int|float]) -> list[str]:
+    if any(not isinstance(d, int) for d in datas):
+        datas = [f"{d}   " if isinstance(d, int) else f"{d:.02f}" for d in datas]
+    return just_data(datas, 'r')
+
+
 def log_dataset(logger: Logger, split: str, datasets: list[Dataset]):
     # info
+    logger.info(f"{split} data:")
     n_data = len(datasets)
-    data_names = [type(d).__name__ for d in datasets]
-    lens = [len(d) for d in datasets]
-    repeats = [d.n_repeat if isinstance(d, RepeatDataset) else 1 for d in datasets]
-    net_lens = [len_ // repeat for len_, repeat in zip(lens, repeats)]
+    names = []
+    net_sizes = []
+    augments = []
+    sizes = []
+    for data in datasets:
+        sizes.append(len(data))
+        augment = 1
+        if isinstance(data, RepeatDataset):
+            augment = data.n_repeat
+            data = data.net_dataset
+        elif isinstance(data, FixedSampleDataset):
+            augment = len(data) / len(data.dataset) 
+            data = data.dataset
+        augments.append(augment)
+        names.append(type(data).__name__)
+        net_sizes.append(len(data))
 
     # just data
-    data_names, lens, repeats, net_lens = map(just_data, [data_names, lens, repeats, net_lens], 'lrrr')
+    names = just_data(names, 'l')
+    net_sizes, augments, sizes = map(just_nums, (net_sizes, augments, sizes))
 
     # log
     logger.info(f"{split} data:")
     for i in range(n_data):
-        logger.info(f"    {data_names[i]}: {net_lens[i]}*{repeats[i]}={lens[i]}")
+        logger.info(f"    {names[i]}: {net_sizes[i]}*{augments[i]}={sizes[i]}")
 
 class CrossEntropyLoss(nn.CrossEntropyLoss):
     def forward(self, input: Tensor, target: Tensor):
@@ -203,8 +232,9 @@ def reduce_float(value: float, device: torch.device) -> float:
     dist.all_reduce(tensor)
     return tensor.item()
 
-def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], valid2train_r: np.ndarray, voc_encoder: VocEncoder, model: Model, result_dir: str, device: torch.device, log_step):
-    
+def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], data_names: list[str], valid2train_r: Tensor, voc_encoder: VocEncoder, model: Model, result_dir: str, device: torch.device, log_step):
+    global DATA_RANK, MAIN_RANK, SAVE_RANK
+
     # Environment
     ## logging
     logger = getLogger('train')
@@ -212,7 +242,12 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
     ## rank
     rank = dist.get_rank()
+    size = dist.get_world_size()
+    DATA_RANK = {key: r % size for key, r in DATA_RANK.items()}
+    MAIN_RANK = MAIN_RANK % size
+    SAVE_RANK = SAVE_RANK % size
     is_main = rank == MAIN_RANK
+    is_save_rank = rank == SAVE_RANK
 
     ## save args
     if is_main:
@@ -246,7 +281,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     model = DistributedDataParallel(model)
 
     # DataLoader
-    if is_main:
+    if rank == DATA_RANK['train']:
         sampler = InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
         train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=True, prefetch_factor=args.prefetch_factor)
         train_loader = RevealIterator(train_loader, 'train_loader')
@@ -271,7 +306,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         return len(item[0])
     
     ## collated data loader
-    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, args.gpu_size, device, MAIN_RANK)
+    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, args.gpu_size, device, DATA_RANK['train'])
     train_iter = train_loader.__iter__()
 
     # Model
@@ -295,11 +330,21 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     worker_opt_accum_weight = 0.0
     nan_grad_step_saved = False
 
-    ## opt info
-    opt_losses = []
-    opt_weights = []
-    lrs = []
-    mems = []
+    ## opt
+    opt2loss = []
+    opt2weight = []
+    opt2lr = []
+    opt2mem = []
+
+    # Evaluate & early stopping
+    val2opt_step = []
+    val2mean_loss = []
+    val2process_weights = []
+    val2process_losses = []
+    val = 0
+    early_stop = False
+    opt_to_eval = args.eval_opt
+    
 
     # step info
     batch_sizes = []
@@ -307,40 +352,121 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     worker_step_losses = []
     worker_step_weights = []
 
-    # Evaluate & early stopping
-    valid2train_r = torch.tensor(valid2train_r, device=device)
-    valid_opt_steps = []
-    valid_mean_losses = []
-    early_stop = False
-
-    # save at step 0
-    if is_main:
-        torch.save(model.module.state_dict(), f"{result_dir}/models/{opt_step}.pth")
-        cleardir(f"{result_dir}/optimizers")
-        torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
-
     # Show model size
-    if is_main:
-        logger.debug(f"# of params={get_num_params(model):,}")
-        logger.debug(f"Model size={get_model_size(model)/2**30:.02f}GB")
-
-
+    logger.debug(f"# of params={get_num_params(model):,}")
+    logger.debug(f"Model size={get_model_size(model)/2**30:.02f}GB")
+  
     logger.info("Training started.")
-    for step in (step_pbar:=TimerTqdm(itr.count(), 
-            time_path=f"{result_dir}/time/steps.csv" if is_main else None,
-            log_interval=1, desc='batch')):
+    for step in (step_pbar:=TimerTqdm(itr.count(),
+            time_path=f"{result_dir}/steps/times/{rank}.csv",
+            log_interval=1, desc='step', disable=True)):
         is_starting = step < 5
+
+        # evaluate & save
+        if opt_to_eval == 0:
+            step_pbar.start('evaluation')
+            opt_step = len(opt2loss)
+            valid_is_starting = val <= 1
+            
+            # validation 
+            logger.info(f"Validation at {opt_step=}...", )
+            process_weights = []
+            process_losses = []
+            for i_data, data_name in enumerate(data_names):
+                logger.info(f"    Validating {data_name}")
+                ## Make Loader
+                if rank == DATA_RANK['valid']:
+                    valid_data = valid_datas[i_data]
+                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_data, batch_size=None, shuffle=False, 
+                            num_workers=args.num_workers, pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
+                else:
+                    valid_loader = None
+                valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, get_length, args.gpu_size, device, DATA_RANK['valid'])
+
+                ## Accumulate losses
+                process_weight = torch.tensor(0.0, device=device, dtype=torch.float)
+                process_loss = torch.tensor(0.0, device=device, dtype=torch.float)
+                with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
+                    for batch in (valid_pbar:=valid_loader):
+                        if batch is None: continue
+                        token_batch, weight_batch = batch
+                        input, target = token_batch[:-1], token_batch[1:]
+                        loss = criterion(model(input), target)
+                        process_loss += (loss*weight_batch).sum()
+                        process_weight += weight_batch.sum()
+                process_weight = process_weight.item()
+                process_loss = process_loss.item()
+                process_weights.append(process_weight)
+                process_losses.append(process_loss)
+                
+                logger.debug(f"        loss={process_loss:3.03f} weight={process_weight:3.03f}")
+
+            ## reduce all weights & losses
+            total_weights = torch.tensor(process_weights, device=device)
+            total_losses = torch.tensor(process_losses, device=device)
+            dist.all_reduce(total_weights)
+            dist.all_reduce(total_losses)
+            mean_losses = total_losses / total_weights
+            estimated_train_weights = total_weights * valid2train_r
+            mean_loss = ((mean_losses*estimated_train_weights).sum() / estimated_train_weights.sum()).item()
+
+            ## add result
+            val2process_losses.append(process_losses)
+            val2process_weights.append(process_weights)
+            val2opt_step.append(opt_step)
+            val2mean_loss.append(mean_loss)
+
+            logger.info(f"    {mean_loss=}")
+
+            # save
+            dfstep = pd.DataFrame({
+                'batch_size': batch_sizes,
+                'max_len': max_lens, 
+                'step_weight': worker_step_weights,
+                'step_loss': worker_step_losses,
+            })
+            dfstep.to_csv(f"{result_dir}/steps/{rank}.csv")
+            dfopt = pd.DataFrame({
+                'loss': opt2loss,
+                'n_token': opt2weight,
+                'lr': opt2lr,
+                'memory': opt2mem
+            })
+            dfopt.to_csv(f"{result_dir}/opts/{rank}.csv") # 多分全てのworkerで同じものだが, 念のため確認
+            dfval = pd.DataFrame({
+                ('opt_step', ''): val2opt_step,
+                ('mean_loss', ''): val2mean_loss
+            })
+            dfval[[('process_weight', data_name) for data_name in data_names]] \
+                = np.array(val2process_weights)
+            dfval[[('process_loss', data_name) for data_name in data_names]] \
+                = np.array(val2process_losses)
+            dfval.to_csv(f"{result_dir}/vals/{rank}.csv", index_label='val')
+            if is_main:
+                torch.save(model.state_dict(), f"{result_dir}/models/{opt_step}.pth")
+                cleardir(f"{result_dir}/optimizers")
+                torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
+
+            # Judge early stopping
+            best_opt = val2opt_step[np.argmin(val2mean_loss)]
+            if opt_step - best_opt >= args.patience_opt:
+                logger.info(f"Early stop.")
+                break
+            opt_to_eval = args.eval_opt
+
         # reset gpu to watch gpu use
         if is_starting:
             torch.cuda.reset_peak_memory_stats(device)
 
-        # get batch
+        # step
+        ## get batch
         step_pbar.start('get_batch')
         token_batch, weight_batch = train_iter.__next__()
 
         batch_sizes.append(token_batch.shape[1])
         max_lens.append(token_batch.shape[0])
         
+        ## forward
         step_pbar.start('forward')
         with torch.autocast('cuda', torch.bfloat16):
             target = token_batch[1:]
@@ -348,10 +474,11 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
 
         ## Log target for final check
+        step_pbar.start('log_target')
         if is_starting:
             data_logger.debug(f"Train step {step} data:")
             log_target_weight(data_logger, target, weight_batch, voc_encoder, args.seed+step)
-
+        
         step_pbar.start('backward')
         loss.backward()
 
@@ -363,20 +490,19 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         worker_opt_accum_loss += worker_step_loss
         worker_opt_accum_weight += worker_step_weight
 
-        # check nan
+        ## check nan
         if args.reset_nan_grad:
             grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
             if not grad_is_finite:
-                if is_main:
-                    logger.warning("nan or infinite value in gradient. Gradient is reset.")
-                    for name, param in model.module.named_parameters():
-                        n_nan = torch.sum(torch.isnan(param.grad)).item()
-                        n_inf = torch.sum(torch.isinf(param.grad)).item()
-                        if n_nan > 0 or n_inf > 0:
-                            logger.warning(f"{name}: {n_nan=}, {n_inf=}")
+                logger.warning("nan or infinite value in gradient. Gradient is reset.")
+                for name, param in model.module.named_parameters():
+                    n_nan = torch.sum(torch.isnan(param.grad)).item()
+                    n_inf = torch.sum(torch.isinf(param.grad)).item()
+                    if n_nan > 0 or n_inf > 0:
+                        logger.edbug(f"{name}: {n_nan=}, {n_inf=}")
 
                 ## save situation
-                if is_main and not nan_grad_step_saved:
+                if is_save_rank and not nan_grad_step_saved:
                     nan_dir = f"{result_dir}/nan_steps/{step}/{rank}"
                     os.makedirs(nan_dir, exist_ok=True)
                     torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
@@ -387,7 +513,10 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 worker_opt_accum_loss = 0
                 optimizer.zero_grad()
         
-        # optimizer step
+        if (step+1) % log_step == 0:
+            logger.info(f"{step+1} step finished.")
+        
+        # opt
         opt_accum_weight = reduce_float(worker_opt_accum_weight, device)
         if opt_accum_weight >= args.weight_per_opt:
 
@@ -398,99 +527,25 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
             optimizer.zero_grad()
-            opt_step += 1
 
             ## sum opt_accum_loss
             opt_accum_loss = reduce_float(worker_opt_accum_loss, device)
 
-            ## save step data
-            opt_losses.append(opt_accum_loss)
-            opt_weights.append(opt_accum_weight)
-            lrs.append(scheduler.get_last_lr()[0])
-            mems.append(psutil.virtual_memory().used/(2**30))
+            ## save opt data
+            opt2loss.append(opt_accum_loss)
+            opt2weight.append(opt_accum_weight)
+            opt2lr.append(scheduler.get_last_lr()[0])
+            opt2mem.append(psutil.virtual_memory().used/(2**30))
+            worker_opt_accum_loss = worker_opt_accum_weight = 0.0
 
             ## scheduler
             scheduler.step()
 
-            # evaluate
-            if opt_step % args.eval_opt == 0:
-                step_pbar.start('evaluation')
-                
-                # validation
-                logger.info(f"Validation at {opt_step=}...")
-                total_weights = []
-                total_losses = []
-                for valid_data in valid_datas:
-                    logger.info(f"    Validating ")
-                    ## Make Loader
-                    if is_main:
-                        valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_data, batch_size=None, shuffle=False, 
-                                num_workers=args.num_workers, pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
-                    else:
-                        valid_loader = None
-                    valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, get_length, args.gpu_size, device, MAIN_RANK)
-
-                    ## Accumulate losses
-                    total_weight = 0.0
-                    total_loss = 0.0
-                    with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
-                        for batch in valid_loader:
-                            if batch is None: continue
-                            token_batch, weight_batch = batch
-                            input, target = token_batch[:-1], token_batch[1:]
-                            loss = criterion(model(input), target)
-                            total_loss += (loss*weight_batch).sum()
-                            total_weight += weight_batch.sum()
-                    total_weights.append(total_weight)
-                    total_losses.append(total_loss)
-
-                ## reduce all weights & losses
-                total_weight = (torch.stack(total_weights)*valid2train_r).sum()
-                total_loss = (torch.stack(total_losses)*valid2train_r).sum()
-                dist.all_reduce(total_weight, dst=MAIN_RANK)
-                dist.all_reduce(total_loss, dst=MAIN_RANK)
-                mean_loss = total_loss.item() / total_weight.item()
-                logger.info(f"opt={opt_step} {mean_loss=}")
-
-                    
-                # save
-                dfstep = pd.DataFrame({
-                    'batch_size': batch_sizes,
-                    'max_len': max_lens, 
-                    'step_weight': worker_step_weights,
-                    'step_loss': worker_step_loss
-                })
-                dfstep.to_csv(f"{result_dir}/steps/{rank}.csv")
-                dfopt = pd.DataFrame({
-                    'loss': opt_losses,
-                    'n_token': opt_weights,
-                    'lr': lrs,
-                    'memory': mems
-                })
-                dfopt.to_csv(f"{result_dir}/opt/{rank}.csv") # 多分全てのworkerで同じものだが, 念のため確認
-                if is_main:
-                    dfeval = pd.DataFrame({
-                        'opt': valid_opt_steps,
-                        'mean_loss': valid_mean_losses
-                    })
-                    dfeval.to_csv(f"{result_dir}/eval.csv")
-                if is_main:
-                    torch.save(model.state_dict(), f"{result_dir}/models/{opt_step}.pth")
-                    cleardir(f"{result_dir}/optimizers")
-                    torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
-
-                # Judge early stopping
-                valid_opt_steps.append(opt_step)
-                valid_mean_losses.append(mean_loss)
-                best_opt = valid_opt_steps[np.argmin(valid_mean_losses)]
-                if opt_step - best_opt >= args.patiance_opt:
-                    logger.info(f"Early stop.")
-                    early_stop = True
-
-            worker_opt_accum_loss = worker_opt_accum_weight = 0.0
-
-            if opt_step >= args.max_opt or early_stop:
+            if len(opt2loss) >= args.max_opt or early_stop:
                 break
+            if len(opt2loss) % args.log_opt == 0:
+                logger.info(f"{len(opt2loss)} opt finished.")
+            opt_to_eval -= 1
         
         # Log gpuuse
         if is_starting:
@@ -502,6 +557,4 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             if is_main:
                 reveal_loader.enabled = False
 
-        if (step+1) % log_step == 0:
-            logger.info(f"{step+1} step finished.")
     logger.info("Training finished!")

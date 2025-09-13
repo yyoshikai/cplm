@@ -45,18 +45,23 @@ def get_logger(name=None, level=logging.DEBUG, stream=False) -> logging.Logger:
     return logger
 
 def add_file_handler(logger: Logger, path: str, level=logging.DEBUG, mode: str='w', 
-        fmt: str=DEFAULT_FMT, datefmt=DEFAULT_DATEFMT):
+        fmt: str=DEFAULT_FMT, datefmt=DEFAULT_DATEFMT, keep_level: bool=False):
     handler = FileHandler(path, mode)
     handler.setFormatter(Formatter(fmt, datefmt, style='{'))
     handler.setLevel(level)
+    if logger.level > level and not keep_level:
+        logger.setLevel(level)
     logger.addHandler(handler)
 
 def add_stream_handler(logger: Logger, level=logging.INFO, tqdm: bool=True, 
-        fmt: str=DEFAULT_FMT, datefmt: str=DEFAULT_DATEFMT, add=False):
+        fmt: str=DEFAULT_FMT, datefmt: str=DEFAULT_DATEFMT, add=False, 
+        keep_level: bool=False):
     if not add:
         for handler in logger.handlers:
             if isinstance(handler, (TqdmHandler, StreamHandler)):
                 return
+    if logger.level > level and not keep_level:
+        logger.setLevel(level)
     if tqdm:
         handler = TqdmHandler(level)
     else:

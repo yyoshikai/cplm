@@ -8,6 +8,7 @@ from torch import Tensor
 
 import torch.distributed as dist
 from ..utils import reveal_data
+from ..utils.ddp import dist_send_tensor, dist_recv_tensor
 
 T = TypeVar('T')
 T1 = TypeVar('T')
@@ -31,17 +32,6 @@ def solve_increasing_fn_left(func: Callable[[int], float], start_sup: int) -> in
         else:
             sup = v
     return min
-
-def dist_send_tensor(tensor: Tensor, dst: int):
-    dist.send_object_list([tensor.shape, tensor.dtype], dst=dst)
-    dist.send(tensor, dst=dst)
-def dist_recv_tensor(src: int, recv_device: torch.device) -> Tensor:
-    info = [None, None]
-    dist.recv_object_list(info, src=src)
-    shape, dtype = info
-    tensor = torch.zeros(shape, dtype=dtype, device=recv_device)
-    dist.recv(tensor, src=src)
-    return tensor
 
 def batched(iterable: Iterable[T_co], n: int) -> Generator[T_co, None, None]: # Same as itr.batched in python >= 3.12
     # batched('ABCDEFG', 3) → ABC DEF G
@@ -93,7 +83,7 @@ class StringCollateIterator(Iterable[list[T_in]]):
                 except StopIteration:
                     if len(data_list) > 0:
                         yield from self.collates(data_list)
-                    raise StopIteration
+                    break
                 n_item += 1
             
             # check maximum size

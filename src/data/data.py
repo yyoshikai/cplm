@@ -8,7 +8,7 @@ from logging import getLogger
 import numpy as np
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset, get_worker_info
+from torch.utils.data import Dataset, Subset, get_worker_info
 
 from ..utils.utils import reveal_data
 
@@ -94,6 +94,11 @@ class SampleDataset(Dataset[T_co]):
     @classmethod
     def set_epoch(cls, epoch: int):
         cls.epoch = epoch
+
+class FixedSampleDataset(Subset[T_co]):
+    def __init__(self, dataset: Dataset[T_co], size: int, rstate: np.random.RandomState):
+        idxs = rstate.choice(len(dataset), size, replace=False)
+        super().__init__(dataset, idxs)
 
 class CacheDataset(WrapDataset):
     def __init__(self, dataset: Dataset):
