@@ -130,7 +130,8 @@ class TimerTqdm(tqdm):
     logger = getLogger(f'{__module__}.{__qualname__}')
 
     def __init__(self, iterable: Optional[Iterable]=None,
-            time_path: Optional[str]=None, log_interval: Optional[int]=None, *args, **kwargs):
+            time_path: Optional[str]=None, log_interval: Optional[int]=None, disable_bar: bool=False, *args, **kwargs):
+        self.disable_bar = disable_bar
         super().__init__(iterable, *args, **kwargs)
         self.name2time = defaultdict(float)
 
@@ -195,13 +196,15 @@ class TimerTqdm(tqdm):
         # log
         if self.log_interval is not None and \
                 ((self.n-n) // self.log_interval) != (self.n // self.log_interval):
-            self.logger.debug(f"{self.desc} after {self.n} step (s):")
+            self.logger.debug(f"After {self.n} {self.desc}:")
             name_times = self.print_items()
             max_name_len = max([len(name) for name, _ in name_times])
             for name, time in name_times:
                 self.logger.debug(f"    {name.ljust(max_name_len)}:{time:5.2f}")
 
-
+    def display(self, msg=None, pos=None):
+        if not self.disable_bar:
+            super().display(msg, pos)
 
 LOGTIME = False
 def set_logtime(logtime: bool):

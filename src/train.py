@@ -58,14 +58,14 @@ def get_train_logger(result_dir):
     rank = dist.get_rank()
     size = dist.get_world_size()
     fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
-    os.makedirs(f"{result_dir}/logs/main_debug", exist_ok=True)
+    os.makedirs(f"{result_dir}/logs/debug", exist_ok=True)
     os.makedirs(f"{result_dir}/logs/data_examples", exist_ok=True)
 
     # main logger
     logger = getLogger()
     add_stream_handler(logger, logging.INFO, fmt=fmt)
-    add_file_handler(logger, f"{result_dir}/main_info.log", logging.INFO, fmt=fmt, mode='a')
-    add_file_handler(logger, f"{result_dir}/logs/main_debug/{rank}.log", logging.DEBUG, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", logging.DEBUG, fmt=fmt, mode='a')
 
     # data logger
     data_logger = getLogger('dexs')
@@ -117,6 +117,10 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--tokenizer-log-interval", type=int)
     parser.add_argument("--log-step", type=int)
     parser.add_argument("--log-opt", type=int)
+
+    ## test
+    parser.add_argument("--test", action='store_true')
+    parser.add_argument("--test-data", action='store_true')
 
 def set_default_args(args: Namespace):
     if args.eval_opt is None:
@@ -342,8 +346,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     val2process_weights = []
     val2process_losses = []
     val = 0
-    early_stop = False
-    opt_to_eval = args.eval_opt
+    opt_to_eval = 0
     
 
     # step info
@@ -359,7 +362,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     logger.info("Training started.")
     for step in (step_pbar:=TimerTqdm(itr.count(),
             time_path=f"{result_dir}/steps/times/{rank}.csv",
-            log_interval=1, desc='step', disable=True)):
+            log_interval=1, desc='step', disable_bar=True)):
         is_starting = step < 5
 
         # evaluate & save
@@ -453,12 +456,16 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 logger.info(f"Early stop.")
                 break
             opt_to_eval = args.eval_opt
+        
+        # End of training
+        if len(opt2loss) >= args.max_opt:
+            break
 
-        # reset gpu to watch gpu use
-        if is_starting:
-            torch.cuda.reset_peak_memory_stats(device)
 
         # step
+        ## reset gpu to watch gpu use
+        if is_starting:
+            torch.cuda.reset_peak_memory_stats(device)
         ## get batch
         step_pbar.start('get_batch')
         token_batch, weight_batch = train_iter.__next__()
@@ -541,8 +548,6 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             ## scheduler
             scheduler.step()
 
-            if len(opt2loss) >= args.max_opt or early_stop:
-                break
             if len(opt2loss) % args.log_opt == 0:
                 logger.info(f"{len(opt2loss)} opt finished.")
             opt_to_eval -= 1

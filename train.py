@@ -31,7 +31,6 @@ from src.train import train, add_train_args, set_default_args, get_train_logger,
 parser = argparse.ArgumentParser()
 ## settings
 parser.add_argument("--studyname", default='default')
-parser.add_argument("--test", action='store_true')
 
 ## training
 add_train_args(parser)
