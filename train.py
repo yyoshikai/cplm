@@ -78,9 +78,8 @@ DATA_RANK = {k: r % size for k, r in DATA_RANK.items()}
 result_dir = sync_train_dir(f"training/results/{timestamp()}_{args.studyname}")
 
 ## logger
-logger, data_logger = get_train_logger(result_dir)
-logger.debug(f"num_workers={args.num_workers}")
-logger.debug(f"{device=}, {torch.cuda.device_count()=}")
+root_logger, process_logger, data_logger = get_train_logger(result_dir)
+root_logger.debug(f"{device=}, {torch.cuda.device_count()=}")
 
 # data
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
@@ -91,10 +90,12 @@ sample_save_dir = f"{result_dir}/ligand_sample" if args.test else None
 # datasets
 seed_a = 0
 vocs = set()
-train_data = val_datas = train_data_sizes = valid_data_sizes = data_names = None
+voc_encoder = train_data = valid_datas = train_data_sizes = valid_data_sizes = data_names = None
 data_rstate = np.random.RandomState(args.seed)
 for split in ['valid', 'train']:
     if rank % size == DATA_RANK[split]:
+        root_logger.debug(f"num_workers={args.num_workers}")
+        
         datas = []
         weight_datas = []
         datas_to_log = []
@@ -166,7 +167,7 @@ for split in ['valid', 'train']:
             weight_datas.append(weight_data)
             seed_a += 1
             
-        log_dataset(logger, split, datas_to_log)
+        log_dataset(root_logger, split, datas_to_log)
 
         ### encode words
         voc_encoder = VocEncoder(vocs)

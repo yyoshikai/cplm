@@ -11,26 +11,28 @@ import torch.distributed as dist
 import torch.nn as nn
 from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import Dataset, DataLoader
-from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.data import Dataset, DataLoader
 
-from .data import RepeatDataset, FixedSampleDataset, SampleDataset, RevealIterator
+from .data import RepeatDataset, FixedSampleDataset, RevealIterator
 from .data.tokenizer import VocEncoder
 from .data.sampler import InfiniteRandomSampler
 from .data.collator import DDPStringCollateLoader
+from .model import Model
 from .utils import git_commit, git_get_hash, reveal_data
 from .utils.logger import add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
-from .model import Model
 from .utils.path import cleardir
-from src.utils import set_random_seed, TimerTqdm
-from torch.optim import Optimizer
+from .utils.ddp import reduce_float
+from .utils import set_random_seed, TimerTqdm
 
 MAIN_RANK = 1
 SAVE_RANK = 0
 DATA_RANK = {'train': 2, 'valid': 3}
+NO_DUP = {'extra': {'no_dup': True}}
 
 def sync_train_dir(result_dir):
     size = dist.get_world_size()
@@ -57,6 +59,7 @@ def set_sdp_kernel(sdp_kernel: str|None):
 def get_train_logger(result_dir):
     rank = dist.get_rank()
     size = dist.get_world_size()
+    is_main = rank == MAIN_RANK % size
     fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
     os.makedirs(f"{result_dir}/logs/debug", exist_ok=True)
     os.makedirs(f"{result_dir}/logs/data_examples", exist_ok=True)
@@ -65,12 +68,14 @@ def get_train_logger(result_dir):
     logger = getLogger()
     add_stream_handler(logger, logging.INFO, fmt=fmt)
     add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
-    add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", logging.DEBUG, fmt=fmt, mode='a')
+    if not is_main:
+        logger.handlers[0].addFilter(lambda record: not getattr(record, 'no_dup', False))
+    add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", fmt=fmt, mode='a')
 
     # data logger
-    data_logger = getLogger('dexs')
-    add_file_handler(data_logger, f"{result_dir}/logs/data_examples/{rank}.log", fmt=fmt, mode='a')
-    data_logger.propagate = False
+    token_logger = getLogger('dexs')
+    add_file_handler(token_logger, f"{result_dir}/logs/data_examples/{rank}.log", fmt=fmt, mode='a')
+    token_logger.propagate = False
 
     # unknown logger
     unk_logger = getLogger('unk')
@@ -83,7 +88,7 @@ def get_train_logger(result_dir):
     transformers.utils.logging.enable_propagation()
     transformers.utils.logging.disable_default_handler()
 
-    return logger, data_logger
+    return logger, logger, token_logger
 
 def add_train_args(parser: ArgumentParser):
     # training
@@ -177,10 +182,8 @@ def just_nums(datas: list[int|float]) -> list[str]:
         datas = [f"{d}   " if isinstance(d, int) else f"{d:.02f}" for d in datas]
     return just_data(datas, 'r')
 
-
 def log_dataset(logger: Logger, split: str, datasets: list[Dataset]):
     # info
-    logger.info(f"{split} data:")
     n_data = len(datasets)
     names = []
     net_sizes = []
@@ -215,34 +218,38 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
-def log_target_weight(logger: Logger, target: Tensor, weight: Tensor, voc_encoder: VocEncoder, seed: int):
+def log_batch(logger: Logger, token_logger: Logger, target_batch: Tensor, weight_batch: Tensor,
+            voc_encoder: VocEncoder, step: int):
 
-    batch_size = weight.shape[1]
+    # weight
+    weight_items = weight_batch.sum(dim=0).tolist()
+    logger.debug(f"{step} target_batch: ")
+    logger.debug(f"    shape={tuple(target_batch.shape)}")
+    logger.debug(f"    weight_items={weight_items}")
+
+    # tokens
+    token_logger.debug(f"{step} target_batch:")
+
+    batch_size = weight_batch.shape[1]
     if batch_size > 10: 
-        rstate = np.random.RandomState(seed)
+        rstate = np.random.RandomState(step)
         idxs = np.sort(rstate.choice(batch_size, size=10, replace=False))
     else:
         idxs = np.arange(batch_size)
     for idx in idxs:
         msg = f"    [{idx:3}]="
-        tokens = voc_encoder.decode(target[:,idx].cpu().tolist())
-        for t, w in zip(tokens, weight[:,idx]):
+        tokens = voc_encoder.decode(target_batch[:,idx].cpu().tolist())
+        for t, w in zip(tokens, weight_batch[:,idx]):
             msg += f"{t}[{w}],"
-        msg += f" remaining weights= {reveal_data(weight[len(tokens):,idx])}"
-        logger.info(msg)
-
-def reduce_float(value: float, device: torch.device) -> float:
-    tensor = torch.tensor(value, dtype=torch.float, device=device)
-    dist.all_reduce(tensor)
-    return tensor.item()
+        msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
+        token_logger.debug(msg)
 
 def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], data_names: list[str], valid2train_r: Tensor, voc_encoder: VocEncoder, model: Model, result_dir: str, device: torch.device, log_step):
     global DATA_RANK, MAIN_RANK, SAVE_RANK
 
     # Environment
     ## logging
-    logger = getLogger('train')
-    data_logger = getLogger('dexs.train')
+    logger, token_logger = map(getLogger, [None, 'dexs.train'])
 
     ## rank
     rank = dist.get_rank()
@@ -289,7 +296,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         sampler = InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
         train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=True, prefetch_factor=args.prefetch_factor)
         train_loader = RevealIterator(train_loader, 'train_loader')
-        reveal_loader = train_loader
+        train_reveal_loader = train_loader
     else:
         train_loader = None
     
@@ -325,6 +332,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             loss_scale = 1
         case _:
             loss_scale = float(args.loss_scale)
+
     ## scheduler
     scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt)
 
@@ -348,7 +356,6 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     val = 0
     opt_to_eval = 0
     
-
     # step info
     batch_sizes = []
     max_lens = []
@@ -356,10 +363,10 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     worker_step_weights = []
 
     # Show model size
-    logger.debug(f"# of params={get_num_params(model):,}")
-    logger.debug(f"Model size={get_model_size(model)/2**30:.02f}GB")
+    logger.debug(f"# of params={get_num_params(model):,}", **NO_DUP)
+    logger.debug(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
   
-    logger.info("Training started.")
+    logger.debug("Training started.")
     for step in (step_pbar:=TimerTqdm(itr.count(),
             time_path=f"{result_dir}/steps/times/{rank}.csv",
             log_interval=1, desc='step', disable_bar=True)):
@@ -369,19 +376,22 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         if opt_to_eval == 0:
             step_pbar.start('evaluation')
             opt_step = len(opt2loss)
-            valid_is_starting = val <= 1
+            valid_is_starting = len(val2mean_loss) <= 1
             
             # validation 
-            logger.info(f"Validation at {opt_step=}...", )
+            logger.info(f"Validation at {opt_step=}...", **NO_DUP)
             process_weights = []
             process_losses = []
             for i_data, data_name in enumerate(data_names):
-                logger.info(f"    Validating {data_name}")
+                logger.info(f"    Validating {data_name}", **NO_DUP)
                 ## Make Loader
                 if rank == DATA_RANK['valid']:
                     valid_data = valid_datas[i_data]
-                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_data, batch_size=None, shuffle=False, 
+                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_data, batch_size=None, shuffle=True, # TODO: False 
                             num_workers=args.num_workers, pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
+                    if valid_is_starting:
+                        valid_loader = RevealIterator(valid_loader, f'valid[{data_name}] loader')
+                        valid_reveal_loader = valid_loader
                 else:
                     valid_loader = None
                 valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, get_length, args.gpu_size, device, DATA_RANK['valid'])
@@ -390,18 +400,31 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 process_weight = torch.tensor(0.0, device=device, dtype=torch.float)
                 process_loss = torch.tensor(0.0, device=device, dtype=torch.float)
                 with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
-                    for batch in (valid_pbar:=valid_loader):
+                    for val_step, batch in enumerate(valid_loader):
                         if batch is None: continue
+
+                        ### Verbosity
+                        val_step_is_starting = val_step < 3
+                        if val_step == 3 and rank == DATA_RANK['valid']:
+                            valid_reveal_loader.enabled = False
+
+                        ### Forward
                         token_batch, weight_batch = batch
                         input, target = token_batch[:-1], token_batch[1:]
                         loss = criterion(model(input), target)
+                        
+                        ### Log result
+                        if valid_is_starting and val_step_is_starting:
+                            log_batch(logger, token_logger, token_batch, weight_batch, voc_encoder, val_step)
+
+                        ### Add
                         process_loss += (loss*weight_batch).sum()
                         process_weight += weight_batch.sum()
+
                 process_weight = process_weight.item()
                 process_loss = process_loss.item()
                 process_weights.append(process_weight)
                 process_losses.append(process_loss)
-                
                 logger.debug(f"        loss={process_loss:3.03f} weight={process_weight:3.03f}")
 
             ## reduce all weights & losses
@@ -419,7 +442,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             val2opt_step.append(opt_step)
             val2mean_loss.append(mean_loss)
 
-            logger.info(f"    {mean_loss=}")
+            logger.info(f"    {mean_loss=}", **NO_DUP)
 
             # save
             dfstep = pd.DataFrame({
@@ -453,14 +476,13 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             # Judge early stopping
             best_opt = val2opt_step[np.argmin(val2mean_loss)]
             if opt_step - best_opt >= args.patience_opt:
-                logger.info(f"Early stop.")
+                logger.info(f"Early stop.", **NO_DUP)
                 break
             opt_to_eval = args.eval_opt
         
         # End of training
         if len(opt2loss) >= args.max_opt:
             break
-
 
         # step
         ## reset gpu to watch gpu use
@@ -483,8 +505,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         ## Log target for final check
         step_pbar.start('log_target')
         if is_starting:
-            data_logger.debug(f"Train step {step} data:")
-            log_target_weight(data_logger, target, weight_batch, voc_encoder, args.seed+step)
+            token_logger.debug(f"Train step {step} data:")
+            log_batch(logger, token_logger, target, weight_batch, voc_encoder, step)
         
         step_pbar.start('backward')
         loss.backward()
@@ -501,12 +523,12 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         if args.reset_nan_grad:
             grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
             if not grad_is_finite:
-                logger.warning("nan or infinite value in gradient. Gradient is reset.")
+                logger.warning("nan or infinite value in gradient. Gradient is reset.", **NO_DUP)
                 for name, param in model.module.named_parameters():
                     n_nan = torch.sum(torch.isnan(param.grad)).item()
                     n_inf = torch.sum(torch.isinf(param.grad)).item()
                     if n_nan > 0 or n_inf > 0:
-                        logger.edbug(f"{name}: {n_nan=}, {n_inf=}")
+                        logger.debug(f"{name}: {n_nan=}, {n_inf=}", **NO_DUP)
 
                 ## save situation
                 if is_save_rank and not nan_grad_step_saved:
@@ -520,8 +542,19 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 worker_opt_accum_loss = 0
                 optimizer.zero_grad()
         
+        ## Log gpuuse
+        if is_starting:
+            logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
+
+        ## End starting
+        if step+1 == 5: 
+            step_pbar.log_interval = 10000
+            if rank == DATA_RANK['train']:
+                train_reveal_loader.enabled = False
+        
+
         if (step+1) % log_step == 0:
-            logger.info(f"{step+1} step finished.")
+            logger.info(f"{step+1} step finished.", **NO_DUP)
         
         # opt
         opt_accum_weight = reduce_float(worker_opt_accum_weight, device)
@@ -549,17 +582,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             scheduler.step()
 
             if len(opt2loss) % args.log_opt == 0:
-                logger.info(f"{len(opt2loss)} opt finished.")
+                logger.info(f"{len(opt2loss)} opt finished.", **NO_DUP)
             opt_to_eval -= 1
-        
-        # Log gpuuse
-        if is_starting:
-            logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
-
-        # End starting
-        if step+1 == 5: 
-            step_pbar.log_interval = 10000
-            if is_main:
-                reveal_loader.enabled = False
 
     logger.info("Training finished!")

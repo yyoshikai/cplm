@@ -5,7 +5,7 @@ from torch.utils.data import Dataset, Subset
 from ..protein import Protein
 from ..lmdb import StringLMDBDataset
 
-WORKDIR = os.environ.get('WORKDIR', "/workspace")
+WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 
 DEFAULT_PDB_DIR = f"{WORKDIR}/cheminfodata/pdb/220103"
 DEFAULT_VALID_SIZE = 100

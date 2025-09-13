@@ -213,9 +213,14 @@ class RevealIterator(Iterable[T]):
         self.enabled = True
 
     def __iter__(self):
-        for i, item in enumerate(self.iterable):
+        shapes = []
+        for idx, item in enumerate(self.iterable):
             if self.enabled: 
-                self.logger.debug(f"Iterator[{self.name}] {i}: {reveal_data(item)}")
+                # specific
+                shapes.append(len(item[0]))
+                if len(shapes) == 10:
+                    self.logger.debug(f"Iterator[{self.name}][{idx-9}~{idx}]: {shapes}")
+                    shapes = []
             yield item
 
 

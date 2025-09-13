@@ -15,7 +15,7 @@ from ...utils.rdkit import ignore_warning
 from ...utils.utils import CompressedArray
 from ..protein import Protein
 
-WORKDIR = os.environ.get('WORKDIR', "/workspace")
+WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_SAVE_DIR = f"{WORKDIR}/cplm/ssd/preprocess/results/finetune/r4_all"
 
 class CDDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):

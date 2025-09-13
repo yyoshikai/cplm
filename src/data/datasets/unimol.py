@@ -1,6 +1,7 @@
 import sys, os
 from typing import Optional, Literal
 from logging import getLogger
+from pathlib import Path
 import numpy as np, pandas as pd
 from torch.utils.data import Dataset, Subset, get_worker_info
 from rdkit import Chem
@@ -9,7 +10,7 @@ from rdkit.Geometry import Point3D
 from ..lmdb import PickleLMDBDataset
 from ..protein import Protein
 from ..data import is_main_worker
-WORKDIR = os.environ.get('WORKDIR', "/workspace")
+WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
 class UniMolLigandDataset(Dataset[Chem.Mol]):
@@ -89,6 +90,6 @@ class UniMolPocketDataset(Dataset[Protein]):
 class UniMolPocketNoTDTestDataset(Subset[Protein]):
     def __init__(self, split: Literal['train', 'valid'], unimol_dir=DEFAULT_UNIMOL_DIR):
         whole_data = UniMolPocketDataset(split, unimol_dir)
-        idxs = np.load(f"/workspace/cheminfodata/unimol/pocket_mask/remove_targetdiff_test/{split}_idxs.npy")
+        idxs = np.load(f"{WORKDIR}/cheminfodata/unimol/pocket_mask/remove_targetdiff_test/{split}_idxs.npy")
         super().__init__(whole_data, idxs)
 

@@ -6,7 +6,7 @@ from rdkit import Chem
 from ...utils.lmdb import load_lmdb
 from ..protein import Protein
 
-WORKDIR = os.environ.get('WORKDIR', "/workspace")
+WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_CD1_1_TYPES_DIR = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020_v1.1_types"
 DEFAULT_TARGETDIFF_DIR = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff"
 

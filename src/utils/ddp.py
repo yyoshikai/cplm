@@ -50,3 +50,9 @@ def dist_broadcast_tensor(t: Tensor|None, device: torch.device, src: int,
         t = torch.zeros(shape, dtype=dtype, device=device)
     dist.broadcast(t, src=src)
     return t
+
+
+def reduce_float(value: float, device: torch.device) -> float:
+    tensor = torch.tensor(value, dtype=torch.float, device=device)
+    dist.all_reduce(tensor)
+    return tensor.item()

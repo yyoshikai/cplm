@@ -1,25 +1,15 @@
-import os, pickle, io, logging, yaml
-from logging import getLogger
-from collections import defaultdict
-from time import time
-from torch.utils.data import Dataset, Subset
+import os
+from copy import copy
 
 import numpy as np
 import pandas as pd
-from prody import parsePDB, parsePDBStream, confProDy, Contacts, addMissingAtoms
-from ...utils.lmdb import new_lmdb
-from ..lmdb import PickleLMDBDataset
-from ..data import WrapDataset
+from torch.utils.data import Dataset, Subset
+
 from rdkit import Chem
 from rdkit.Chem import rdDistGeom
 from rdkit.Chem import rdDepictor
-from ...utils.logger import add_file_handler, get_logger
-from ...utils.rdkit import ignore_warning
-from ...utils.utils import CompressedArray
-from ..protein import Protein
-from copy import copy
 
-WORKDIR = os.environ.get('WORKDIR', "/workspace")
+WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 MOLNET_DIR = f"{WORKDIR}//cheminfodata/molnet"
 
 class MoleculeNetDataset(Dataset[tuple[Chem.Mol, float]]):
