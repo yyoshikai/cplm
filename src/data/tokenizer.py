@@ -242,7 +242,7 @@ class SentenceDataset(Dataset[list[str]]):
         if self.len is None:
             raise ValueError(f"No dataset in sentence.")
 
-    def __getitem__(self, idx: int) -> list[str]:        
+    def __getitem__(self, idx: int) -> list[str]:
         item = []
         for word in self.sentence:
             if isinstance(word, str):

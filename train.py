@@ -16,7 +16,7 @@ from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
     SentenceDataset, VocEncoder, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from src.data.coord import CoordTransformDataset
 from src.data.datasets.unimol import UniMolLigandNoMolNetDataset, UniMolPocketDataset
-from src.data.datasets.pdb import PDBUniMolDataset
+from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.molecule import MolProcessDataset
 from src.data.protein import ProteinProcessDataset, CoordFollowDataset
 from src.data import CacheDataset, FixedSampleDataset
@@ -38,7 +38,7 @@ add_train_args(parser)
 # bool系は何も指定しない場合BindGPTの設定になるようにしている
 # pocket-heavy-coordはデフォルトで入れるようにした。
 ## dataset
-for cls in [UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolDataset]:
+for cls in [UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]:
     dname = cls.__name__.removesuffix('Dataset')
     parser.add_argument(f'--{dname}', type=int, default=0)
     parser.add_argument(f'--{dname}-val-sample', type=float, default=1.0)
@@ -101,7 +101,7 @@ for split in ['valid', 'train']:
         datas_to_log = []
         data_names = []
         ## Molecule
-        for cls in [UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolDataset]:
+        for cls in [UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]:
 
             dname = cls.__name__.removesuffix('Dataset')
             repeat = getattr(args, dname)
