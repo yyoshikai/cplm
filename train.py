@@ -84,6 +84,8 @@ root_logger.debug(f"{device=}, {torch.cuda.device_count()=}")
 # data
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
 coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
+protein_coord_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
+
 protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 sample_save_dir = f"{result_dir}/ligand_sample" if args.test else None
 
@@ -149,7 +151,7 @@ for split in ['valid', 'train']:
 
                 ### tokenize
                 atoms = TokenizeDataset(atoms, protein_atom_tokenizer)
-                coord = ArrayTokenizeDataset(coord, coord_tokenizer)
+                coord = ArrayTokenizeDataset(coord, protein_coord_tokenizer)
                 if args.coord_follow_atom:
                     pocket_data = CoordFollowDataset(atoms, coord, coord_position)
                     pocket_data = SentenceDataset('[POCKET]', pocket_data, '[END]')
