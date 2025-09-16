@@ -206,12 +206,11 @@ class WorkerAggregator(Generic[T_co]):
 
 
 class RevealIterator(Iterable[T]):
-    def __init__(self, iterable: Iterable[T], name, logger: Logger=getLogger(
-                f'dexs.{__module__}.{__qualname__}')):
+    logger = getLogger(f'dexs.{__module__}.{__qualname__}')
+    def __init__(self, iterable: Iterable[T], name):
         self.iterable = iterable
         self.name = name
         self.enabled = True
-        self.logger = logger
 
     def __iter__(self):
         shapes = []
@@ -220,7 +219,7 @@ class RevealIterator(Iterable[T]):
                 # specific
                 shapes.append(len(item[0]))
                 if len(shapes) == 10:
-                    self.logger.debug(f"Iterator[{self.name}][{idx-9}~{idx}]: {shapes}")
+                    self.logger.debug(f"{self.name} Iterator[{idx-9}~{idx}]: {shapes}")
                     shapes = []
             yield item
 

@@ -189,7 +189,7 @@ for split in ['valid', 'train']:
 train_data_sizes = dist_broadcast_tensor(train_data_sizes, device, src=DATA_RANK['train'])
 valid_data_sizes = dist_broadcast_tensor(valid_data_sizes, device, src=DATA_RANK['valid'])
 voc_encoder, data_names = dist_broadcast_object((voc_encoder, data_names), DATA_RANK['train'])
-train2valid_r = valid_data_sizes.to(torch.float) / train_data_sizes.to(torch.float)
+train2valid_r = train_data_sizes.to(torch.float) / valid_data_sizes.to(torch.float)
 
 # model
 if args.mamba:
