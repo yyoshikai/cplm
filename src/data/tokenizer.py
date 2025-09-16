@@ -157,9 +157,10 @@ class StringTokenizer2(Tokenizer):
         return self.tokenizer.vocs()
 
 class FloatTokenizer(Tokenizer):
-    unk_logger = getLogger(f"unk.{__module__}.{__qualname__}")
+    
 
-    def __init__(self, vmin: float, vmax: float, decimal: int=3, log_interval: int=1000000):
+    def __init__(self, name, vmin: float, vmax: float, decimal: int=3, log_interval: int=1000000):
+        self.name = name
         self.decimal = decimal
         self.vmin = float(vmin)
         self.vmax = float(vmax)
@@ -171,6 +172,7 @@ class FloatTokenizer(Tokenizer):
 
         self.log_interval = log_interval
         self.float_format = "{:.0"+str(self.decimal)+"f}"
+        self.unk_logger = getLogger(f"unk.src.data.tokenizer.FloatTokenizer.{self.name}")
 
     def tokenize(self, x: float):
         x = float(x)
