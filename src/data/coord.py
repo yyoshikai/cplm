@@ -1,15 +1,17 @@
+import os
+from logging import getLogger
 import numpy as np
 from torch.utils.data import Dataset
-from .data import WrapTupleDataset
+from .data import WrapTupleDataset, get_rng
+
 
 class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
-    def __init__(self, base_coord_data: Dataset[np.ndarray], *coord_datas: tuple[Dataset[np.ndarray]], rstate: np.random.RandomState|int = 0, normalize_coord=False, random_rotate=False, coord_noise_std=0.0):
+    logger = getLogger(f'{__module__}.{__qualname__}')
+    def __init__(self, base_coord_data: Dataset[np.ndarray], *coord_datas: tuple[Dataset[np.ndarray]], base_seed: int=0, normalize_coord=False, random_rotate=False, coord_noise_std=0.0):
         self.normalize_coord = normalize_coord
         self.random_rotate = random_rotate
         self.coord_datas = (base_coord_data,)+(coord_datas)
-        self.rng = rstate
-        if isinstance(self.rng, int):
-            self.rng = np.random.default_rng(self.rng)
+        self.base_seed = base_seed
         self.coord_noise_std = coord_noise_std
 
         # Initialize TupleDataset
@@ -20,6 +22,10 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
     
     def __getitem__(self, idx: int) -> tuple[np.ndarray,...]:
         coords = [coord_data[idx] for coord_data in self.coord_datas]
+        rng = get_rng(self.base_seed, idx)
+        
+        # check data_epoch
+        # self.logger.info(f"EPOCH={os.environ.get('EPOCH')}")
 
         # normalize
         if self.normalize_coord:
@@ -32,12 +38,12 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
 
         # random rotate
         if self.random_rotate:
-            matrix = get_random_rotation_matrix(self.rng)
+            matrix = get_random_rotation_matrix(rng)
             coords = [np.matmul(coord, matrix) for coord in coords]
 
         # add noise
         if self.coord_noise_std > 0:
-            noise = self.rng.normal(size=3, scale=self.coord_noise_std)   
+            noise = rng.normal(size=3, scale=self.coord_noise_std)   
             coords = [coord+noise for coord in coords]
         
         if self.normalize_coord:

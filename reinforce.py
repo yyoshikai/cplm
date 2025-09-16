@@ -19,7 +19,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.distributions import Categorical
 import transformers.utils.logging
 
-from src.data.sampler import InfiniteRandomSampler
+from src.data._sampler import InfiniteRandomSampler
 from src.model import Model, MambaModel2
 from src.data.datasets.crossdocked import CDDataset
 from src.data.protein import ProteinProcessDataset, CoordFollowDataset

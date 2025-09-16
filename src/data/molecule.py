@@ -1,25 +1,29 @@
-import os, random
+import os
 from typing import Optional
 import numpy as np, pandas as pd
 from torch.utils.data import Dataset, get_worker_info
 from rdkit import Chem
-from .data import WrapTupleDataset, is_main_worker
+from .data import WrapTupleDataset, is_main_worker, get_rng
 
 class MolProcessDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], rstate: np.random.RandomState, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
+    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
         super().__init__(mol_data, 2)
         self.mol_data = mol_data
         self.h_atom = h_atom
         self.h_coord = h_coord
         assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
         self.randomize = randomize
-        self.rng = rstate
+        self.seed = base_seed
 
         self.sample_save_dir = sample_save_dir
         self.getitem_count = 0
         
     def __getitem__(self, idx: int):
         mol = self.mol_data[idx]
+
+        # rng
+        epoch = int(os.environ.get('EPOCH', 0))
+        rng = get_rng(self.seed, idx)
 
         # remove/add hydrogen
         if self.h_atom:
@@ -30,7 +34,7 @@ class MolProcessDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
         # randomize
         if self.randomize:
             idxs = np.arange(mol.GetNumAtoms(), dtype=int)
-            self.rng.shuffle(idxs)
+            rng.shuffle(idxs)
             mol = Chem.RenumberAtoms(mol, idxs.tolist())
             smi = Chem.MolToSmiles(mol, canonical=False)
         else:
@@ -61,10 +65,10 @@ class RandomScoreDataset(Dataset[float]):
         self.min = min
         self.max = max
         self.size = size
-        self.rng = random.Random(seed)
+        self.seed = seed
 
     def __getitem__(self, idx: int):
-        return self.rng.uniform(self.min, self.max)
+        return get_rng(self.seed, idx).uniform(self.min, self.max)
 
     def __len__(self):
         return self.size

@@ -1,3 +1,4 @@
+import os
 import queue
 import multiprocessing as mp
 from functools import lru_cache
@@ -8,9 +9,7 @@ from logging import getLogger, Logger
 import numpy as np
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset, Subset, get_worker_info
-
-from ..utils.utils import reveal_data
+from torch.utils.data import Dataset, get_worker_info
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -36,8 +35,6 @@ class WrapTupleDataset(Dataset[T_co]):
     def untuple(self):
         return untuple(self, self.tuple_size)
         
-        
-
 class ApplyDataset(WrapDataset[T_co]):
     def __init__(self, dataset: Dataset[T], func: Callable[[T], T_co]):
         super().__init__(dataset)
@@ -94,11 +91,6 @@ class SampleDataset(Dataset[T_co]):
     @classmethod
     def set_epoch(cls, epoch: int):
         cls.epoch = epoch
-
-class FixedSampleDataset(Subset[T_co]):
-    def __init__(self, dataset: Dataset[T_co], size: int, rstate: np.random.RandomState):
-        idxs = rstate.choice(len(dataset), size, replace=False)
-        super().__init__(dataset, idxs)
 
 class CacheDataset(WrapDataset):
     def __init__(self, dataset: Dataset):
@@ -223,4 +215,6 @@ class RevealIterator(Iterable[T]):
                     shapes = []
             yield item
 
-
+def get_rng(base_seed, idx):
+    epoch = int(os.environ.get('EPOCH', 0))
+    return np.random.default_rng(base_seed+epoch+idx)

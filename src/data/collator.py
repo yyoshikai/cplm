@@ -1,3 +1,4 @@
+import os
 import itertools as itr
 from bisect import bisect_right
 from collections.abc import Callable, Iterable, Generator
@@ -5,9 +6,9 @@ from logging import getLogger
 from typing import Optional, TypeVar
 import torch
 from torch import Tensor
+from torch.utils.data import Dataset, DataLoader, RandomSampler
 
 import torch.distributed as dist
-from ..utils import reveal_data
 from ..utils.ddp import dist_send_tensor, dist_recv_tensor
 
 T = TypeVar('T')
@@ -43,6 +44,24 @@ def batched(iterable: Iterable[T_co], n: int) -> Generator[T_co, None, None]: # 
 
 T_in = TypeVar('T_in')
 T_out = TypeVar('T_out')
+
+class InfiniteLoader(Iterable[T_in]):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, loader: DataLoader):
+        self.loader = loader
+        self.epoch = None
+
+        # If True, setting os.environ will have no effect.
+        assert self.loader.persistent_workers == False
+
+    def __iter__(self):
+        self.epoch = 0
+        while True:
+            os.environ['EPOCH'] = str(self.epoch)
+            yield from self.loader
+            self.logger.info(f"Epoch #{self.epoch} finished.")
+            self.epoch += 1
+
 class StringCollateIterator(Iterable[list[T_in]]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     data_logger = getLogger(f"dexs.{__module__}.{__qualname__}")

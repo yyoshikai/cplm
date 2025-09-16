@@ -14,12 +14,11 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset, RandomSampler
 
-from .data import RepeatDataset, FixedSampleDataset, RevealIterator
+from .data import RepeatDataset, RevealIterator
 from .data.tokenizer import VocEncoder
-from .data.sampler import InfiniteRandomSampler
-from .data.collator import DDPStringCollateLoader
+from .data.collator import DDPStringCollateLoader, InfiniteLoader
 from .model import Model
 from .utils import git_commit, git_get_hash, reveal_data
 from .utils.logger import add_stream_handler, add_file_handler
@@ -135,7 +134,7 @@ def add_train_args(parser: ArgumentParser):
 
     ## test
     parser.add_argument("--test", action='store_true')
-    parser.add_argument("--check", nargs='*', default=[], choices=['early_stop'])
+    parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 'data_dist', 'data_epoch'])
 
 def set_default_args(args: Namespace):
     if args.eval_opt is None:
@@ -205,7 +204,7 @@ def log_dataset(logger: Logger, split: str, datasets: list[Dataset]):
         if isinstance(data, RepeatDataset):
             augment = data.n_repeat
             data = data.net_dataset
-        elif isinstance(data, FixedSampleDataset):
+        elif isinstance(data, Subset):
             augment = len(data) / len(data.dataset) 
             data = data.dataset
         augments.append(augment)
@@ -304,8 +303,9 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
     # DataLoader
     if rank == DATA_RANK['train']:
-        sampler = InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
-        train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=True, prefetch_factor=args.prefetch_factor)
+        sampler = RandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
+        train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=False, prefetch_factor=args.prefetch_factor)
+        train_loader = InfiniteLoader(train_loader)
         if check_data_dist:
             train_loader = RevealIterator(train_loader, 'train')
             train_reveal_loader = train_loader
@@ -398,6 +398,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 ## Make Loader
                 if rank == DATA_RANK['valid']:
                     valid_data = valid_datas[i_data]
+                    os.environ['EPOCH'] = '0'
                     valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_data, batch_size=None, 
                             shuffle=True if check_data_dist else False, num_workers=args.num_workers, 
                             pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
