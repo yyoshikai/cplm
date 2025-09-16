@@ -1,5 +1,5 @@
 import sys, os, logging
-from logging import Logger, Formatter, StreamHandler, FileHandler, Filter, LogRecord, getLogger
+from logging import Logger, Formatter, Handler, StreamHandler, FileHandler, Filter, LogRecord, getLogger
 from collections.abc import Callable
 from tqdm import tqdm as _tqdm
 
@@ -45,21 +45,22 @@ def get_logger(name=None, level=logging.DEBUG, stream=False) -> logging.Logger:
     return logger
 
 def add_file_handler(logger: Logger, path: str, level=logging.DEBUG, mode: str='w', 
-        fmt: str=DEFAULT_FMT, datefmt=DEFAULT_DATEFMT, keep_level: bool=False):
+        fmt: str=DEFAULT_FMT, datefmt=DEFAULT_DATEFMT, keep_level: bool=False) -> FileHandler:
     handler = FileHandler(path, mode)
     handler.setFormatter(Formatter(fmt, datefmt, style='{'))
     handler.setLevel(level)
     if logger.level > level and not keep_level:
         logger.setLevel(level)
     logger.addHandler(handler)
+    return handler
 
 def add_stream_handler(logger: Logger, level=logging.INFO, tqdm: bool=True, 
         fmt: str=DEFAULT_FMT, datefmt: str=DEFAULT_DATEFMT, add=False, 
-        keep_level: bool=False):
+        keep_level: bool=False) -> Handler:
     if not add:
         for handler in logger.handlers:
             if isinstance(handler, (TqdmHandler, StreamHandler)):
-                return
+                return handler
     if logger.level > level and not keep_level:
         logger.setLevel(level)
     if tqdm:
@@ -69,3 +70,5 @@ def add_stream_handler(logger: Logger, level=logging.INFO, tqdm: bool=True,
         handler.setLevel(level)
     handler.setFormatter(Formatter(fmt, datefmt, style='{'))
     logger.addHandler(handler)
+
+    return handler

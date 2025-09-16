@@ -57,30 +57,40 @@ def set_sdp_kernel(sdp_kernel: str|None):
         torch.backends.cuda.enable_mem_efficient_sdp(sdp_kernel in ['EFFICIENT', 'ALL'])
 
 def get_train_logger(result_dir):
+
+    # ddp info
     rank = dist.get_rank()
     size = dist.get_world_size()
     is_main = rank == MAIN_RANK % size
+
+
     fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
     os.makedirs(f"{result_dir}/logs/debug", exist_ok=True)
     os.makedirs(f"{result_dir}/logs/data_examples", exist_ok=True)
 
     # main logger
     logger = getLogger()
-    add_stream_handler(logger, logging.INFO, fmt=fmt)
-    add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
+    token_logger = getLogger('dexs')
+    token_logger.propagate = False
+    unk_logger = getLogger('unk')
+    unk_logger.propagate = False
+
+    # stream & info
+    stream_handler = add_stream_handler(logger, logging.INFO, fmt=fmt)
+    info_handler = add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
     if not is_main:
-        logger.handlers[0].addFilter(lambda record: not getattr(record, 'no_dup', False))
+        for handler in [stream_handler, info_handler]:
+            handler.addFilter(lambda record: not getattr(record, 'no_dup', False))
+    
+    # debug
     add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", fmt=fmt, mode='a')
 
-    # data logger
-    token_logger = getLogger('dexs')
+    # tokens
+    add_file_handler(logger, f"{result_dir}/logs/data_examples/{rank}.log", fmt=fmt, mode='a')
     add_file_handler(token_logger, f"{result_dir}/logs/data_examples/{rank}.log", fmt=fmt, mode='a')
-    token_logger.propagate = False
 
-    # unknown logger
-    unk_logger = getLogger('unk')
+    # unknown tokens
     add_file_handler(unk_logger, f"{result_dir}/logs/unknowns.log", fmt=fmt, mode='a')
-    unk_logger.propagate = False
 
     # third-party modules
     set_rdkit_logger()
@@ -125,7 +135,7 @@ def add_train_args(parser: ArgumentParser):
 
     ## test
     parser.add_argument("--test", action='store_true')
-    parser.add_argument("--test-data", action='store_true')
+    parser.add_argument("--check", nargs='*', default=[])
 
 def set_default_args(args: Namespace):
     if args.eval_opt is None:
@@ -295,7 +305,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     if rank == DATA_RANK['train']:
         sampler = InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
         train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=True, prefetch_factor=args.prefetch_factor)
-        train_loader = RevealIterator(train_loader, 'train_loader')
+        train_loader = RevealIterator(train_loader, 'train_loader', logger)
         train_reveal_loader = train_loader
     else:
         train_loader = None
@@ -390,7 +400,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                     valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_data, batch_size=None, shuffle=True, # TODO: False 
                             num_workers=args.num_workers, pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
                     if valid_is_starting:
-                        valid_loader = RevealIterator(valid_loader, f'valid[{data_name}] loader')
+                        valid_loader = RevealIterator(valid_loader, f'valid[{data_name}] loader', logger)
                         valid_reveal_loader = valid_loader
                 else:
                     valid_loader = None

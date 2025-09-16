@@ -3,7 +3,7 @@ import multiprocessing as mp
 from functools import lru_cache
 from typing import TypeVar, Generic, Optional
 from collections.abc import Callable, Iterable
-from logging import getLogger
+from logging import getLogger, Logger
 
 import numpy as np
 import torch
@@ -206,11 +206,12 @@ class WorkerAggregator(Generic[T_co]):
 
 
 class RevealIterator(Iterable[T]):
-    logger = getLogger(f'dexs.{__module__}.{__qualname__}')
-    def __init__(self, iterable: Iterable[T], name):
+    def __init__(self, iterable: Iterable[T], name, logger: Logger=getLogger(
+                f'dexs.{__module__}.{__qualname__}')):
         self.iterable = iterable
         self.name = name
         self.enabled = True
+        self.logger = logger
 
     def __iter__(self):
         shapes = []
