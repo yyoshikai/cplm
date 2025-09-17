@@ -23,7 +23,6 @@ from src.data.protein import ProteinProcessDataset, CoordFollowDataset
 from src.data import CacheDataset
 from src.model import Model
 from src.model.mamba import MambaModel2
-from src.utils import set_logtime
 from src.utils.path import timestamp
 from src.utils.ddp import dist_broadcast_tensor, dist_broadcast_object
 from src.train import train, add_train_args, set_default_args, get_train_logger, sync_train_dir, log_dataset, DATA_RANK
@@ -63,9 +62,7 @@ set_default_args(args)
 if args.test: args.studyname+='_test'
 log_step = 1 if args.test else 10000
 
-
 batch_first = False
-set_logtime(args.logtime)
 
 ## DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo', )

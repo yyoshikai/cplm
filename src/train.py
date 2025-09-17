@@ -1,6 +1,7 @@
 import os, math, yaml, psutil, logging
 import itertools as itr
 from argparse import ArgumentParser, Namespace
+from collections.abc import Callable
 from logging import Logger, getLogger
 from typing import Literal
 import numpy as np
@@ -116,11 +117,9 @@ def add_train_args(parser: ArgumentParser):
     # environments
     parser.add_argument("--eval-opt", type=int, required=True) # temp
     parser.add_argument("--patience-opt", type=int, required=True)
-    parser.add_argument("--patience-eval", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--pin-memory", action='store_true')
     parser.add_argument("--prefetch-factor", type=int)
-    parser.add_argument("--logtime", action='store_true')
     parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
     ## hardware
@@ -228,17 +227,17 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
-def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch: Tensor, weight_batch: Tensor,
-            voc_encoder: VocEncoder, step: int, check_data_dist: bool):
+def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch: Tensor, weight_batch: Tensor, voc_encoder: VocEncoder, step: int, check_data_dist: bool, gpuuse_getter: Callable[[int, int], float]):
 
     # weight
     weight_items = weight_batch.sum(dim=0).tolist()
-    logger.debug(f"{data_name}[{step}] batch shape={tuple(target_batch.shape)}")
+    length, batch_size = target_batch.shape
+    gpuuse_gb = gpuuse_getter(batch_size, length) / (2**30)
+    logger.debug(f"{data_name}[{step}] batch shape={tuple(target_batch.shape)} GPU use={gpuuse_gb}")
     if check_data_dist:
         logger.debug(f"{data_name}[{step}] weights={weight_items}")
 
     # tokens
-    batch_size = weight_batch.shape[1]
     if batch_size > 10: 
         rstate = np.random.RandomState(step)
         idxs = np.sort(rstate.choice(batch_size, size=10, replace=False))
