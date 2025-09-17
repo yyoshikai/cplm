@@ -56,6 +56,7 @@ parser.add_argument("--coord-follow-atom", action='store_true')
 
 ## model
 parser.add_argument('--mamba', action='store_true')
+parser.add_argument('--n-layer', type=int)
 
 args = parser.parse_args()
 set_default_args(args)
@@ -200,9 +201,12 @@ train2valid_r = train_data_sizes.to(torch.float) / valid_data_sizes.to(torch.flo
 
 # model
 if args.mamba:
-    model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
+    kwargs = {}
+    if args.n_layer is not None: kwargs['num_hidden_layers'] = args.n_layer
+    model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
 else:
-    model = Model(12, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+    num_layers = args.n_layer or 12
+    model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
 train(args, train_data, valid_datas, data_names, train2valid_r, voc_encoder, model, result_dir, device, log_step)
 
 dist.destroy_process_group()
