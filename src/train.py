@@ -128,6 +128,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--gpu-size-gb", type=float, required=True)
     ## log interval
     parser.add_argument("--tokenizer-log-interval", type=int)
+    parser.add_argument("--log-large-freq", type=int)
     parser.add_argument("--log-step", type=int)
     parser.add_argument("--log-opt", type=int)
 
@@ -144,6 +145,8 @@ def set_default_args(args: Namespace):
     # log interval
     if args.tokenizer_log_interval is None:
         args.tokenizer_log_interval = int(1e6) if args.test else int(1e8)
+    if args.log_large_freq is None:
+        args.log_large_freq = 1 if args.test else 100000
     if args.log_step is None:
         args.log_step = 1 if args.test else 50000
     if args.log_opt is None:
@@ -329,7 +332,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         return len(item[0])
     
     ## collated data loader
-    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, args.gpu_size, device, DATA_RANK['train'])
+    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, args.gpu_size, device, args.log_large_freq, DATA_RANK['train'])
     train_iter = train_loader.__iter__()
 
     # Model
@@ -408,7 +411,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                             valid_reveal_loader = valid_loader
                 else:
                     valid_loader = None
-                valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, get_length, args.gpu_size, device, DATA_RANK['valid'])
+                valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, get_length, args.gpu_size, device, args.log_large_freq if valid_is_starting else math.inf, DATA_RANK['valid'])
 
                 ## Accumulate losses
                 process_weight = torch.tensor(0.0, device=device, dtype=torch.float)

@@ -1,4 +1,4 @@
-import os
+import os, math
 import itertools as itr
 from bisect import bisect_right
 from collections.abc import Callable, Iterable, Generator
@@ -64,10 +64,10 @@ class InfiniteLoader(Iterable[T_in]):
 
 class StringCollateIterator(Iterable[list[T_in]]):
     logger = getLogger(f"{__module__}.{__qualname__}")
-    data_logger = getLogger(f"dexs.{__module__}.{__qualname__}")
     def __init__(self, loader: Iterable[T_in], n_batch: int, gpu_size: float, 
             gpuuse_getter: Callable[[int, int], float], 
-            length_getter: Callable[[T_in], int], 
+            length_getter: Callable[[T_in], int],
+            log_large_freq: int|float, 
             large_item_file: str|None=None):
 
         self.loader = loader
@@ -75,9 +75,13 @@ class StringCollateIterator(Iterable[list[T_in]]):
         self.gpu_size = gpu_size
         self.gpuuse_getter = gpuuse_getter
         self.length_getter = length_getter
+
+        # logging
         self.large_item_file = large_item_file
-        with open(self.large_item_file, 'w') as f:
-            f.write(f"i_item,size\n")
+        if large_item_file is not None:
+            with open(self.large_item_file, 'w') as f:
+                f.write(f"i_item,size\n")
+        self.log_large_freq = log_large_freq
 
     def batch_data_list(self, data_list: list[T_in]) -> tuple[list[list[T_in]], bool]:
         datas = []
@@ -92,13 +96,12 @@ class StringCollateIterator(Iterable[list[T_in]]):
         data_lists, can_be_batched = self.batch_data_list(data_list)
         assert can_be_batched
         return data_lists
-
     def __iter__(self) -> Generator[Tensor, None, None]:
         data_list = []
         loader_iter = self.loader.__iter__()
         next_item = None
         n_large_item = n_item = 0
-        n_item_next_log = 1
+        n_item_last_log = 0
         while True:
             # get next item
             if next_item is None:
@@ -116,14 +119,15 @@ class StringCollateIterator(Iterable[list[T_in]]):
                 if self.large_item_file is not None:
                     with open(self.large_item_file, 'a') as f:
                         f.write(f"{n_item-1},{next_length}")
+                
+                # Log n_large_item
+                if n_item - n_item_last_log >= self.log_large_freq:
+                    self.logger.info(f"{n_large_item}/{n_item} was too large.")
+                    n_item_last_log = n_item
                 n_large_item += 1
                 next_item = None
                 continue
             
-            # Log n_large_item
-            if n_item == n_item_next_log:
-                self.logger.info(f"{n_large_item}/{n_item} was too large.")
-                n_item_next_log *= 2
             
             # insert size
             i = bisect_right(data_list, -next_length, key=lambda x: -self.length_getter(x))
@@ -137,6 +141,9 @@ class StringCollateIterator(Iterable[list[T_in]]):
             else:
                 yield from self.collates(data_list)
                 data_list = []
+        if self.log_large_freq < math.inf:
+            self.logger.info(f"{n_large_item}/{n_item} was too large.")
+
 
     def get_batch_size(self, length: int):
         return solve_increasing_fn_left(lambda bsz: self.gpuuse_getter(bsz, length)-self.gpu_size, 16)
@@ -145,8 +152,8 @@ class StringCollateIterator(Iterable[list[T_in]]):
 
 class DDPStringCollateLoader(Iterable[T_out]):
     logger = getLogger(f"{__module__}.{__qualname__}")
-    data_logger = getLogger(f"dexs.{__module__}.{__qualname__}")
-    def __init__(self, loader: Optional[Iterable[T_in]], collator: Callable[[T_in], T_out]|None, gpuuse_getter: Callable[[int, int], float]|None, length_getter: Callable[[T_in], int]|None, gpu_size: float, device: torch.device, main_rank: int=0):
+    def __init__(self, loader: Optional[Iterable[T_in]], collator: Callable[[T_in], T_out], gpuuse_getter: Callable[[int, int], float], length_getter: Callable[[T_in], int], gpu_size: float, device: torch.device, log_large_freq: int|float, main_rank: int=0, 
+    large_item_file: str|None=None):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
@@ -155,7 +162,8 @@ class DDPStringCollateLoader(Iterable[T_out]):
         self.is_main = self.rank == self.main_rank
 
         if self.is_main:
-            self.batch_iterator = StringCollateIterator(loader, self.size, gpu_size, gpuuse_getter, length_getter)
+            self.batch_iterator = StringCollateIterator(loader, self.size, 
+                    gpu_size, gpuuse_getter, length_getter, log_large_freq, large_item_file)
         else:
             self.batch_iterator = itr.repeat(None)
 
