@@ -584,7 +584,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         ## Log grad
         if check_grad:
             name, param = next(model.named_parameters())
-            logger.debug(f"step grad[{name}][{step}]={param.grad[:5]}")
+            logger.debug(f"step grad[{name}][{step}]={param.grad.ravel()[:5]}")
 
         ## End starting
         if step+1 == 5: 
@@ -607,7 +607,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             optimizer.step()
             if check_grad:
                 name, param = next(model.named_parameters())
-                logger.debug(f"opt grad[{name}][{len(opt2loss)}]={param.grad[:5]}")
+                logger.debug(f"opt grad[{name}][{len(opt2loss)}]={param.grad.ravel()[:5]}")
 
             optimizer.zero_grad()
 
