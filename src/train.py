@@ -39,7 +39,7 @@ def sync_train_dir(result_dir):
     main_rank = MAIN_RANK % size
     if dist.get_rank() == main_rank:
         cleardir(result_dir)
-        for subdir in ['models', 'opts', 'vals', 'optimizers', 'steps/times']:
+        for subdir in ['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log']:
             os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
         result_dirs = [result_dir]
     else:
@@ -66,7 +66,7 @@ def get_train_logger(result_dir):
 
     fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
     os.makedirs(f"{result_dir}/logs/debug", exist_ok=True)
-    os.makedirs(f"{result_dir}/logs/data_examples", exist_ok=True)
+    os.makedirs(f"{result_dir}/data/example_log", exist_ok=True)
 
     # main logger
     logger = getLogger()
@@ -86,8 +86,8 @@ def get_train_logger(result_dir):
     add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", fmt=fmt, mode='a')
 
     # tokens
-    add_file_handler(logger, f"{result_dir}/logs/data_examples/{rank}.log", fmt=fmt, mode='a')
-    add_file_handler(token_logger, f"{result_dir}/logs/data_examples/{rank}.log", fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
+    add_file_handler(token_logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
 
     # unknown tokens
     add_file_handler(unk_logger, f"{result_dir}/logs/unknowns.log", fmt=fmt, mode='a')
@@ -332,7 +332,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         return len(item[0])
     
     ## collated data loader
-    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, args.gpu_size, device, args.log_large_freq, DATA_RANK['train'])
+    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, args.gpu_size, device, args.log_large_freq, DATA_RANK['train'], f"{result_dir}/data/train_large_items.csv")
     train_iter = train_loader.__iter__()
 
     # Model
