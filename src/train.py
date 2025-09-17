@@ -2,6 +2,7 @@ import os, math, yaml, psutil, logging
 import itertools as itr
 from argparse import ArgumentParser, Namespace
 from collections.abc import Callable
+from contextlib import nullcontext
 from logging import Logger, getLogger
 from typing import Literal
 import numpy as np
@@ -122,6 +123,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--prefetch-factor", type=int)
     parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
+    parser.add_argument("--sync-every-step", action='store_true')
     ## hardware
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
@@ -134,7 +136,7 @@ def add_train_args(parser: ArgumentParser):
 
     ## test
     parser.add_argument("--test", action='store_true')
-    parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 'data_dist', 'data_epoch', 'data_loading'])
+    parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 'data_dist', 'data_epoch', 'data_loading', 'grad'])
 
 def set_default_args(args: Namespace):
     if args.eval_opt is None:
@@ -254,7 +256,7 @@ def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch
         msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
         token_logger.debug(msg)
 
-def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], data_names: list[str], valid2train_r: Tensor, voc_encoder: VocEncoder, model: Model, result_dir: str, device: torch.device, log_step):
+def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], data_names: list[str], valid2train_r: Tensor, voc_encoder: VocEncoder, model, result_dir: str, device: torch.device, log_step):
     global DATA_RANK, MAIN_RANK, SAVE_RANK
 
     # Environment
@@ -298,6 +300,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
     ## checks
     check_data_dist = 'data_dist' in args.check
+    check_grad = 'grad' in args.check
     
     # Model
     model.to(torch.bfloat16)
@@ -517,15 +520,27 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         step_timer.start('get_batch')
         token_batch, weight_batch = train_iter.__next__()
 
+        ## Add step info 1
         batch_sizes.append(token_batch.shape[1])
         max_lens.append(token_batch.shape[0])
+        worker_step_weight = weight_batch.sum().item()
+        worker_step_weights.append(worker_step_weight)
+
+        ## If do_opt, forward will have to sync gradients
+        worker_opt_accum_weight += worker_step_weight
+        opt_accum_weight = reduce_float(worker_opt_accum_weight, device)
+        do_opt = opt_accum_weight >= args.weight_per_opt
         
         ## forward
         step_timer.start('forward')
-        with torch.autocast('cuda', torch.bfloat16):
-            target = token_batch[1:]
-            pred = model(token_batch[:-1])
-            loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
+        with nullcontext() if do_opt or args.sync_every_step else model.no_sync():
+            with torch.autocast('cuda', torch.bfloat16):
+                target = token_batch[1:]
+                pred = model(token_batch[:-1])
+                loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
+
+            step_timer.start('backward')
+            loss.backward()
 
         ## Log target for final check
         step_timer.start('log_target')
@@ -534,16 +549,10 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             log_batch('train', logger, token_logger, target, weight_batch, 
                     voc_encoder, step, check_data_dist, get_gpuuse)
         
-        step_timer.start('backward')
-        loss.backward()
-
-        ## add step record
+        ## add step info 2
         worker_step_loss = loss.item()
-        worker_step_weight = weight_batch.sum().item()
         worker_step_losses.append(worker_step_loss)
-        worker_step_weights.append(worker_step_weight)
         worker_opt_accum_loss += worker_step_loss
-        worker_opt_accum_weight += worker_step_weight
 
         ## check nan
         if args.reset_nan_grad:
@@ -572,6 +581,11 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         if is_starting:
             logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
 
+        ## Log grad
+        if check_grad:
+            name, param = next(model.named_parameters())
+            logger.debug(f"step grad[{name}][{step}]={param.grad[:5]}")
+
         ## End starting
         if step+1 == 5: 
             step_timer.log_interval = 10000
@@ -584,15 +598,17 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             logger.info(f"{step+1} step finished.", **NO_DUP)
         
         # opt
-        opt_accum_weight = reduce_float(worker_opt_accum_weight, device)
-        if opt_accum_weight >= args.weight_per_opt:
-
+        if do_opt:
             ## optimizer
             step_timer.start('optim')
             if args.clip_grad_value is not None:
                 torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
+            if check_grad:
+                name, param = next(model.named_parameters())
+                logger.debug(f"opt grad[{name}][{len(opt2loss)}]={param.grad[:5]}")
+
             optimizer.zero_grad()
 
             ## sum opt_accum_loss
