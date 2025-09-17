@@ -134,7 +134,7 @@ def add_train_args(parser: ArgumentParser):
 
     ## test
     parser.add_argument("--test", action='store_true')
-    parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 'data_dist', 'data_epoch'])
+    parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 'data_dist', 'data_epoch', 'data_loading'])
 
 def set_default_args(args: Namespace):
     if args.eval_opt is None:
@@ -306,7 +306,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
     # Make timer here to send to DDPStringCollateLoader
     step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv",
-            log_interval=1, desc='step', disable_bar=True)
+            log_interval=1 if 'data_loading' in args.check else 100, desc='step', disable_bar=True)
 
     # DataLoader
     if rank == DATA_RANK['train']:
