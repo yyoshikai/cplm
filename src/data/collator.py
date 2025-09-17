@@ -115,6 +115,7 @@ class StringCollateIterator(Iterable[list[T_in]]):
                 try:
                     next_item = loader_iter.__next__()
                 except StopIteration:
+                    self.start('output')
                     if len(data_list) > 0:
                         yield from self.collates(data_list)
                     break
@@ -149,6 +150,7 @@ class StringCollateIterator(Iterable[list[T_in]]):
                 data_list = next_data_list
                 next_item = None
             else:
+                self.start('output')
                 yield from self.collates(data_list)
                 data_list = []
         if self.log_large_freq < math.inf:

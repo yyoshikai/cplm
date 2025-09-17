@@ -207,7 +207,7 @@ def log_dataset(logger: Logger, split: str, datasets: list[Dataset]):
         if isinstance(data, RepeatDataset):
             augment = data.n_repeat
             data = data.net_dataset
-        elif isinstance(data, Subset):
+        elif type(data) == Subset:
             augment = len(data) / len(data.dataset) 
             data = data.dataset
         augments.append(augment)
