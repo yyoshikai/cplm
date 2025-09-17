@@ -11,12 +11,8 @@ import pandas as pd
 import torch.nn as nn
 import torch
 from torch import Tensor
-try:
-    from transformers.models.mamba.configuration_mamba import MambaConfig
-    from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
-except ImportError:
-    MambaCache = object
-    pass
+from transformers.models.mamba.configuration_mamba import MambaConfig
+from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
 from transformers.generation.streamers import BaseStreamer
 from .transformer import save_vocs, align_embedding
 from ..utils.memory import get_mems
