@@ -187,3 +187,9 @@ def git_commit() -> bool:
 def git_get_hash() -> str:
     p = subprocess.run('git rev-parse --short HEAD', shell=True, capture_output=True)
     return p.stdout.decode().strip()
+
+def should_show(n: int, max_interval: int):
+    if n < max_interval:
+        return (n&(n-1)) == 0 # True if n == 2**x
+    else:
+        return n % max_interval == 0
