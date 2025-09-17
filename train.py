@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch.utils.data import ConcatDataset, StackDataset, Subset
-WORKDIR = os.environ.get('WORKDIR', "/workspace")
+WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 sys.path.append(WORKDIR)
 
 from src.data import RepeatDataset

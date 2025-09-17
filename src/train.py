@@ -338,7 +338,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     ## collated data loader
     train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, 
             args.gpu_size, device, args.log_large_freq, DATA_RANK['train'], 
-            f"{result_dir}/data/train_large_items.csv", step_timer)
+            f"{result_dir}/data/train_large_items.csv", step_timer if 'data_loading' in args.check else None)
     train_iter = train_loader.__iter__()
 
     # Model
