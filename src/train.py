@@ -150,7 +150,7 @@ def set_default_args(args: Namespace):
     if args.log_step is None:
         args.log_step = 1 if args.test else 50000
     if args.log_opt is None:
-        args.log_opt = 1 if args.test else min(1, args.eval_opt//5)
+        args.log_opt = 1 if args.test else max(1, args.eval_opt//5)
 
     # post_init
     args.gpu_size = args.gpu_size_gb * (2**30)
