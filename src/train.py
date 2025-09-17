@@ -143,7 +143,7 @@ def set_default_args(args: Namespace):
 
     # log interval
     if args.tokenizer_log_interval is None:
-        args.tokenizer_log_interval = int(1e6) if args.test else int(1e7)
+        args.tokenizer_log_interval = int(1e6) if args.test else int(1e8)
     if args.log_step is None:
         args.log_step = 1 if args.test else 50000
     if args.log_opt is None:
@@ -269,8 +269,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
     ## save args
     if is_main:
-        with open(f"{result_dir}/config.yaml", 'w') as f:
-            yaml.dump(vars(args), f)
+        with open(f"{result_dir}/args.yaml", 'w') as f:
+            yaml.dump({**vars(args), 'ddp_size': size}, f)
 
     ## commit & log hash of git
     if is_main:
@@ -472,7 +472,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             dfstep.to_csv(f"{result_dir}/steps/{rank}.csv")
             dfopt = pd.DataFrame({
                 'loss': opt2loss,
-                'n_token': opt2weight,
+                'weight': opt2weight,
                 'lr': opt2lr,
                 'memory': opt2mem
             })

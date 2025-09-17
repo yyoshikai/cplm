@@ -51,7 +51,7 @@ parser.add_argument("--no-pocket-heavy-atom", action='store_true')
 parser.add_argument("--no-pocket-heavy-coord", action='store_true')
 parser.add_argument("--pocket-h-atom", action='store_true') # Datasetによっては無効？
 parser.add_argument("--pocket-h-coord", action='store_true') # Datasetによっては無効？
-parser.add_argument("--coord-range", type=int, default=200)
+parser.add_argument("--coord-range", type=int, default=250)
 parser.add_argument("--coord-follow-atom", action='store_true')
 
 ## model
@@ -80,7 +80,7 @@ head, tail = os.path.split(result_dir)
 tail = f"{timestamp()}_{tail}"
 result_dir = os.path.join(head, tail)
 ### sync
-result_dir = sync_train_dir(f"training/results/{timestamp()}_{args.studyname}")
+result_dir = sync_train_dir(result_dir)
 
 ## logger
 root_logger, process_logger, data_logger = get_train_logger(result_dir)
@@ -134,7 +134,7 @@ for split in ['valid', 'train']:
                 mol = raw
                 smi, coord = MolProcessDataset(mol, args.seed+d_seed, 
                     h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, 
-                    randomize=args.lig_randomize, sample_save_dir=sample_save_dir).untuple()
+                    randomize=args.lig_randomize, sample_save_dir=None).untuple()
                 coord = CoordTransformDataset(coord, base_seed=args.seed+d_seed, 
                     normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
 

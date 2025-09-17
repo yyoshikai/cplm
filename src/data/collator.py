@@ -67,13 +67,17 @@ class StringCollateIterator(Iterable[list[T_in]]):
     data_logger = getLogger(f"dexs.{__module__}.{__qualname__}")
     def __init__(self, loader: Iterable[T_in], n_batch: int, gpu_size: float, 
             gpuuse_getter: Callable[[int, int], float], 
-            length_getter: Callable[[T_in], int]):
+            length_getter: Callable[[T_in], int], 
+            large_item_file: str|None=None):
 
         self.loader = loader
         self.n_batch = n_batch
         self.gpu_size = gpu_size
         self.gpuuse_getter = gpuuse_getter
         self.length_getter = length_getter
+        self.large_item_file = large_item_file
+        with open(self.large_item_file, 'w') as f:
+            f.write(f"i_item,size\n")
 
     def batch_data_list(self, data_list: list[T_in]) -> tuple[list[list[T_in]], bool]:
         datas = []
@@ -94,6 +98,7 @@ class StringCollateIterator(Iterable[list[T_in]]):
         loader_iter = self.loader.__iter__()
         next_item = None
         n_large_item = n_item = 0
+        n_item_next_log = 1
         while True:
             # get next item
             if next_item is None:
@@ -108,11 +113,18 @@ class StringCollateIterator(Iterable[list[T_in]]):
             # check maximum size
             next_length = self.length_getter(next_item)
             if self.gpuuse_getter(1, next_length) > self.gpu_size:
+                if self.large_item_file is not None:
+                    with open(self.large_item_file, 'a') as f:
+                        f.write(f"{n_item-1},{next_length}")
                 n_large_item += 1
-                self.logger.warning(f"Item was too large even for 1 item per batch({next_length}), and not used ({n_large_item}/{n_item}).")
                 next_item = None
                 continue
-
+            
+            # Log n_large_item
+            if n_item == n_item_next_log:
+                self.logger.info(f"{n_large_item}/{n_item} was too large.")
+                n_item_next_log *= 2
+            
             # insert size
             i = bisect_right(data_list, -next_length, key=lambda x: -self.length_getter(x))
             next_data_list = data_list[:i]+[next_item]+data_list[i:] # most slow
