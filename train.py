@@ -72,7 +72,14 @@ torch.cuda.set_device(rank % torch.cuda.device_count())
 device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 DATA_RANK = {k: r % size for k, r in DATA_RANK.items()}
+
 ## make result dir
+result_dir = os.path.join('training', 'results', args.studyname)
+### Add timestamp
+head, tail = os.path.split(result_dir)
+tail = f"{timestamp()}_{tail}"
+result_dir = os.path.join(head, tail)
+### sync
 result_dir = sync_train_dir(f"training/results/{timestamp()}_{args.studyname}")
 
 ## logger
