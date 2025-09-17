@@ -289,6 +289,10 @@ class Model(nn.Module):
         DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(self, ['sin', 'cos', 'mask'])        
         self.pos_buffer_len = pos_buffer_len
 
+        # Log # of make_pos_buffer
+        self.n_make_pos_buffer = 0
+        self.n_forward = 0
+
 
         self._register_state_dict_hook(save_vocs)
         self._register_load_state_dict_pre_hook(partial(align_embedding, 
@@ -298,8 +302,6 @@ class Model(nn.Module):
         
 
     def make_pos_buffer(self, length):
-        if self.pos_buffer_len is not None:
-            self.data_logger.debug(f"New pos buffer was created: {length}.")
         position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
                 for pos in range(length)])
         device = self.embedding.weight.device
@@ -311,12 +313,16 @@ class Model(nn.Module):
         
 
     def forward(self, src: torch.Tensor, get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
+        self.n_forward += 1
         x = self.embedding(src)
         L = x.shape[0]
         if L > self.pos_buffer_len:
             sin, cos, mask = self.make_pos_buffer(L)
+            self.n_make_pos_buffer += 1
         else:
             sin, cos, mask = self.sin[:L], self.cos[:L], self.mask[:L, :L]
+        if (self.n_forward&(self.n_forward-1)) == 0:
+            self.logger.debug(f"make_pos_buffer call={self.n_make_pos_buffer}/{self.n_forward}")
         output = x
         for layer in self.layers:
             output = layer(output, src_mask=mask, sin=sin, cos=cos)

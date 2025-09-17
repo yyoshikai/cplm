@@ -304,6 +304,10 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     model.to(device)
     model = DistributedDataParallel(model)
 
+    # Make timer here to send to DDPStringCollateLoader
+    step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv",
+            log_interval=1, desc='step', disable_bar=True)
+
     # DataLoader
     if rank == DATA_RANK['train']:
         sampler = RandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
@@ -332,7 +336,9 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         return len(item[0])
     
     ## collated data loader
-    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, args.gpu_size, device, args.log_large_freq, DATA_RANK['train'], f"{result_dir}/data/train_large_items.csv")
+    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, 
+            args.gpu_size, device, args.log_large_freq, DATA_RANK['train'], 
+            f"{result_dir}/data/train_large_items.csv", step_timer)
     train_iter = train_loader.__iter__()
 
     # Model
@@ -381,14 +387,12 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
   
     logger.info("Training started.", **NO_DUP)
-    for step in (step_pbar:=TimerTqdm(itr.count(),
-            time_path=f"{result_dir}/steps/times/{rank}.csv",
-            log_interval=1, desc='step', disable_bar=True)):
+    for step in step_timer:
         is_starting = step < 5
 
         # evaluate & save
         if opt_to_eval == 0:
-            step_pbar.start('evaluation')
+            step_timer.start('evaluation')
             opt_step = len(opt2loss)
             valid_is_starting = len(val2mean_loss) <= 1
             
@@ -510,27 +514,27 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         if is_starting:
             torch.cuda.reset_peak_memory_stats(device)
         ## get batch
-        step_pbar.start('get_batch')
+        step_timer.start('get_batch')
         token_batch, weight_batch = train_iter.__next__()
 
         batch_sizes.append(token_batch.shape[1])
         max_lens.append(token_batch.shape[0])
         
         ## forward
-        step_pbar.start('forward')
+        step_timer.start('forward')
         with torch.autocast('cuda', torch.bfloat16):
             target = token_batch[1:]
             pred = model(token_batch[:-1])
             loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
 
         ## Log target for final check
-        step_pbar.start('log_target')
+        step_timer.start('log_target')
         if is_starting:
             token_logger.debug(f"Train step {step} data:")
             log_batch('train', logger, token_logger, target, weight_batch, 
                     voc_encoder, step, check_data_dist, get_gpuuse)
         
-        step_pbar.start('backward')
+        step_timer.start('backward')
         loss.backward()
 
         ## add step record
@@ -570,7 +574,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
         ## End starting
         if step+1 == 5: 
-            step_pbar.log_interval = 10000
+            step_timer.log_interval = 10000
             if check_data_dist:
                 if rank == DATA_RANK['train']:
                     train_reveal_loader.enabled = False
@@ -584,7 +588,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         if opt_accum_weight >= args.weight_per_opt:
 
             ## optimizer
-            step_pbar.start('optim')
+            step_timer.start('optim')
             if args.clip_grad_value is not None:
                 torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)

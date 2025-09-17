@@ -6,10 +6,11 @@ from logging import getLogger
 from typing import Optional, TypeVar
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset, DataLoader, RandomSampler
+from torch.utils.data import DataLoader
 
 import torch.distributed as dist
 from ..utils.ddp import dist_send_tensor, dist_recv_tensor
+from ..utils.time import TimerTqdm
 
 T = TypeVar('T')
 T1 = TypeVar('T')
@@ -68,13 +69,15 @@ class StringCollateIterator(Iterable[list[T_in]]):
             gpuuse_getter: Callable[[int, int], float], 
             length_getter: Callable[[T_in], int],
             log_large_freq: int|float, 
-            large_item_file: str|None=None):
+            large_item_file: str|None=None, 
+            timer: TimerTqdm|None=None):
 
         self.loader = loader
         self.n_batch = n_batch
         self.gpu_size = gpu_size
         self.gpuuse_getter = gpuuse_getter
         self.length_getter = length_getter
+        self.timer = timer
 
         # logging
         self.large_item_file = large_item_file
@@ -91,6 +94,9 @@ class StringCollateIterator(Iterable[list[T_in]]):
             data_list = data_list[batch_size:]
             if len(data_list) == 0: break
         return datas, len(data_list) == 0
+    
+    def start(self, name):
+        if self.timer is not None: self.timer.start(f"sc_{name}")
 
     def collates(self, data_list: list[T_in]) -> list[T_out]:
         data_lists, can_be_batched = self.batch_data_list(data_list)
@@ -104,6 +110,7 @@ class StringCollateIterator(Iterable[list[T_in]]):
         n_item_last_log = 0
         while True:
             # get next item
+            self.start('get_next_item')
             if next_item is None:
                 try:
                     next_item = loader_iter.__next__()
@@ -114,6 +121,7 @@ class StringCollateIterator(Iterable[list[T_in]]):
                 n_item += 1
             
             # check maximum size
+            self.start('check_max_size')
             next_length = self.length_getter(next_item)
             if self.gpuuse_getter(1, next_length) > self.gpu_size:
                 if self.large_item_file is not None:
@@ -130,10 +138,12 @@ class StringCollateIterator(Iterable[list[T_in]]):
             
             
             # insert size
+            self.start('insert_size')
             i = bisect_right(data_list, -next_length, key=lambda x: -self.length_getter(x))
             next_data_list = data_list[:i]+[next_item]+data_list[i:] # most slow
 
             # check more data can be added
+            self.start('check_add')
             _, can_be_batched = self.batch_data_list(next_data_list)
             if can_be_batched:
                 data_list = next_data_list
@@ -153,17 +163,18 @@ class StringCollateIterator(Iterable[list[T_in]]):
 class DDPStringCollateLoader(Iterable[T_out]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, loader: Optional[Iterable[T_in]], collator: Callable[[T_in], T_out], gpuuse_getter: Callable[[int, int], float], length_getter: Callable[[T_in], int], gpu_size: float, device: torch.device, log_large_freq: int|float, main_rank: int=0, 
-    large_item_file: str|None=None):
+    large_item_file: str|None=None, timer: TimerTqdm|None=None):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
         self.device = device
         self.collator = collator
         self.is_main = self.rank == self.main_rank
+        self.timer = timer
 
         if self.is_main:
             self.batch_iterator = StringCollateIterator(loader, self.size, 
-                    gpu_size, gpuuse_getter, length_getter, log_large_freq, large_item_file)
+                    gpu_size, gpuuse_getter, length_getter, log_large_freq, large_item_file, timer)
         else:
             self.batch_iterator = itr.repeat(None)
 
@@ -172,11 +183,13 @@ class DDPStringCollateLoader(Iterable[T_out]):
             assert len(batches) <= self.size
 
             # Send batch info
+            self.start('send_batch_info')
             batch_infos = [torch.tensor(0 if rank < len(batches) else 1, device=self.device) 
                     for rank in range(self.size)]
             dist.scatter(torch.tensor(0, device=self.device), batch_infos, src=self.main_rank)
 
             # Send batch
+            self.start('send_batch')
             this_data = None
             for dst_rank, dst_data in enumerate(batches):
                 data = self.collator(dst_data)
@@ -205,17 +218,23 @@ class DDPStringCollateLoader(Iterable[T_out]):
                 this_data = None
             return this_data
 
+    def start(self, name: str):
+        if self.timer is not None: self.timer.start(f"ddp_{name}")
 
     def __iter__(self) -> Generator[Optional[T_out], None, None]:
+        self.start('iter_batches')
         for batches in batched(self.batch_iterator, self.size):
             # Sync StopIteration
+            self.start('sync_stop')
             stop_iteration = torch.tensor(False, device=self.device)
             stop_iterations = [stop_iteration for rank in range(self.size)] if self.is_main else None
             dist.scatter(stop_iteration, stop_iterations, src=self.main_rank)
             if stop_iteration.item(): break
 
             # Send & yield batch
+
             yield self.scatter_batches(batches)
+            self.start('iter_batches')
 
         # Sync StopIteration from main_rank
         if self.is_main:
