@@ -430,8 +430,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                         
                         ### Log result
                         if valid_is_starting and val_step_is_starting:
-                            log_batch(f"{data_name}[{opt_step}]", logger, token_logger, token_batch, 
-                                    weight_batch, voc_encoder, val_step, check_data_dist)
+                            log_batch(f"valid[{opt_step}][{data_name}]", logger, token_logger, token_batch, 
+                                    weight_batch, voc_encoder, val_step, check_data_dist, get_gpuuse)
 
                         ### Add
                         process_loss += (loss*weight_batch).sum()
@@ -524,8 +524,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         step_pbar.start('log_target')
         if is_starting:
             token_logger.debug(f"Train step {step} data:")
-            log_batch('Train', logger, token_logger, target, weight_batch, 
-                    voc_encoder, step, check_data_dist)
+            log_batch('train', logger, token_logger, target, weight_batch, 
+                    voc_encoder, step, check_data_dist, get_gpuuse)
         
         step_pbar.start('backward')
         loss.backward()
