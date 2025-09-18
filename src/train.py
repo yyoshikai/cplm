@@ -159,7 +159,7 @@ def set_default_args(args: Namespace):
 
 def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int, 
         warmup_ratio: float=0.04):
-    warmup_step = int(epoch_step*warmup_ratio)
+    warmup_step = epoch_step*warmup_ratio
     match scheduler:
         case 'warmup':
             def schedule(step: int):
