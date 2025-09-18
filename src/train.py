@@ -531,6 +531,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             with torch.autocast('cuda', torch.bfloat16):
                 pred = model(token_batch[:-1])
                 loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
+                worker_step_loss = loss.item()
 
             step_timer.start('backward')
             loss.backward()
@@ -538,7 +539,6 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
         ## add step info 2
         step_timer.start('get_loss_item')
-        worker_step_loss = loss.item()
         worker_opt_accum_loss += worker_step_loss
 
         ## write step info online
