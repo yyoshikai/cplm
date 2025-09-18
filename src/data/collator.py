@@ -180,7 +180,7 @@ class DDPStringCollateLoader(Iterable[T_out]):
         else:
             self.batch_iterator = itr.repeat(None)
 
-        self.stop_iteration = torch.tensor(False, device=self.device)
+        self.stop_iteration = torch.tensor(1, dtype=torch.int, device=self.device)
 
     def scatter_batches(self, batches: Optional[list[list[T_in]]]) -> Optional[T_out]:
         if self.is_main:
@@ -233,7 +233,7 @@ class DDPStringCollateLoader(Iterable[T_out]):
             # Sync StopIteration
             self.start('sync_stop')
             self.start('sync_stop_fill')
-            self.stop_iteration.fill_(False)
+            self.stop_iteration.fill_(0)
             self.start('sync_stop_dup')
             stop_iterations = [self.stop_iteration for rank in range(self.size)] if self.is_main else None
             self.start('sync_stop_scatter')
