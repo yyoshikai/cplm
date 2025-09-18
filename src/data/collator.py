@@ -234,6 +234,7 @@ class DDPStringCollateLoader(Iterable[T_out]):
             stop_iterations = [stop_iteration for rank in range(self.size)] if self.is_main else None
             dist.scatter(stop_iteration, stop_iterations, src=self.main_rank)
             if stop_iteration.item(): break
+            self.start('after_sync_stop')# TODO
 
             # Send & yield batch
 
