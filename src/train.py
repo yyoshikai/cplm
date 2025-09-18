@@ -537,14 +537,17 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         step_timer.start('after_backward')
 
         ## add step info 2
+        step_timer.start('get_loss_item')
         worker_step_loss = loss.item()
         worker_opt_accum_loss += worker_step_loss
 
         ## write step info online
+        step_timer.start('write_step_info')
         with open(step_info_path, 'a') as f:
             f.write(f"{batch_size},{max_len},{worker_step_weight},{worker_step_loss}\n")
 
         ## check nan
+        step_timer.start('check_nan')
         if args.reset_nan_grad:
             grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
             if not grad_is_finite:
@@ -568,15 +571,18 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 optimizer.zero_grad()
         
         ## Log gpuuse
+        step_timer.start('log_gpuuse')
         if is_starting:
             logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
 
         ## Log grad
+        step_timer.start('log_grad')
         if check_grad:
             name, param = next(model.named_parameters())
             logger.debug(f"step[{step}] grad[{name}]={param.grad.ravel()[:5]}")
 
         ## End starting
+        step_timer.start('end_starting')
         if step+1 == 5: 
             step_timer.log_interval = 10000
             if check_data_dist:
@@ -588,6 +594,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             logger.info(f"{step+1} step finished.", **NO_DUP)
         
         # opt
+        step_timer('optim_init')
         if do_opt:
             ## optimizer
             step_timer.start('optim')
