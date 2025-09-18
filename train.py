@@ -82,7 +82,7 @@ result_dir = os.path.join(head, tail)
 result_dir = sync_train_dir(result_dir)
 
 # Fix seed (must be done before model initialization)
-set_random_seed(args.seed+rank, deterministic=args.test)
+set_random_seed(args.seed+rank, deterministic=args.test or args.deterministic)
 
 # logger
 root_logger, process_logger, data_logger = get_train_logger(result_dir)

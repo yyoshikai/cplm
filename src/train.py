@@ -135,6 +135,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--log-opt", type=int)
 
     ## test
+    parser.add_argument("--deterministic", action='store_true')
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 'data_dist', 'data_epoch', 'data_loading', 'grad'])
 
@@ -151,6 +152,10 @@ def set_default_args(args: Namespace):
         args.log_step = 1 if args.test else 50000
     if args.log_opt is None:
         args.log_opt = 1 if args.test else max(1, args.eval_opt//5)
+
+    # tests
+    if args.test: 
+        args.deterministic = True
 
     # post_init
     args.gpu_size = args.gpu_size_gb * (2**30)
