@@ -232,7 +232,7 @@ class DDPStringCollateLoader(Iterable[T_out]):
             self.start('sync_stop')
             stop_iteration = torch.tensor(False, device=self.device)
             stop_iterations = [stop_iteration for rank in range(self.size)] if self.is_main else None
-            dist.scatter(stop_iteration, stop_iterations, src=self.main_rank)
+            # dist.scatter(stop_iteration, stop_iterations, src=self.main_rank) TODO
             if stop_iteration.item(): break
             self.start('after_sync_stop')# TODO
 
@@ -243,5 +243,6 @@ class DDPStringCollateLoader(Iterable[T_out]):
 
         # Sync StopIteration from main_rank
         if self.is_main:
+            self.start('sync_stop')
             stop_iteration = torch.tensor(True, device=self.device)
-            dist.scatter(stop_iteration, [stop_iteration for rank in range(self.size)], src=self.main_rank)
+            # dist.scatter(stop_iteration, [stop_iteration for rank in range(self.size)], src=self.main_rank) TODO
