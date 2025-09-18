@@ -180,6 +180,7 @@ class DDPStringCollateLoader(Iterable[T_out]):
         else:
             self.batch_iterator = itr.repeat(None)
 
+        # 毎ループtensorを作っていると遅くなる (PYTORCH_CUDA_ALLOC_CONFの影響?)
         self.stop_iteration = torch.tensor(False, device=self.device)
 
     def scatter_batches(self, batches: Optional[list[list[T_in]]]) -> Optional[T_out]:
@@ -232,16 +233,12 @@ class DDPStringCollateLoader(Iterable[T_out]):
         for batches in batched(self.batch_iterator, self.size):
             # Sync StopIteration
             self.start('sync_stop')
-            self.start('sync_stop2')
             self.stop_iteration.fill_(False)
-            self.start('sync_stop3')
             stop_iterations = [self.stop_iteration for rank in range(self.size)] if self.is_main else None
             dist.scatter(self.stop_iteration, stop_iterations, src=self.main_rank)
-            self.start('sync_stop_item')
             if self.stop_iteration.item(): break
 
             # Send & yield batch
-
             yield self.scatter_batches(batches)
             self.start('iter_batches')
 
@@ -249,4 +246,4 @@ class DDPStringCollateLoader(Iterable[T_out]):
         if self.is_main:
             self.start('sync_stop')
             self.stop_iteration.fill_(True)
-            # dist.scatter(stop_iteration, [stop_iteration for rank in range(self.size)], src=self.main_rank) TODO
+            dist.scatter(self.stop_iteration, [self.stop_iteration for rank in range(self.size)], src=self.main_rank)
