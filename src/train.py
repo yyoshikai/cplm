@@ -139,8 +139,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 'data_dist', 'data_epoch', 'data_loading', 'grad'])
 
 def set_default_args(args: Namespace):
-    if args.eval_opt is None:
-        args.eval_opt = 2 if args.test else 1000
     if args.num_workers > 0 and args.prefetch_factor is None:
         args.prefetch_factor = 10
 
@@ -282,13 +280,6 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         committed = git_commit() if not args.test else False
         logger.debug('git committed.' if committed else 'git not committed.')
         logger.debug(f"git hash={git_get_hash()}")
-
-    ## fix seed
-    set_random_seed(args.seed)
-    if args.test:
-        torch.backends.cudnn.deterministic = True
-        torch.use_deterministic_algorithms(True, warn_only=True)
-        torch.backends.cudnn.benchmark = False
 
     ## scaled dot product attention kernel
     set_sdp_kernel(args.sdp_kernel)
