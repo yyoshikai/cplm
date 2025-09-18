@@ -137,7 +137,8 @@ def add_train_args(parser: ArgumentParser):
     ## test
     parser.add_argument("--deterministic", action='store_true')
     parser.add_argument("--test", action='store_true')
-    parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 'data_dist', 'data_epoch', 'data_loading', 'grad'])
+    parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
+            'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state'])
 
 def set_default_args(args: Namespace):
     if args.num_workers > 0 and args.prefetch_factor is None:
@@ -293,6 +294,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     ## checks
     check_data_dist = 'data_dist' in args.check
     check_grad = 'grad' in args.check
+    check_random_state = 'random_state' in args.check
     
     # Model
     model.to(torch.bfloat16)
@@ -525,6 +527,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         
         ## forward
         step_timer.start('forward')
+        if check_random_state: 
+            logger.debug(f"step[{step}] random_state={torch.cuda.get_rng_state()}")
         with nullcontext() if do_opt or args.sync_every_step else model.no_sync():
             with torch.autocast('cuda', torch.bfloat16):
                 target = token_batch[1:]
@@ -576,7 +580,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         ## Log grad
         if check_grad:
             name, param = next(model.named_parameters())
-            logger.debug(f"step grad[{name}][{step}]={param.grad.ravel()[:5]}")
+            logger.debug(f"step[{step}] grad[{name}]={param.grad.ravel()[:5]}")
 
         ## End starting
         if step+1 == 5: 
@@ -599,7 +603,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             optimizer.step()
             if check_grad:
                 name, param = next(model.named_parameters())
-                logger.debug(f"opt grad[{name}][{len(opt2loss)}]={param.grad.ravel()[:5]}")
+                logger.debug(f"opt[{len(opt2loss)}] grad[{name}]={param.grad.ravel()[:5]}")
 
             optimizer.zero_grad()
 
