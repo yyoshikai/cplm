@@ -25,7 +25,7 @@ from src.model import Model
 from src.model.mamba import MambaModel2
 from src.utils.path import timestamp
 from src.utils.ddp import dist_broadcast_tensor, dist_broadcast_object
-from src.train import train, add_train_args, set_default_args, get_train_logger, sync_train_dir, log_dataset, DATA_RANK
+from src.train import train, add_train_args, set_default_args, get_train_logger, sync_train_dir, log_dataset, DATA_RANK, set_random_seed
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -63,9 +63,7 @@ set_default_args(args)
 if args.test: args.studyname+='_test'
 log_step = 1 if args.test else 10000
 
-batch_first = False
-
-## DDP
+# DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo', )
 rank = dist.get_rank()
 size = dist.get_world_size()
@@ -74,16 +72,19 @@ device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
     if torch.cuda.is_available() else torch.device('cpu')
 DATA_RANK = {k: r % size for k, r in DATA_RANK.items()}
 
-## make result dir
+# make result dir
 result_dir = os.path.join('training', 'results', args.studyname)
-### Add timestamp
+## Add timestamp
 head, tail = os.path.split(result_dir)
 tail = f"{timestamp()}_{tail}"
 result_dir = os.path.join(head, tail)
-### sync
+## sync
 result_dir = sync_train_dir(result_dir)
 
-## logger
+# Fix seed (must be done before model initialization)
+set_random_seed(args.seed+rank, deterministic=args.test)
+
+# logger
 root_logger, process_logger, data_logger = get_train_logger(result_dir)
 root_logger.debug(f"{device=}, {torch.cuda.device_count()=}")
 

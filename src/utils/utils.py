@@ -10,11 +10,16 @@ from .time import set_logtime, logtime, logend, rectime
 from .memory import get_mem
 
 # random
-def set_random_seed(seed: int):
+def set_random_seed(seed: int, deterministic: bool=False):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        torch.backends.cudnn.benchmark = False
+
 
 def random_state_dict():
     state_dict = {
