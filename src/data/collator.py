@@ -237,10 +237,10 @@ class DDPStringCollateLoader(Iterable[T_out]):
             self.start('sync_stop_dup')
             stop_iterations = [self.stop_iteration for rank in range(self.size)] if self.is_main else None
             self.start('sync_stop_scatter')
-            dist.scatter(self.stop_iteration, stop_iterations, src=self.main_rank)
+            # dist.scatter(self.stop_iteration, stop_iterations, src=self.main_rank)
             self.start('sync_stop_item')
             if self.stop_iteration.item(): break
-            self.start('after_sync_stop')# TODO
+            self.start('after_sync_stop') # TODO
 
             # Send & yield batch
 
@@ -250,5 +250,5 @@ class DDPStringCollateLoader(Iterable[T_out]):
         # Sync StopIteration from main_rank
         if self.is_main:
             self.start('sync_stop')
-            self.stop_iteration.fill_(True)
+            self.stop_iteration.fill_(1)
             dist.scatter(self.stop_iteration, [self.stop_iteration for rank in range(self.size)], src=self.main_rank)
