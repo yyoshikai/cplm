@@ -230,10 +230,10 @@ class DDPStringCollateLoader(Iterable[T_out]):
         for batches in batched(self.batch_iterator, self.size):
             # Sync StopIteration
             self.start('sync_stop')
-            stop_iteration = torch.tensor(False, device=self.device)
+            # stop_iteration = torch.tensor(False, device=self.device) TODO
             # stop_iterations = [stop_iteration for rank in range(self.size)] if self.is_main else None TODO
             # dist.scatter(stop_iteration, stop_iterations, src=self.main_rank) TODO
-            if stop_iteration.item(): break
+            # if stop_iteration.item(): break TODO
             self.start('after_sync_stop')# TODO
 
             # Send & yield batch
