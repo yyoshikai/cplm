@@ -524,9 +524,9 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         do_opt = opt_accum_weight >= args.weight_per_opt
         
         ## forward
-        step_timer.start('forward')
         if check_random_state: 
             logger.debug(f"step[{step}] random_state={torch.cuda.get_rng_state()}")
+        step_timer.start('forward')
         with nullcontext() if do_opt or args.sync_every_step else model.no_sync():
             with torch.autocast('cuda', torch.bfloat16):
                 pred = model(token_batch[:-1])
@@ -534,7 +534,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
             step_timer.start('backward')
             loss.backward()
-        
+        step_timer.start('after_backward')
+
         ## add step info 2
         worker_step_loss = loss.item()
         worker_opt_accum_loss += worker_step_loss
