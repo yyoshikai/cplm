@@ -207,12 +207,14 @@ class DDPStringCollateLoader(Iterable[T_out]):
             return this_data
         else:
             # Receive batch info
+            self.start('recv_batch_info')
             batch_info = torch.tensor(0, device=self.device)
             dist.scatter(batch_info, src=self.main_rank)
 
             # Receive batch
             if batch_info.item() == 0:
                 ## ここもspecialized
+                self.start('recv_batch')
                 token = dist_recv_tensor(self.main_rank, self.device)
                 weight = dist_recv_tensor(self.main_rank, self.device)
                 this_data = token, weight
