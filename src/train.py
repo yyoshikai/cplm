@@ -123,7 +123,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--prefetch-factor", type=int)
     parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
-    parser.add_argument("--sync-every-step", action='store_true')
     ## hardware
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
@@ -135,6 +134,8 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--log-opt", type=int)
 
     ## test
+    parser.add_argument("--sync-every-step", action='store_true')
+    parser.add_argument("--model-bfloat16", action='store_true')
     parser.add_argument("--deterministic", action='store_true')
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
@@ -298,6 +299,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     
     # Model
     model.to(device)
+    if args.model_bfloat16:
+        model.to(torch.bfloat16)
     model = DistributedDataParallel(model)
 
     # Make timer here to send to DDPStringCollateLoader
@@ -371,12 +374,11 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     val2process_weights = []
     val2process_losses = []
     opt_to_eval = 0
-    
+
     # step info
-    batch_sizes = []
-    max_lens = []
-    worker_step_losses = []
-    worker_step_weights = []
+    step_info_path = f"{result_dir}/steps/{rank}.csv"
+    with open(step_info_path, 'w') as f:
+        f.write("batch_size,max_len,step_weight,step_loss\n")
 
     # Show model size
     logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
@@ -466,13 +468,6 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             logger.info(f"    {mean_loss=}", **NO_DUP)
 
             # save
-            dfstep = pd.DataFrame({
-                'batch_size': batch_sizes,
-                'max_len': max_lens, 
-                'step_weight': worker_step_weights,
-                'step_loss': worker_step_losses,
-            })
-            dfstep.to_csv(f"{result_dir}/steps/{rank}.csv")
             dfopt = pd.DataFrame({
                 'loss': opt2loss,
                 'weight': opt2weight,
@@ -512,12 +507,16 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         ## get batch
         step_timer.start('get_batch')
         token_batch, weight_batch = train_iter.__next__()
-
-        ## Add step info 1
-        batch_sizes.append(token_batch.shape[1])
-        max_lens.append(token_batch.shape[0])
+        target = token_batch[1:]
+        max_len, batch_size = token_batch.shape
         worker_step_weight = weight_batch.sum().item()
-        worker_step_weights.append(worker_step_weight)
+
+        ## Log target for final check
+        step_timer.start('log_target')
+        if is_starting:
+            token_logger.debug(f"Train step {step} data:")
+            log_batch('train', logger, token_logger, target, weight_batch, 
+                    voc_encoder, step, check_data_dist, get_gpuuse)
 
         ## If do_opt, forward will have to sync gradients
         worker_opt_accum_weight += worker_step_weight
@@ -530,24 +529,19 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             logger.debug(f"step[{step}] random_state={torch.cuda.get_rng_state()}")
         with nullcontext() if do_opt or args.sync_every_step else model.no_sync():
             with torch.autocast('cuda', torch.bfloat16):
-                target = token_batch[1:]
                 pred = model(token_batch[:-1])
                 loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
 
             step_timer.start('backward')
             loss.backward()
-
-        ## Log target for final check
-        step_timer.start('log_target')
-        if is_starting:
-            token_logger.debug(f"Train step {step} data:")
-            log_batch('train', logger, token_logger, target, weight_batch, 
-                    voc_encoder, step, check_data_dist, get_gpuuse)
         
         ## add step info 2
         worker_step_loss = loss.item()
-        worker_step_losses.append(worker_step_loss)
         worker_opt_accum_loss += worker_step_loss
+
+        ## write step info online
+        with open(step_info_path, 'a') as f:
+            f.write(f"{batch_size},{max_len},{worker_step_weight},{worker_step_loss}\n")
 
         ## check nan
         if args.reset_nan_grad:
