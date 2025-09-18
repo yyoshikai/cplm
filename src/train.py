@@ -32,7 +32,7 @@ from .utils import set_random_seed, TimerTqdm
 
 MAIN_RANK = 1
 SAVE_RANK = 0
-DATA_RANK = {'train': 2, 'valid': 3}
+DATA_RANK = {'train': 3, 'valid': 2}
 NO_DUP = {'extra': {'no_dup': True}}
 
 def sync_train_dir(result_dir):

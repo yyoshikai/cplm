@@ -6,7 +6,9 @@ from logging import getLogger
 from time import time
 
 import pandas as pd
+import torch.distributed as dist
 from tqdm import tqdm
+
 T_co = TypeVar('T_co', covariant=True)
 
 class _Watch:
@@ -130,7 +132,7 @@ class TimerTqdm(tqdm):
     logger = getLogger(f'{__module__}.{__qualname__}')
 
     def __init__(self, iterable: Optional[Iterable]=None,
-            time_path: Optional[str]=None, log_interval: Optional[int]=None, disable_bar: bool=False, *args, **kwargs):
+            time_path: Optional[str]=None, log_interval: Optional[int]=None, disable_bar: bool=False, sync_ddp: bool=False, *args, **kwargs):
         self.disable_bar = disable_bar
         super().__init__(iterable, *args, **kwargs)
         self.name2time = defaultdict(float)
@@ -143,6 +145,8 @@ class TimerTqdm(tqdm):
         # For logging
         self.log_interval = log_interval
 
+        self.sync_ddp = sync_ddp
+
         self.cur_job = 'after_init'
         self.start_ = time()
 
@@ -154,7 +158,9 @@ class TimerTqdm(tqdm):
             self.start('iter_data')
         
 
-    def start(self, name):
+    def start(self, name, never_sync: bool=False):
+        if self.sync_ddp and not never_sync:
+            dist.barrier()
         t = time()
         self.name2time[self.cur_job] += t - self.start_
         self.cur_job = name

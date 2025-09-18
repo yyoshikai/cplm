@@ -185,13 +185,13 @@ class DDPStringCollateLoader(Iterable[T_out]):
             assert len(batches) <= self.size
 
             # Send batch info
-            self.start('send_batch_info')
+            self.start('sync_batch_info')
             batch_infos = [torch.tensor(0 if rank < len(batches) else 1, device=self.device) 
                     for rank in range(self.size)]
             dist.scatter(torch.tensor(0, device=self.device), batch_infos, src=self.main_rank)
 
             # Send batch
-            self.start('send_batch')
+            self.start('sync_batch')
             this_data = None
             for dst_rank, dst_data in enumerate(batches):
                 data = self.collator(dst_data)
@@ -207,14 +207,14 @@ class DDPStringCollateLoader(Iterable[T_out]):
             return this_data
         else:
             # Receive batch info
-            self.start('recv_batch_info')
+            self.start('sync_batch_info')
             batch_info = torch.tensor(0, device=self.device)
             dist.scatter(batch_info, src=self.main_rank)
 
             # Receive batch
+            self.start('sync_batch')
             if batch_info.item() == 0:
                 ## ここもspecialized
-                self.start('recv_batch')
                 token = dist_recv_tensor(self.main_rank, self.device)
                 weight = dist_recv_tensor(self.main_rank, self.device)
                 this_data = token, weight
