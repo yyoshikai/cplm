@@ -36,26 +36,29 @@ def load_random_state_dict(state_dict: dict):
     torch.set_rng_state(state_dict['torch'])
     torch.cuda.set_rng_state_all(state_dict['cuda'])
 
-def ddp_set_random_seed(seed: int, device: torch.device):
+def ddp_set_random_seed(seed: int):
     """
     DDPでの挙動について
-    1(x). 各プロセスでmanual_seed(): 
+    1(採用). 各プロセスでmanual_seed(): 
         set_device()前だと0しか初期化されない
+        → current_deviceでdeviceを確認する。
     2(x). masterのみでmanual_seed_all():
         node間並列ではmaster nodeしか初期化されない
-    3(採用). 各プロセスでmanual_seed_all()
+    3(x). 各プロセスでmanual_seed_all()
         あるプロセスが初期化後処理を行った後別のプロセスが再度初期化しないよう, 処理をブロックする。
         (masterのみでの初期化を防止することを兼ねる。)
         init_process_group()前(is_initialized()=False)だと同期できないのでエラー
+        → プロセスごとに異なるseedを指定するかもしれないのでやめる
     """
-    if not dist.is_initialized():
-        raise ValueError("ddp_set_random_seed() must be called after "
-                "dist.init_process_group() to syncronize.")
+    # check init_process_group() and set_device() was called.
+    assert dist.is_initialized()
+    estimated_device = dist.get_rank() % torch.cuda.device_count()
+    assert estimated_device == torch.cuda.current_device()
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    dist.broadcast(torch.tensor(0, device=device), src=0) # dist.barrierだとwarningが出るので, 代わりに
+    torch.cuda.manual_seed(seed)
 
 # others
 def load_gninatypes(path, struct_fmt='fffi'):
