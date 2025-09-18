@@ -123,7 +123,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--prefetch-factor", type=int)
     parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
-    parser.add_argument("--sync-every-step", action='store_true')
     ## hardware
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
@@ -135,6 +134,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--log-opt", type=int)
 
     ## test
+    parser.add_argument("--sync-every-step", action='store_true')
     parser.add_argument("--model-bfloat16", action='store_true')
     parser.add_argument("--deterministic", action='store_true')
     parser.add_argument("--test", action='store_true')
