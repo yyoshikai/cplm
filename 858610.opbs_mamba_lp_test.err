@@ -1,9 +1,0 @@
-[W918 15:40:07.262701967 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0006]:29402 (errno: 97 - Address family not supported by protocol).
-[W918 15:40:07.269264677 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0006]:29402 (errno: 97 - Address family not supported by protocol).
-[W918 15:40:07.297647612 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0006]:29402 (errno: 97 - Address family not supported by protocol).
-[W918 15:40:07.293325075 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0006]:29402 (errno: 97 - Address family not supported by protocol).
-[W918 15:40:09.515228028 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0006]:36397 (errno: 97 - Address family not supported by protocol).
-[W918 15:40:19.630904732 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0006]:36397 (errno: 97 - Address family not supported by protocol).
-[W918 15:40:19.655727774 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0006]:36397 (errno: 97 - Address family not supported by protocol).
-[W918 15:40:19.668184662 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0006]:36397 (errno: 97 - Address family not supported by protocol).
-[W918 15:40:19.681116129 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0006]:36397 (errno: 97 - Address family not supported by protocol).
