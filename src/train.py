@@ -305,7 +305,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
     # Make timer here to send to DDPStringCollateLoader
     step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv",
-            log_interval=1 if 'data_loading' in args.check else 100, desc='step', disable_bar=True)
+            log_interval=100, desc='step', disable_bar=True)
 
     # DataLoader
     if rank == DATA_RANK['train']:
