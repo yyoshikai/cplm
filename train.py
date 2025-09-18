@@ -23,9 +23,10 @@ from src.data.protein import ProteinProcessDataset, CoordFollowDataset
 from src.data import CacheDataset
 from src.model import Model
 from src.model.mamba import MambaModel2
+from src.utils import ddp_set_random_seed, set_deterministic
 from src.utils.path import timestamp
 from src.utils.ddp import dist_broadcast_tensor, dist_broadcast_object
-from src.train import train, add_train_args, set_default_args, get_train_logger, sync_train_dir, log_dataset, DATA_RANK, set_random_seed
+from src.train import train, add_train_args, set_default_args, get_train_logger, sync_train_dir, log_dataset, DATA_RANK
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -82,7 +83,9 @@ result_dir = os.path.join(head, tail)
 result_dir = sync_train_dir(result_dir)
 
 # Fix seed (must be done before model initialization)
-set_random_seed(args.seed+rank, deterministic=args.test or args.deterministic)
+ddp_set_random_seed(args.seed)
+if args.test or args.deterministic: set_deterministic()
+
 
 # logger
 root_logger, process_logger, data_logger = get_train_logger(result_dir)

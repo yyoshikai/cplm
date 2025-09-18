@@ -10,15 +10,16 @@ from .time import set_logtime, logtime, logend, rectime
 from .memory import get_mem
 
 # random
-def set_random_seed(seed: int, deterministic: bool=False):
+def set_random_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    if deterministic:
-        torch.backends.cudnn.deterministic = True
-        torch.use_deterministic_algorithms(True, warn_only=True)
-        torch.backends.cudnn.benchmark = False
+
+def set_deterministic():
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
 
 
 def random_state_dict():
@@ -40,7 +41,8 @@ def ddp_set_random_seed(seed: int, device: torch.device):
     """
     DDPでの挙動について
     1(x). 各プロセスでmanual_seed(): 
-        set_device()前だと0しか初期化されない
+        set_device()前だと0しか初期化されない。
+        set_device()が行われていることを保証する方法がない。
     2(x). masterのみでmanual_seed_all():
         node間並列ではmaster nodeしか初期化されない
     3(採用). 各プロセスでmanual_seed_all()
