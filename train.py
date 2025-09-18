@@ -58,6 +58,8 @@ parser.add_argument("--coord-follow-atom", action='store_true')
 ## model
 parser.add_argument('--mamba', action='store_true')
 parser.add_argument('--n-layer', type=int)
+### Transformer
+parser.add_argument('--pos-buffer-len', type=int, default=1600)
 
 args = parser.parse_args()
 set_default_args(args)
@@ -210,7 +212,7 @@ if args.mamba:
     model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
 else:
     num_layers = args.n_layer or 12
-    model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
+    model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
 train(args, train_data, valid_datas, data_names, train2valid_r, voc_encoder, model, result_dir, device, log_step)
 
 dist.destroy_process_group()
