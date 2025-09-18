@@ -271,7 +271,7 @@ class MambaModel2(nn.Module):
                         * coef
             max_gpuuse = max(gpuuse, max_gpuuse)
         if capture_rate:
-            max_gpuuse = max_gpuuse * self.get_capture_rate(bf16)
+            max_gpuuse = max_gpuuse / self.get_capture_rate(bf16)
         return max_gpuuse
 
 class ProgressStreamer(BaseStreamer):
