@@ -594,7 +594,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             logger.info(f"{step+1} step finished.", **NO_DUP)
         
         # opt
-        step_timer('optim_init')
+        step_timer.start('optim_init')
         if do_opt:
             ## optimizer
             step_timer.start('optim')
