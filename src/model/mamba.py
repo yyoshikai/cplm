@@ -50,6 +50,7 @@ class MambaModel2(nn.Module):
         self.vocs = vocs
 
         self.gpuuse_coef = lru_cache(1)(self._gpuuse_coef)
+        self.get_capture_rate = lru_cache(1)(self._get_capture_rate)
 
     def forward(self, src: Tensor, get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
         """
@@ -223,13 +224,8 @@ class MambaModel2(nn.Module):
         time_step_rank = self.config.time_step_rank
         conv_kernel = self.config.conv_kernel
 
-        ## capture rate
-        with open(str(Path(__file__).parent / "gpuuse" / "capture_rates.yaml")) as f:
-            capture_rates = yaml.safe_load(f)
-
         ## shape
         mname = 'mamba_bf16' if bf16 else 'mamba'
-
         t2dim2coefs = {}
         for t in ['forward', 'backward']:
             dfp = pd.read_csv(Path(__file__).parent / "gpuuse" / t / (mname+'.csv'), keep_default_na=False)
@@ -251,14 +247,18 @@ class MambaModel2(nn.Module):
                         except Exception as e:
                             print(f"invalid d: {d}")
                             raise e
-                ### capture rate
-                coef = coef / capture_rates[mname]
                 dim2coefs[batch_size_dim, length_dim, ceiled_length_dim] += coef
             t2dim2coefs[t] = dict(dim2coefs)
-        
         return t2dim2coefs
-
-    def get_gpuuse(self, batch_size: int, length: int, bf16: bool):
+    
+    def _get_capture_rate(self, bf16):
+        ## capture rate
+        with open(str(Path(__file__).parent / "gpuuse" / "capture_rates.yaml")) as f:
+            capture_rates = yaml.safe_load(f)
+        mname = 'mamba_bf16' if bf16 else 'mamba'
+        return capture_rates[mname]
+        
+    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, capture_rate: bool=True):
         t2dim2coefs = self.gpuuse_coef(bf16)
         max_gpuuse = 0
         for dim2coefs in t2dim2coefs.values():
@@ -270,6 +270,8 @@ class MambaModel2(nn.Module):
                         * (ceiled_length**ceiled_length_dim) \
                         * coef
             max_gpuuse = max(gpuuse, max_gpuuse)
+        if capture_rate:
+            max_gpuuse = max_gpuuse * self.get_capture_rate(bf16)
         return max_gpuuse
 
 class ProgressStreamer(BaseStreamer):

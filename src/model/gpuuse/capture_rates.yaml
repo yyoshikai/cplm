@@ -1,6 +1,6 @@
-mamba: 0.91
-mamba_bf16: 0.99
-tf_flash_bf16: 0.81
-tf_flash_bf16_8: 0.88
-tf_efficient_bf16: 0.88
-tf_efficient: 1.0
+# mamba: 0.91
+mamba_bf16: 0.865911834668338
+# tf_flash_bf16: 0.81
+tf_flash_bf16_8: 0.7590614437769814
+# tf_efficient_bf16: 0.88
+# tf_efficient: 1.0

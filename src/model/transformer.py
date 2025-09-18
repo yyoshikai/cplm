@@ -299,6 +299,7 @@ class Model(nn.Module):
                 embedding_name='embedding', predictor_name='predictor'), with_module=True)
         
         self.gpuuse_coef = lru_cache(1)(self._gpuuse_coef)
+        self.get_capture_rate = lru_cache(1)(self._get_capture_rate)
         
 
     def make_pos_buffer(self, length):
@@ -580,6 +581,13 @@ class Model(nn.Module):
         outputs = [output[1] for output in outputs]
         return outputs
 
+    def _get_mname(self, bf16: bool, kernel: str):        
+        mname = f'tf_{kernel.lower()}'
+        if bf16: mname += '_bf16'
+        if kernel == 'FLASH' and (self.d_model // self.nhead) % 8 == 0:
+            mname += '_8'
+        return mname
+
     def _gpuuse_coef(self, bf16: bool, kernel: str) -> dict[tuple[int, int], float]:
         """
         
@@ -603,16 +611,8 @@ class Model(nn.Module):
         voc_size = len(self.vocs)
         pos_buffer_len = self.pos_buffer_len
 
-        ## capture rate
-        with open(str(Path(__file__).parent / "gpuuse" / "capture_rates.yaml")) as f:
-            capture_rates = yaml.safe_load(f)
-
         ## mname
-        mname = f'tf_{kernel.lower()}'
-        if bf16: mname += '_bf16'
-        if kernel == 'FLASH' and (d_model // nhead) % 8 == 0:
-            mname += '_8'
-        capture_rate = capture_rates[mname]
+        mname = self._get_mname(bf16, kernel)
 
         ## shape
         t2dim2coefs = {}
@@ -631,13 +631,18 @@ class Model(nn.Module):
                     else:
                         coef = coef*eval(d)
                 
-                ### capture rate
-                coef = coef / capture_rate
                 dim2coefs[batch_size_dim, length_dim] += coef
             t2dim2coefs[t] = dict(dim2coefs)
         return t2dim2coefs
+    
+    def _get_capture_rate(self, bf16: bool, kernel: str):
+        ## capture rate
+        with open(str(Path(__file__).parent / "gpuuse" / "capture_rates.yaml")) as f:
+            capture_rates = yaml.safe_load(f)
+        return capture_rates[self._get_mname(bf16, kernel)]
 
-    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str):
+    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str, 
+            capture_rate: bool=True):
 
         t2dim2coefs = self.gpuuse_coef(bf16, kernel)
         max_gpuuse = 0
@@ -646,4 +651,6 @@ class Model(nn.Module):
             for (batch_size_dim, length_dim), coef in dim2coefs.items():
                 gpuuse += (batch_size**batch_size_dim) * (length**length_dim) * coef
             max_gpuuse = max(gpuuse, max_gpuuse)
+        if capture_rate:
+            max_gpuuse = max_gpuuse / self.get_capture_rate(bf16=bf16, kernel=kernel)
         return max_gpuuse

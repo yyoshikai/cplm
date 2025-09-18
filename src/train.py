@@ -135,6 +135,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--log-opt", type=int)
 
     ## test
+    parser.add_argument("--model-bfloat16", action='store_true')
     parser.add_argument("--deterministic", action='store_true')
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
@@ -298,6 +299,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     
     # Model
     model.to(device)
+    if args.model_bfloat16:
+        model.to(torch.bfloat16)
     model = DistributedDataParallel(model)
 
     # Make timer here to send to DDPStringCollateLoader
