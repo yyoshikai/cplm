@@ -297,7 +297,6 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     check_random_state = 'random_state' in args.check
     
     # Model
-    model.to(torch.bfloat16)
     model.to(device)
     model = DistributedDataParallel(model)
 
