@@ -64,7 +64,6 @@ parser.add_argument('--pos-buffer-len', type=int, default=1600)
 args = parser.parse_args()
 set_default_args(args)
 if args.test: args.studyname+='_test'
-log_step = 1 if args.test else 10000
 
 # DDP
 dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo', )
@@ -213,6 +212,6 @@ if args.mamba:
 else:
     num_layers = args.n_layer or 12
     model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
-train(args, train_data, valid_datas, data_names, train2valid_r, voc_encoder, model, result_dir, device, log_step)
+train(args, train_data, valid_datas, data_names, train2valid_r, voc_encoder, model, result_dir, device)
 
 dist.destroy_process_group()
