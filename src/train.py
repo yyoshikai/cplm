@@ -374,13 +374,12 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     else:
         optimizer = torch.optim.AdamW(params, lr=args.lr)
         optimizer.zero_grad()
-        match args.loss_scale:
-            case None:
-                loss_scale = 1
-            case _:
-                loss_scale = float(args.loss_scale)
         scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt)
-
+    match args.loss_scale:
+        case None:
+            loss_scale = 1
+        case _:
+            loss_scale = float(args.loss_scale)
     # opt recorder
     opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", ['loss', 'weight', 'lr', 'memory'], args.eval_opt)
 
@@ -470,7 +469,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 process_losses.append(process_loss)
                 logger.debug(f"        loss={process_loss:3.03f} weight={process_weight:3.03f}")
             if args.schedule_free: optimizer.train()
-            
+
             ## reduce all weights & losses
             total_weights = torch.tensor(process_weights, device=device)
             total_losses = torch.tensor(process_losses, device=device)
