@@ -239,6 +239,8 @@ class DDPStringCollateLoader(Iterable[T_out]):
             stop_iterations = [self.stop_iteration for rank in range(self.size)] if self.is_main else None
             self.start('sync_stop_scatter')
             dist.scatter(self.stop_iteration, stop_iterations, src=self.main_rank)
+            self.start('sync_stop_sync')
+            torch.cuda.synchronize()
             self.start('sync_stop_item')
             if self.stop_iteration.item(): break
             self.start('after_sync_stop')
