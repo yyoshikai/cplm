@@ -582,7 +582,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         
 
         if  should_show(step+1, args.log_step):
-            logger.info(f"Step[{step}] finished t={time()-train_start:.02f}", **NO_DUP)
+            logger.info(f"[Finish]{step+1} step t={time()-train_start:.02f}", **NO_DUP)
         
         # opt
         step_timer.start('optim_init')
@@ -611,7 +611,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             scheduler.step()
 
             if should_show(opt, args.log_opt):
-                logger.info(f"Opt[{opt-1}] finished t={time()-train_start}", **NO_DUP)
+                logger.info(f"[Finish] {opt} opt t={time()-train_start:.03f}", **NO_DUP)
 
     opt_recorder.flush()
     step_recorder.flush()
