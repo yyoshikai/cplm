@@ -230,6 +230,7 @@ class DDPStringCollateLoader(Iterable[T_out]):
     def __iter__(self) -> Generator[Optional[T_out], None, None]:
         self.start('iter_batches')
         for batches in batched(self.batch_iterator, self.size):
+            # TODO: simplify
             # Sync StopIteration
             self.start('sync_stop')
             self.start('sync_stop_fill')
@@ -237,13 +238,12 @@ class DDPStringCollateLoader(Iterable[T_out]):
             self.start('sync_stop_dup')
             stop_iterations = [self.stop_iteration for rank in range(self.size)] if self.is_main else None
             self.start('sync_stop_scatter')
-            # dist.scatter(self.stop_iteration, stop_iterations, src=self.main_rank)
+            dist.scatter(self.stop_iteration, stop_iterations, src=self.main_rank)
             self.start('sync_stop_item')
             if self.stop_iteration.item(): break
-            self.start('after_sync_stop') # TODO
+            self.start('after_sync_stop')
 
             # Send & yield batch
-
             yield self.scatter_batches(batches)
             self.start('iter_batches')
 
