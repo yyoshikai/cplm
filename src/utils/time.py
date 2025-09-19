@@ -184,6 +184,7 @@ class TimerTqdm(tqdm):
 
         # Add cur_time
         if self.recorder is not None:
+            print(f"{self.prev_name2time=}", flush=True)
             self.recorder.record(n=self.n, **{name: t - self.prev_name2time.get(name, 0) for name, t in self.name2time.items()})
         self.prev_name2time = self.name2time.copy()
 
