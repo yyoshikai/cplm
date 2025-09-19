@@ -140,6 +140,7 @@ class TimerTqdm(tqdm):
 
         # Recording
         self.name2time = defaultdict(float)
+        self.prev_name2time = {}
 
         if time_path is not None:
             assert file_interval is not None
@@ -169,7 +170,6 @@ class TimerTqdm(tqdm):
         self.name2time[self.cur_job] += t - self.start_
         self.cur_job = name
         self.start_ = t
-        self.prev_name2time = {}
 
     def sorted_items(self) -> list[tuple[str, float]]:
         return sorted(self.name2time.items(), key=lambda x: x[1], reverse=True)
@@ -184,10 +184,8 @@ class TimerTqdm(tqdm):
 
         # Add cur_time
         if self.recorder is not None:
-            print(f"{self.prev_name2time=}", flush=True)
             self.recorder.record(n=self.n, **{name: t - self.prev_name2time.get(name, 0) for name, t in self.name2time.items()})
         self.prev_name2time = self.name2time.copy()
-        print(f"{self.prev_name2time=}", flush=True)
 
         # log
         if self.log_interval is not None and \
