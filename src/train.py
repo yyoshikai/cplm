@@ -368,7 +368,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     }]
     if 'optimizer' in args.check:
         logger.debug(f"weight_decay: {[name for name, param in model.named_parameters() if name in not_norm_params and param.requires_grad]}")
-        logger.debug(f"non weight_decay: {[param for name, param in model.named_parameters() if name not in not_norm_params and param.requires_grad]}")
+        logger.debug(f"non weight_decay: {[name for name, param in model.named_parameters() if name not in not_norm_params and param.requires_grad]}")
 
     ## optimizer & scheduler
     if args.schedule_free:
