@@ -28,7 +28,7 @@ from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
 from .utils.path import cleardir
 from .utils.ddp import reduce_float
-from .utils import set_random_seed, TimerTqdm
+from .utils import TimerTqdm, IterateRecorder
 
 MAIN_RANK = 1
 SAVE_RANK = 0
@@ -139,7 +139,8 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--deterministic", action='store_true')
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
-            'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state'])
+            'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
+            'forward_backward_time'])
 
 def set_default_args(args: Namespace):
     if args.num_workers > 0 and args.prefetch_factor is None:
@@ -296,6 +297,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     check_data_dist = 'data_dist' in args.check
     check_grad = 'grad' in args.check
     check_random_state = 'random_state' in args.check
+    check_fb_time = 'forward_backward_time' in args.check
     
     # Model
     model.to(device)
@@ -356,29 +358,24 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     ## scheduler
     scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt)
 
-    # Initial state
-    opt_step = 0
-    worker_opt_accum_loss = 0.0
-    worker_opt_accum_weight = 0.0
-    nan_grad_step_saved = False
-
-    ## opt
-    opt2loss = []
-    opt2weight = []
-    opt2lr = []
-    opt2mem = []
+    # opt recorder
+    opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", ['loss', 'weight', 'lr', 'memory'], args.eval_opt)
 
     # Evaluate & early stopping
     val2opt_step = []
     val2mean_loss = []
     val2process_weights = []
     val2process_losses = []
-    opt_to_eval = 0
 
-    # step info
-    step_info_path = f"{result_dir}/steps/{rank}.csv"
-    with open(step_info_path, 'w') as f:
-        f.write("batch_size,max_len,step_weight,step_loss\n")
+    # step
+    ## initial state
+    opt = 0
+    worker_opt_accum_loss = 0.0
+    worker_opt_accum_weight = 0.0
+    nan_grad_step_saved = False
+    ## recorder
+    step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", 
+            ["batch_size", "max_len", "worker_weight" , "worker_loss"], 1000)
 
     # Show model size
     logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
@@ -389,13 +386,12 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         is_starting = step < 5
 
         # evaluate & save
-        if opt_to_eval == 0:
+        if opt == next_eval_opt:
             step_timer.start('evaluation')
-            opt_step = len(opt2loss)
             valid_is_starting = len(val2mean_loss) <= 1
             
             # validation 
-            logger.info(f"Validation at {opt_step=}...", **NO_DUP)
+            logger.info(f"Validation at {opt=}...", **NO_DUP)
             process_weights = []
             process_losses = []
             for i_data, data_name in enumerate(data_names):
@@ -435,7 +431,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                         
                         ### Log result
                         if valid_is_starting and val_step_is_starting:
-                            log_batch(f"valid[{opt_step}][{data_name}]", logger, token_logger, token_batch, 
+                            log_batch(f"valid[{opt}][{data_name}]", logger, token_logger, token_batch, 
                                     weight_batch, voc_encoder, val_step, check_data_dist, get_gpuuse)
 
                         ### Add
@@ -458,25 +454,15 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             mean_loss = ((mean_losses*estimated_train_weights).sum() / estimated_train_weights.sum()).item()
             if 'early_stop' in args.check:
                 mean_loss = [0.7, 0.1, 0.5, 0.8, 0.2, 0.6][len(val2mean_loss) % 6]
-
-            ## add result
-            val2process_losses.append(process_losses)
-            val2process_weights.append(process_weights)
-            val2opt_step.append(opt_step)
-            val2mean_loss.append(mean_loss)
-
             logger.info(f"    {mean_loss=}", **NO_DUP)
 
-            # save
-            dfopt = pd.DataFrame({
-                'loss': opt2loss,
-                'weight': opt2weight,
-                'lr': opt2lr,
-                'memory': opt2mem
-            })
-            dfopt.to_csv(f"{result_dir}/opts/{rank}.csv") # 多分全てのworkerで同じものだが, 念のため確認
+            ## add & record results
+            val2process_losses.append(process_losses)
+            val2process_weights.append(process_weights)
+            val2opt_step.append(opt)
+            val2mean_loss.append(mean_loss)
             dfval = pd.DataFrame({
-                ('opt_step', ''): val2opt_step,
+                ('opt', ''): val2opt_step,
                 ('mean_loss', ''): val2mean_loss
             })
             dfval[[('process_weight', data_name) for data_name in data_names]] \
@@ -484,20 +470,21 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             dfval[[('process_loss', data_name) for data_name in data_names]] \
                 = np.array(val2process_losses)
             dfval.to_csv(f"{result_dir}/vals/{rank}.csv", index_label='val')
+            
             if is_main:
-                torch.save(model.state_dict(), f"{result_dir}/models/{opt_step}.pth")
+                torch.save(model.state_dict(), f"{result_dir}/models/{opt}.pth")
                 cleardir(f"{result_dir}/optimizers")
-                torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt_step}.pth")
+                torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt}.pth")
 
             # Judge early stopping
             best_opt = val2opt_step[np.argmin(val2mean_loss)]
-            if opt_step - best_opt >= args.patience_opt:
+            if opt - best_opt >= args.patience_opt:
                 logger.info(f"Early stop.", **NO_DUP)
                 break
-            opt_to_eval = args.eval_opt
+            next_eval_opt += args.eval_opt
         
         # End of training
-        if len(opt2loss) >= args.max_opt:
+        if opt >= args.max_opt:
             break
 
         # step
@@ -533,18 +520,19 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
                 worker_step_loss = loss.item()
 
+            if check_fb_time:
+                torch.cuda.synchronize()
             step_timer.start('backward')
             loss.backward()
-        step_timer.start('after_backward')
+            if check_fb_time:
+                torch.cuda.synchronize()
 
         ## add step info 2
-        step_timer.start('get_loss_item')
         worker_opt_accum_loss += worker_step_loss
 
         ## write step info online
-        step_timer.start('write_step_info')
-        with open(step_info_path, 'a') as f:
-            f.write(f"{batch_size},{max_len},{worker_step_weight},{worker_step_loss}\n")
+        step_recorder.record(batch_size=batch_size, max_len=max_len, 
+                worker_weight=worker_step_weight, worker_loss=worker_step_loss)
 
         ## check nan
         step_timer.start('check_nan')
@@ -571,18 +559,16 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 optimizer.zero_grad()
         
         ## Log gpuuse
-        step_timer.start('log_gpuuse')
+        step_timer.start('log')
         if is_starting:
             logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
 
         ## Log grad
-        step_timer.start('log_grad')
         if check_grad:
             name, param = next(model.named_parameters())
             logger.debug(f"step[{step}] grad[{name}]={param.grad.ravel()[:5]}")
 
         ## End starting
-        step_timer.start('end_starting')
         if step+1 == 5: 
             step_timer.log_interval = 10000
             if check_data_dist:
@@ -604,25 +590,24 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             optimizer.step()
             if check_grad:
                 name, param = next(model.named_parameters())
-                logger.debug(f"opt[{len(opt2loss)}] grad[{name}]={param.grad.ravel()[:5]}")
-
+                logger.debug(f"opt[{opt}] grad[{name}]={param.grad.ravel()[:5]}")
             optimizer.zero_grad()
 
             ## sum opt_accum_loss
             opt_accum_loss = reduce_float(worker_opt_accum_loss, device)
 
             ## save opt data
-            opt2loss.append(opt_accum_loss)
-            opt2weight.append(opt_accum_weight)
-            opt2lr.append(scheduler.get_last_lr()[0])
-            opt2mem.append(psutil.virtual_memory().used/(2**30))
+            opt_recorder.record(loss=opt_accum_loss, weight=opt_accum_weight, 
+                lr=scheduler.get_last_lr()[0], memory=psutil.virtual_memory().used/(2**30))
+            opt += 1
             worker_opt_accum_loss = worker_opt_accum_weight = 0.0
 
             ## scheduler
             scheduler.step()
 
-            if len(opt2loss) % args.log_opt == 0:
-                logger.info(f"{len(opt2loss)} opt finished.", **NO_DUP)
-            opt_to_eval -= 1
+            if opt % args.log_opt == 0:
+                logger.info(f"{opt} opt finished.", **NO_DUP)
 
+    opt_recorder.flush()
+    step_recorder.flush()
     logger.info("Training finished!")

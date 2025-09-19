@@ -1,13 +1,14 @@
 import sys, random, struct, psutil, traceback, warnings, subprocess
 from functools import partial
 from bisect import bisect_right
+from logging import getLogger
+from typing import Any
 import numpy as np
+import pandas as pd
 import torch
 import torch.distributed as dist
 from .logger import get_logger
-# For compatibility
-from .time import set_logtime, logtime, logend, rectime 
-from .memory import get_mem
+
 
 # random
 def set_random_seed(seed: int):
@@ -202,3 +203,46 @@ def should_show(n: int, max_interval: int):
         return (n&(n-1)) == 0 # True if n == 2**x
     else:
         return n % max_interval == 0
+    
+class IterateRecorder:
+    logger = getLogger(f'{__module__}.{__qualname__}')
+    def __init__(self, path: str, cols: list[str], max_out_interval: int):
+        self.path = path
+        self.flushed = False
+        self.data = {col: [] for col in cols}
+        self.step = 0
+        self.max_out_interval = max_out_interval
+
+    def record(self, **kwargs: dict[str, Any]):
+        self.step += 1
+        
+        # record data
+        for col, li in self.data.items():
+            li.append(str(kwargs.pop(col, '')))
+        
+        # add unknown cols
+        if len(kwargs) > 0:
+            new_cols = list(kwargs.keys())
+            if self.step > 1:
+                self.logger.warning(f"Recorder[{self.path}] New columns were added: {kwargs.keys()}")
+
+            ## Modify DataFrame
+            if self.flushed:
+                df = pd.read_csv(self.path, keep_default_na=False, dtype=str)
+                df[new_cols] = ''
+                df.to_csv(self.path, index=False)
+
+            ## Modify self.data
+            self.data.update({col: ['']*(self.step-1)+[value] for col, value in kwargs.items()})
+        
+        # Flush
+        if should_show(self.step, self.max_interval):
+            self.flush()
+
+    def flush(self):
+        pd.DataFrame(self.data).to_csv(self.path, mode='a' if self.flushed else 'w', 
+                header=False if self.flushed else True)
+        self.flushed = True
+
+    def __del__(self):
+        self.flush()
