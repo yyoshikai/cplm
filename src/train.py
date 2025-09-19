@@ -410,7 +410,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
     if 'optimizer' in args.check:
         logger.debug(f"{optimizer=}")
-        logger.debug(f"param_groups={[len(group) for group in optimizer.param_groups]}")
+        logger.debug(f"param_groups={optimizer.param_groups}")
 
     train_start = time()
     logger.info("Training started.", **NO_DUP)
