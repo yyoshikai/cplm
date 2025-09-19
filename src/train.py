@@ -366,6 +366,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     val2mean_loss = []
     val2process_weights = []
     val2process_losses = []
+    next_eval_opt = 0
 
     # step
     ## initial state
