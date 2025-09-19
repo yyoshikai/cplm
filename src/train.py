@@ -18,6 +18,9 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import Dataset, DataLoader, Subset, RandomSampler
+from transformers.trainer_pt_utils import get_parameter_names
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+from schedulefree import RAdamScheduleFree
 
 from .data import RepeatDataset, RevealIterator
 from .data.tokenizer import VocEncoder
@@ -115,6 +118,7 @@ def add_train_args(parser: ArgumentParser):
     ## scheduler
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
+    parser.add_argument("--schedule-free", action='store_true')
 
     # environments
     parser.add_argument("--eval-opt", type=int, required=True) # temp
@@ -345,21 +349,37 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             f"{result_dir}/data/train_large_items.csv", step_timer if 'data_loading' in args.check else None)
     train_iter = train_loader.__iter__()
 
-    # Model
-    ## criterion
+    # criterion
     criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
 
-    ## optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
-    optimizer.zero_grad()
-    match args.loss_scale:
-        case None:
-            loss_scale = 1
-        case _:
-            loss_scale = float(args.loss_scale)
-
-    ## scheduler
-    scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt)
+    # optimizer & scheduler 
+    ## get param group: Partially from TRL
+    not_norm_params = get_parameter_names(model,
+            forbidden_layer_types=ALL_LAYERNORM_LAYERS, 
+            forbidden_layer_names=["bias", "layernorm", "rmsnorm"])
+    params = [{   
+        "weight_decay": args.weight_decay,
+        "params": [param for name, param in model.named_parameters() 
+            if name in not_norm_params and param.requires_grad], 
+    }, {
+        "weight_decay": 0.0,
+        "params": [param for name, param in model.named_parameters()
+            if name not in not_norm_params and param.requires_grad]
+    }]
+    ## optimizer & scheduler
+    if args.schedule_free:
+        optimizer = RAdamScheduleFree(params, lr=args.lr)
+        scheduler = None
+        optimizer.train()
+    else:
+        optimizer = torch.optim.AdamW(params, lr=args.lr)
+        optimizer.zero_grad()
+        match args.loss_scale:
+            case None:
+                loss_scale = 1
+            case _:
+                loss_scale = float(args.loss_scale)
+        scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt)
 
     # opt recorder
     opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", ['loss', 'weight', 'lr', 'memory'], args.eval_opt)
@@ -399,6 +419,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             logger.info(f"Validation at {opt=}...", **NO_DUP)
             process_weights = []
             process_losses = []
+            if args.schedule_free: optimizer.eval()
             for i_data, data_name in enumerate(data_names):
                 logger.info(f"    Validating {data_name}", **NO_DUP)
                 ## Make Loader
@@ -448,7 +469,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 process_weights.append(process_weight)
                 process_losses.append(process_loss)
                 logger.debug(f"        loss={process_loss:3.03f} weight={process_weight:3.03f}")
-
+            if args.schedule_free: optimizer.train()
+            
             ## reduce all weights & losses
             total_weights = torch.tensor(process_weights, device=device)
             total_losses = torch.tensor(process_losses, device=device)
@@ -602,13 +624,15 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             opt_accum_loss = reduce_float(worker_opt_accum_loss, device)
 
             ## save opt data
+            kwargs = {} if args.schedule_free else {'lr': scheduler.get_last_lr()[0]}
             opt_recorder.record(loss=opt_accum_loss, weight=opt_accum_weight, 
-                lr=scheduler.get_last_lr()[0], memory=psutil.virtual_memory().used/(2**30))
+                memory=psutil.virtual_memory().used/(2**30), **kwargs)
             opt += 1
             worker_opt_accum_loss = worker_opt_accum_weight = 0.0
 
             ## scheduler
-            scheduler.step()
+            if not args.schedule_free:
+                scheduler.step()
 
             if should_show(opt, args.log_opt):
                 logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:.02f}", **NO_DUP)
