@@ -146,6 +146,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
             'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
             'forward_backward_time', 'optimizer'])
+    parser.add_argument('--no-commit', action='store_true')
 
 def set_default_args(args: Namespace):
     if args.num_workers > 0 and args.prefetch_factor is None:
@@ -286,7 +287,10 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
     ## commit & log hash of git
     if is_main:
-        committed = git_commit() if not args.test else False
+        if args.test or args.no_commit:
+            committed = False
+        else:
+            committed = git_commit()
         logger.debug('git committed.' if committed else 'git not committed.')
         logger.debug(f"git hash={git_get_hash()}")
 
