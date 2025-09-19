@@ -141,7 +141,11 @@ class TimerTqdm(tqdm):
         # Recording
         self.name2time = defaultdict(float)
 
-        self.recorder = IterateRecorder(time_path, [], file_interval) if time_path is not None else None
+        if time_path is not None:
+            assert file_interval is not None
+            self.recorder = IterateRecorder(time_path, [], file_interval)
+        else:
+            self.recorder = None
         self.log_interval = log_interval
 
         self.sync_ddp = sync_ddp

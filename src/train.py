@@ -306,8 +306,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     model = DistributedDataParallel(model)
 
     # Make timer here to send to DDPStringCollateLoader
-    step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv",
-            log_interval=100, desc='step', disable_bar=True)
+    step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv", file_interval=10000, log_interval=10000, desc='step', disable_bar=True)
 
     # DataLoader
     if rank == DATA_RANK['train']:
