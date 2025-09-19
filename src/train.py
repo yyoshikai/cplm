@@ -145,7 +145,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
             'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
-            'forward_backward_time'])
+            'forward_backward_time', 'optimizer'])
 
 def set_default_args(args: Namespace):
     if args.num_workers > 0 and args.prefetch_factor is None:
