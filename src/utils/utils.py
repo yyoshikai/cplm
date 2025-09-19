@@ -241,5 +241,5 @@ class IterateRecorder:
 
     def flush(self):
         pd.DataFrame(self.data).to_csv(self.path, mode='a' if self.flushed else 'w', 
-                header=False if self.flushed else True)
+                header=False if self.flushed else True, index=False)
         self.flushed = True
