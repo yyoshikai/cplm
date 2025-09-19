@@ -4,6 +4,7 @@ from argparse import ArgumentParser, Namespace
 from collections.abc import Callable
 from contextlib import nullcontext
 from logging import Logger, getLogger
+from time import time
 from typing import Literal
 import numpy as np
 import pandas as pd
@@ -22,7 +23,7 @@ from .data import RepeatDataset, RevealIterator
 from .data.tokenizer import VocEncoder
 from .data.collator import DDPStringCollateLoader, InfiniteLoader
 from .model import Model
-from .utils import git_commit, git_get_hash, reveal_data
+from .utils import git_commit, git_get_hash, reveal_data, should_show
 from .utils.logger import add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
@@ -152,7 +153,7 @@ def set_default_args(args: Namespace):
     if args.log_large_freq is None:
         args.log_large_freq = 1 if args.test else 100000
     if args.log_step is None:
-        args.log_step = 1 if args.test else 50000
+        args.log_step = 1 if args.test else 10000
     if args.log_opt is None:
         args.log_opt = 1 if args.test else max(1, args.eval_opt//5)
 
@@ -258,7 +259,7 @@ def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch
         msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
         token_logger.debug(msg)
 
-def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], data_names: list[str], valid2train_r: Tensor, voc_encoder: VocEncoder, model, result_dir: str, device: torch.device, log_step):
+def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], data_names: list[str], valid2train_r: Tensor, voc_encoder: VocEncoder, model, result_dir: str, device: torch.device):
     global DATA_RANK, MAIN_RANK, SAVE_RANK
 
     # Environment
@@ -292,6 +293,9 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     logger.debug(f"{torch.backends.cuda.math_sdp_enabled()=}")
     logger.debug(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
     logger.debug(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
+
+    logger.debug(f"{args.log_opt=}")
+    logger.debug(f"{args.log_step=}")
 
     ## checks
     check_data_dist = 'data_dist' in args.check
@@ -381,6 +385,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
     logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
   
+    train_start = time()
     logger.info("Training started.", **NO_DUP)
     for step in step_timer:
         is_starting = step < 5
@@ -576,8 +581,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                     train_reveal_loader.enabled = False
         
 
-        if (step+1) % log_step == 0:
-            logger.info(f"{step+1} step finished.", **NO_DUP)
+        if  should_show(step+1, args.log_step):
+            logger.info(f"Step[{step}] finished t={time()-train_start:.02f}", **NO_DUP)
         
         # opt
         step_timer.start('optim_init')
@@ -605,8 +610,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             ## scheduler
             scheduler.step()
 
-            if opt % args.log_opt == 0:
-                logger.info(f"{opt} opt finished.", **NO_DUP)
+            if should_show(opt, args.log_opt):
+                logger.info(f"Opt[{opt-1}] finished t={time()-train_start}", **NO_DUP)
 
     opt_recorder.flush()
     step_recorder.flush()
