@@ -236,7 +236,7 @@ class IterateRecorder:
             self.data.update({col: ['']*(self.step-1)+[value] for col, value in kwargs.items()})
         
         # Flush
-        if should_show(self.step, self.max_interval):
+        if should_show(self.step, self.max_out_interval):
             self.flush()
 
     def flush(self):
