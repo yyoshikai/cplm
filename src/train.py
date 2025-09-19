@@ -375,6 +375,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         optimizer = torch.optim.AdamW(params, lr=args.lr)
         optimizer.zero_grad()
         scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt)
+    ## loss scale
     match args.loss_scale:
         case None:
             loss_scale = 1
@@ -403,7 +404,8 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     # Show model size
     logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
     logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
-  
+    logger.debug(f"{optimizer=}")
+
     train_start = time()
     logger.info("Training started.", **NO_DUP)
     for step in step_timer:
@@ -603,7 +605,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         
 
         if  should_show(step+1, args.log_step):
-            logger.info(f"[Finish]{step+1:>6} step t={time()-train_start:.02f}", **NO_DUP)
+            logger.info(f"[Finish]{step+1:>6} step t={time()-train_start:>9.02f}", **NO_DUP)
         
         # opt
         step_timer.start('optim_init')
@@ -634,7 +636,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
                 scheduler.step()
 
             if should_show(opt, args.log_opt):
-                logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:.02f}", **NO_DUP)
+                logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:>9.02f}", **NO_DUP)
 
     opt_recorder.flush()
     step_recorder.flush()
