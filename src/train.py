@@ -571,7 +571,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         ## Log grad
         if check_grad:
             name, param = next(model.named_parameters())
-            logger.debug(f"step[{step:6}] grad[{name}]={param.grad.ravel()[:5]}")
+            logger.debug(f"step[{step}] grad[{name}]={param.grad.ravel()[:5]}")
 
         ## End starting
         if step+1 == 5: 
@@ -582,7 +582,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
         
 
         if  should_show(step+1, args.log_step):
-            logger.info(f"[Finish]{step+1} step t={time()-train_start:.02f}", **NO_DUP)
+            logger.info(f"[Finish]{step+1:>6} step t={time()-train_start:.02f}", **NO_DUP)
         
         # opt
         step_timer.start('optim_init')
@@ -611,7 +611,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             scheduler.step()
 
             if should_show(opt, args.log_opt):
-                logger.info(f"[Finish]{opt:5} opt t={time()-train_start:.02f}", **NO_DUP)
+                logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:.02f}", **NO_DUP)
 
     opt_recorder.flush()
     step_recorder.flush()
