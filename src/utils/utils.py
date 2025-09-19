@@ -210,6 +210,7 @@ class IterateRecorder:
         self.path = path
         self.flushed = False
         self.data = {col: [] for col in cols}
+        self.data_size = 0
         self.step = 0
         self.max_out_interval = max_out_interval
 
@@ -233,15 +234,18 @@ class IterateRecorder:
                 df.to_csv(self.path, index=False)
 
             ## Modify self.data
-            self.data.update({col: ['']*(self.step-1)+[value] for col, value in kwargs.items()})
-        
+            self.data.update({col: ['']*self.data_size+[value] for col, value in kwargs.items()})
+        self.data_size += 1
+
         # Flush
         if should_show(self.step, self.max_out_interval):
             self.flush()
+        
 
     def flush(self):
         pd.DataFrame(self.data).to_csv(self.path, mode='a' if self.flushed else 'w', 
                 header=False if self.flushed else True, index=False)
         self.data = {key: [] for key in self.data.keys()}
+        self.data_size = 0
         self.flushed = True
 
