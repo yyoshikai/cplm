@@ -264,21 +264,22 @@ class SentenceDataset(Dataset[list[str]]):
             else:
                     vocs |= word.vocs()
         return vocs
-
+from collections.abc import Mapping
 class TokenWeightDataset(Dataset[Tensor]):
-    def __init__(self, token_dataset: Dataset[list[str]], separates: set[str], separates2weight: dict[tuple[str], float]):
+    def __init__(self, token_dataset: Dataset[list[str]], separates: set[str], separates2weight: dict[tuple[str], float]|list[float], by_n_separate: bool=False):
         self.token_dataset = token_dataset
         self.separates = set(separates)
         self.separates2weight = separates2weight
+        self.by_n_separate = by_n_separate
 
     def __getitem__(self, idx):
         tokens = self.token_dataset[idx]
         weights = []
-        separates = tuple()
+        separates = 0 if self.by_n_separate else tuple()
         cur_weight = self.separates2weight.get(separates, None)
         for token in tokens:
             if token in self.separates:
-                separates = separates + (token,)
+                separates = separates+1 if self.by_n_separate else separates + (token,)
                 cur_weight = self.separates2weight[separates]
             weights.append(cur_weight)
         return torch.tensor(weights, dtype=torch.float)

@@ -1,181 +1,116 @@
-# 241025 若干argumentを変更した。
-import sys, os, shutil
+import sys, os
 import argparse
-from glob import glob
 
 import yaml
-from addict import Dict
-import numpy as np
-import torch
-import torch.distributed as dist
-from torch.utils.data import Subset
-from torch.nn.parallel import DistributedDataParallel
-import transformers.utils.logging
-WORKDIR = os.environ.get('WORKDIR', "/workspace")
+from torch.utils.data import Subset, StackDataset
+WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 sys.path.append(WORKDIR)
-
-from src.data.datasets.crossdocked import CDDataset, CDProteinDataset
+from src.data import CacheDataset
+from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
+    ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
+    SentenceDataset, VocEncoder, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
+from src.data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from src.data.protein import ProteinProcessDataset
 from src.data.molecule import MolProcessDataset
 from src.data.coord import CoordTransformDataset
-from src.data import untuple
-from src.data.lmdb import IntLMDBDataset
 from src.data.tokenizer import TokenEncodeDataset, VocEncoder, \
         ProteinAtomTokenizer, FloatTokenizer, StringTokenizer
-from src.data.collator import DDPStringCollateLoader
-from src.data.tokenizer import ProteinAtomTokenizer, FloatTokenizer, StringTokenizer, \
-    TokenizeDataset, ArrayTokenizeDataset, SentenceDataset
 from src.data.protein import CoordFollowDataset
-from src.model import Model, MambaModel
-from src.utils import set_logtime
-from src.utils.path import timestamp
-from src.train import WeightedCELoss, train, add_train_args, get_train_logger, sync_train_dir, MAIN_RANK
+from src.train import train, add_train_args, set_default_args
 
 # arguments
 parser = argparse.ArgumentParser()
-
-## settings
-parser.add_argument("--studyname", default='default')
-parser.add_argument("--test", action='store_true')
-
-## training
 add_train_args(parser)
+## dataset
 parser.add_argument('--pocket-atom-weight', type=float, default=0.0)
 parser.add_argument('--pocket-coord-weight', type=float, default=0.0)
 parser.add_argument('--lig-smiles-weight', type=float, default=1.0)
 parser.add_argument('--lig-coord-weight', type=float, default=5.0)
-
-## data
-parser.add_argument("--coord-range", type=float, help='Defaults to value in training')
-parser.add_argument("--pocket-coord-heavy", action='store_true')
-parser.add_argument("--finetune-save-dir", required=True)
-parser.add_argument("--index-lmdb")
 parser.add_argument("--no-score", action='store_true')
 parser.add_argument('--protein', action='store_true')
-
 ## pretrain
 parser.add_argument("--pretrain-name", required=True)
-parser.add_argument("--pretrain-step", type=int)
-
+parser.add_argument("--pretrain-opt", type=int)
 args = parser.parse_args()
+set_default_args(args)
 
-# get finetune info
+# get pretrain info
 pretrain_dir = f"training/results/{args.pretrain_name}"
-targs = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
+targs = yaml.safe_load(open(f"{pretrain_dir}/args.yaml"))
+## check consistency of args
+args_to_ignore = ['studyname', 'max_opt', ]
+args_to_warn = ['num_workers', 'gpu_size_gb', ]
+changed_args_to_warn = []
+for aname, avalue in vars(args).items():
+    if aname in targs and avalue != targs[aname]:
+        if aname in args_to_ignore:
+            continue
+        elif aname in args_to_warn:
+            changed_args_to_warn.append(aname)
+        raise ValueError(f'args.{aname} is different: {targs[aname]}, {avalue}')
+if len(changed_args_to_warn) > 0:
+    print(f"WARNING: following args were changed from training:")
+    for aname in changed_args_to_warn:
+        print(f"    {aname}: {targs[aname]} -> {getattr(args, aname)}")
 
-## get last pretrain step
-auto_pretrain_step = False
-if args.pretrain_step is None:
-    steps = [os.path.splitext(os.path.basename(step))[0] for step in glob(f"{pretrain_dir}/models/*")]
-    steps = [int(step) for step in steps if step.isdigit()]
-    args.pretrain_step = max(steps)
-    auto_pretrain_step = True
-
-# set default args
-if args.test: args.studyname+='_test'
-if args.record_opt_step is None:
-    args.record_opt_step = 1 if args.test else 1000
-if args.tokenizer_log_interval is None:
-    args.tokenizer_log_interval = 10000 if args.test else int(1e7)
-if args.coord_range is None:
-    args.coord_range = targs.coord_range
-
-batch_first = False
-set_logtime(args.logtime)
-
-## DDP
-dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
-rank = dist.get_rank()
-size = dist.get_world_size()
-torch.cuda.set_device(rank % torch.cuda.device_count())
-device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
-    if torch.cuda.is_available() else torch.device('cpu')
-is_main = rank == MAIN_RANK
-
-## make&sync result dir
-result_dir = sync_train_dir(f"finetune/results/{timestamp()}_{args.studyname}")
-
-
-if is_main:
-    os.makedirs(f"{result_dir}/cplm", exist_ok=True)
-    shutil.copy2('finetune.py', f"{result_dir}/cplm/finetune.py")
-    shutil.copytree('src', f"{result_dir}/cplm/src")
-
-## logger
-logger, data_logger = get_train_logger(result_dir)
-logger.info(f"num_workers={args.num_workers}")
-if auto_pretrain_step:
-    logger.info(f"pretrain_step was set to {args.pretrain_step}")
+if args.pretrain_opt is None:
+    args.pretrain_opt = targs['max_opt']
 
 # data
-## pocket and ligands
-if args.protein:
-    cddata = CDProteinDataset(args.finetune_save_dir)
-else:
-    cddata = CDDataset(args.finetune_save_dir)
-if args.index_lmdb is not None:
-    index_data = IntLMDBDataset(args.index_lmdb)
-    cddata = Subset(cddata, index_data)
-rstate = np.random.RandomState(args.seed)
-protein, lig, score = untuple(cddata, 3)
-lig_smi, lig_coord = untuple(MolProcessDataset(lig, rstate, h_atom=True, h_coord=True, randomize=True), 2)
-pocket_atom, pocket_coord, pocket_coord_position \
-    = untuple(ProteinProcessDataset(protein, heavy_coord=args.pocket_coord_heavy), 3)
-
-lig_coord, pocket_coord, _center, _rotation_matrix \
-    = untuple(CoordTransformDataset(lig_coord, pocket_coord, rstate=rstate, normalize_coord=True, random_rotate=True), 4)
-
-
-## sentence
-sentence = ['[POCKET]']
-pocket_atom = TokenizeDataset(pocket_atom, ProteinAtomTokenizer())
-float_tokenizer = FloatTokenizer(-args.coord_range, args.coord_range)
-pocket_coord = ArrayTokenizeDataset(pocket_coord, float_tokenizer)
-if targs.get('coord_follow_atom', False):
-    sentence.append(CoordFollowDataset(pocket_atom, pocket_coord, pocket_coord_position))
-else:
-    sentence += [pocket_atom, '[XYZ]', pocket_coord]
-
+smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
+coord_tokenizer = FloatTokenizer('ligand', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
+protein_coord_tokenizer = FloatTokenizer('pocket', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
 if not args.no_score:
-    score = TokenizeDataset(score, float_tokenizer)
-    sentence += ['[SCORE]', score]
-lig_smi = TokenizeDataset(lig_smi, StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()))
-lig_coord = ArrayTokenizeDataset(lig_coord, float_tokenizer)
-sentence += ['[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]']
-train_data = SentenceDataset(*sentence)
+    score_tokenizer = FloatTokenizer('score', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
+protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 
-## vocs
-vocs = train_data.vocs()
-voc_encoder = VocEncoder(vocs)
+split2datas = {}
+split2datas_to_log = {}
+for split in ['valid', 'train']:
+    if args.protein:
+        cddata = TargetDiffScafCDProteinDataset(split)
+    else:
+        cddata = TargetDiffScafCDDataset(split)
+    protein, lig, score = cddata.untuple()
 
-train_data = TokenEncodeDataset(train_data, voc_encoder)
+    split2datas_to_log[split] = [cddata]
 
-if not is_main:
-    del train_data
+    lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=args.no_lig_h_coord, randomize=args.lig_randomize).untuple()
+    pocket_atom, pocket_coord, pocket_coord_position = ProteinProcessDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
 
-# Make dataset
-train_loader = DDPStringCollateLoader(train_data, args.num_workers, args.pin_memory, args.prefetch_factor, 
-    args.token_per_batch, batch_first, voc_encoder.pad_token, device, MAIN_RANK, seed=args.seed)
+    lig_coord, pocket_coord, _center, _rotation_matrix \
+        = CoordTransformDataset(lig_coord, pocket_coord, base_seed=args.seed, normalize_coord=True, random_rotate=True).untuple()
 
-# model
-if targs.get('mamba', False):
-    model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]')
-else:
-    model = Model(12, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token)
-model.to(torch.bfloat16)
-model.to(device)
-model = DistributedDataParallel(model)
+    ## sentence
+    separates = {'[POCKET]', '[XYZ]', '[SCORE]', '[LIGAND]', '[END]'}
+    pocket_atom = TokenizeDataset(pocket_atom, protein_atom_tokenizer)
+    pocket_coord = ArrayTokenizeDataset(pocket_coord, protein_coord_tokenizer)
+    if args.coord_follow_atom:
+        assert args.pocket_atom_weight == args.pocket_coord_weight
+        sentence = ['[POCKET]', CoordFollowDataset(pocket_atom, pocket_coord, pocket_coord_position), '[END]']
+        weights = [None, args.pocket_coord_weight, 0.0]
+    else:
+        sentence = ['[POCKET]', pocket_atom, '[XYZ]', pocket_coord, '[END]']
+        weights = [None, args.pocket_atom_weight, args.pocket_coord_weight, 0.0]
+    if not args.no_score:
+        score = TokenizeDataset(score, score_tokenizer)
+        sentence += ['[SCORE]', score, '[END]']
+        weights += [0.0, 0.0]
+    lig_smi = TokenizeDataset(lig_smi, StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()))
+    lig_coord = ArrayTokenizeDataset(lig_coord, coord_tokenizer)
+    sentence += ['[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]']
+    weights += [args.lig_smiles_weight, args.lig_coord_weight, 0.0]
+    train_data = SentenceDataset(*sentence)
+    vocs = train_data.vocs()
+    train_data = CacheDataset(train_data)
 
-## load state dict
-state_dict = torch.load(f"{pretrain_dir}/models/{args.pretrain_step}.pth", 
-    map_location=device, weights_only=True)
-model.load_state_dict(state_dict)
+    ## token
+    voc_encoder = VocEncoder(vocs)
+    token_data = TokenEncodeDataset(train_data, voc_encoder)
+  
+    ## weight
+    weight_data = RemoveLastDataset(TokenWeightDataset(train_data, separates, weights, by_n_separate=True))
 
-criterion = WeightedCELoss(voc_encoder, args.seed, 
-        args.pocket_atom_weight, args.pocket_coord_weight, 
-        args.lig_smiles_weight, args.lig_coord_weight)
+    split2datas[split] = [StackDataset(token_data, weight_data)]
 
-train(args, train_loader, model, criterion, result_dir, voc_encoder.pad_token, device, 
-        1 if args.test else 10000, args.seed)
-
-dist.destroy_process_group()
+train('finetune', args, split2datas['train'], split2datas['valid'], split2datas_to_log['train'], split2datas_to_log['valid'], voc_encoder, init_state_path=f"{pretrain_dir}/models/{args.pretrain_opt}.pth")

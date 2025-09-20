@@ -17,7 +17,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import Dataset, DataLoader, Subset, RandomSampler
+from torch.utils.data import Dataset, DataLoader, Subset, RandomSampler, ConcatDataset
 from transformers.trainer_pt_utils import get_parameter_names
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from schedulefree import RAdamScheduleFree
@@ -25,23 +25,27 @@ from schedulefree import RAdamScheduleFree
 from .data import RepeatDataset, RevealIterator
 from .data.tokenizer import VocEncoder
 from .data.collator import DDPStringCollateLoader, InfiniteLoader
-from .model import Model
+from .model import Model, MambaModel2
 from .utils import git_commit, git_get_hash, reveal_data, should_show
 from .utils.logger import add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
-from .utils.path import cleardir
+from .utils.path import cleardir, timestamp
 from .utils.ddp import reduce_float
-from .utils import TimerTqdm, IterateRecorder
+from .utils import TimerTqdm, IterateRecorder, ddp_set_random_seed, set_deterministic
 
-MAIN_RANK = 1
-SAVE_RANK = 0
-DATA_RANK = {'train': 3, 'valid': 2}
 NO_DUP = {'extra': {'no_dup': True}}
+def get_process_ranks() -> tuple[int, int, dict[str, int]]:
+    MAIN_RANK = 1
+    SAVE_RANK = 0
+    DATA_RANK = {'train': 3, 'valid': 2}
+    size = dist.get_world_size()
+    return MAIN_RANK % size, SAVE_RANK % size, \
+        {key: rank % size for key, rank in DATA_RANK.items()}
 
 def sync_train_dir(result_dir):
     size = dist.get_world_size()
-    main_rank = MAIN_RANK % size
+    main_rank = get_process_ranks()[0]
     if dist.get_rank() == main_rank:
         cleardir(result_dir)
         for subdir in ['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log']:
@@ -51,7 +55,6 @@ def sync_train_dir(result_dir):
         result_dirs = [None]
     dist.broadcast_object_list(result_dirs, src=main_rank)
     return result_dir
-
 
 def set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:
@@ -66,7 +69,7 @@ def get_train_logger(result_dir):
     # ddp info
     rank = dist.get_rank()
     size = dist.get_world_size()
-    is_main = rank == MAIN_RANK % size
+    is_main = rank == get_process_ranks()[0] % size
 
 
     fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
@@ -103,22 +106,40 @@ def get_train_logger(result_dir):
     transformers.utils.logging.enable_propagation()
     transformers.utils.logging.disable_default_handler()
 
-    return logger, logger, token_logger
+    return logger, token_logger
 
 def add_train_args(parser: ArgumentParser):
     # training
+    parser.add_argument("--studyname", default='noname')
     parser.add_argument("--weight-per-opt", type=int, default=int(1.6e6))
-    parser.add_argument("--max-opt", type=int, required=True) # TODO: decide default value
+    parser.add_argument("--max-opt", type=int, required=True)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--clip-grad-value", type=float, default=None)
     parser.add_argument("--clip-grad-norm", type=float, default=1.0)
-    parser.add_argument("--coord-noise-std", type=float, default=50.0)
     parser.add_argument("--loss-scale")
-
     ## scheduler
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
     parser.add_argument("--schedule-free", action='store_true')
+    # process
+    # bool系は何も指定しない場合BindGPTの設定になるようにしている
+    # pocket-heavy-coordはデフォルトで入れるようにした。
+    parser.add_argument("--lig-randomize", action='store_true')
+    parser.add_argument("--no-lig-h-atom", action='store_true')
+    parser.add_argument("--no-lig-h-coord", action='store_true')
+    parser.add_argument("--no-pocket-heavy-atom", action='store_true')
+    parser.add_argument("--no-pocket-heavy-coord", action='store_true')
+    parser.add_argument("--pocket-h-atom", action='store_true') # Datasetによっては無効？
+    parser.add_argument("--pocket-h-coord", action='store_true') # Datasetによっては無効？
+    parser.add_argument("--coord-noise-std", type=float, default=50.0)
+    parser.add_argument("--coord-range", type=int, default=250)
+    parser.add_argument("--coord-follow-atom", action='store_true')
+
+    # model
+    parser.add_argument('--mamba', action='store_true')
+    parser.add_argument('--n-layer', type=int)
+    ## Transformer
+    parser.add_argument('--pos-buffer-len', type=int, default=1600)
 
     # environments
     parser.add_argument("--eval-opt", type=int, required=True) # temp
@@ -137,7 +158,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--log-large-freq", type=int)
     parser.add_argument("--log-step", type=int)
     parser.add_argument("--log-opt", type=int)
-
     ## test
     parser.add_argument("--sync-every-step", action='store_true')
     parser.add_argument("--model-bfloat16", action='store_true')
@@ -161,6 +181,7 @@ def set_default_args(args: Namespace):
         args.log_step = 1 if args.test else 10000
     if args.log_opt is None:
         args.log_opt = 1 if args.test else max(1, args.eval_opt//5)
+    if args.test: args.studyname+='_test'
 
     # post_init
     args.gpu_size = args.gpu_size_gb * (2**30)
@@ -231,7 +252,7 @@ def log_dataset(logger: Logger, split: str, datasets: list[Dataset]):
     # log
     logger.info(f"{split} data:")
     for i in range(n_data):
-        logger.info(f"    {names[i]}: {net_sizes[i]}*{augments[i]}={sizes[i]}")
+        logger.info(f"    {names[i]}: {net_sizes[i]}*{augments[i]}={sizes[i]}", **NO_DUP)
 
 class CrossEntropyLoss(nn.CrossEntropyLoss):
     def forward(self, input: Tensor, target: Tensor):
@@ -264,21 +285,26 @@ def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch
         msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
         token_logger.debug(msg)
 
-def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], data_names: list[str], valid2train_r: Tensor, voc_encoder: VocEncoder, model, result_dir: str, device: torch.device):
-    global DATA_RANK, MAIN_RANK, SAVE_RANK
+def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], train_datas_to_log: list[Dataset], valid_datas_to_log: list[Dataset], voc_encoder: VocEncoder, init_state_path: str=None):
 
     # Environment
-    ## logging
-    logger, token_logger = map(getLogger, [None, 'dexs.train'])
-
-    ## rank
+    ## DDP
+    dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
     rank = dist.get_rank()
     size = dist.get_world_size()
-    DATA_RANK = {key: r % size for key, r in DATA_RANK.items()}
-    MAIN_RANK = MAIN_RANK % size
-    SAVE_RANK = SAVE_RANK % size
+    device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
+        if torch.cuda.is_available() else torch.device('cpu')
+    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
     is_main = rank == MAIN_RANK
     is_save_rank = rank == SAVE_RANK
+
+    ## make result dir
+    result_dir = os.path.join(tname, 'results', f"{timestamp()}_{args.studyname}")
+    result_dir = sync_train_dir(result_dir)
+
+    ## logging
+    logger, token_logger = get_train_logger(result_dir)
+    logger.debug(f"{device=}, {torch.cuda.device_count()=}")
 
     ## save args
     if is_main:
@@ -293,6 +319,11 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
             committed = git_commit()
         logger.debug('git committed.' if committed else 'git not committed.')
         logger.debug(f"git hash={git_get_hash()}")
+    
+    ## Fix seed
+    ddp_set_random_seed(args.seed)
+    if args.test or args.deterministic: 
+        set_deterministic()
 
     ## scaled dot product attention kernel
     set_sdp_kernel(args.sdp_kernel)
@@ -302,6 +333,10 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     logger.debug(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
     logger.debug(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
 
+    ## Log args
+    log_dataset(logger, 'train', train_datas_to_log)
+    log_dataset(logger, 'valid', valid_datas_to_log)
+    logger.info(f"num_workers={args.num_workers}", **NO_DUP)
     logger.debug(f"{args.log_opt=}")
     logger.debug(f"{args.log_step=}")
 
@@ -312,6 +347,15 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     check_fb_time = 'forward_backward_time' in args.check
     
     # Model
+    if args.mamba:
+        kwargs = {}
+        if args.n_layer is not None: kwargs['num_hidden_layers'] = args.n_layer
+        model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
+    else:
+        num_layers = args.n_layer or 12
+        model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
+    if init_state_path is not None:
+        model.load_state_dict(torch.load(init_state_path, map_location=device, weights_only=True))
     model.to(device)
     if args.model_bfloat16:
         model.to(torch.bfloat16)
@@ -322,6 +366,7 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
 
     # DataLoader
     if rank == DATA_RANK['train']:
+        train_data = ConcatDataset(train_datas)
         sampler = RandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
         train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=False, prefetch_factor=args.prefetch_factor)
         train_loader = InfiniteLoader(train_loader)
@@ -392,7 +437,11 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     # opt recorder
     opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", ['loss', 'weight', 'lr', 'memory'], args.eval_opt)
 
-    # Evaluate & early stopping
+    # val
+    valid2train_r = torch.tensor([len(train_data)/len(valid_data) 
+            for train_data, valid_data in zip(train_datas, valid_datas)], 
+            device=device, dtype=torch.float)
+    data_names = [type(data).__name__ for data in valid_datas_to_log]
     val2opt_step = []
     val2mean_loss = []
     val2process_weights = []
@@ -651,3 +700,5 @@ def train(args: Namespace, train_data: Dataset[tuple[Tensor, Tensor]], valid_dat
     opt_recorder.flush()
     step_recorder.flush()
     logger.info("Training finished!")
+
+    dist.destroy_process_group()
