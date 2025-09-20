@@ -276,7 +276,7 @@ class TokenWeightDataset(Dataset[Tensor]):
         tokens = self.token_dataset[idx]
         weights = []
         separates = 0 if self.by_n_separate else tuple()
-        cur_weight = self.separates2weight.get(separates, None)
+        self.separates2weight[0] if self.by_n_separate else self.separates2weight.get(separates, None)
         for token in tokens:
             if token in self.separates:
                 separates = separates+1 if self.by_n_separate else separates + (token,)

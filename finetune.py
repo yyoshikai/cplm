@@ -31,6 +31,7 @@ parser.add_argument('--protein', action='store_true')
 ## pretrain
 parser.add_argument("--pretrain-name", required=True)
 parser.add_argument("--pretrain-opt", type=int)
+parser.add_argument("--ignore-arg-diff", action='store_true')
 args = parser.parse_args()
 set_default_args(args)
 
@@ -38,20 +39,22 @@ set_default_args(args)
 pretrain_dir = f"training/results/{args.pretrain_name}"
 targs = yaml.safe_load(open(f"{pretrain_dir}/args.yaml"))
 ## check consistency of args
-args_to_ignore = ['studyname', 'max_opt', ]
-args_to_warn = ['num_workers', 'gpu_size_gb', ]
-changed_args_to_warn = []
-for aname, avalue in vars(args).items():
-    if aname in targs and avalue != targs[aname]:
-        if aname in args_to_ignore:
-            continue
-        elif aname in args_to_warn:
-            changed_args_to_warn.append(aname)
-        raise ValueError(f'args.{aname} is different: {targs[aname]}, {avalue}')
-if len(changed_args_to_warn) > 0:
-    print(f"WARNING: following args were changed from training:")
-    for aname in changed_args_to_warn:
-        print(f"    {aname}: {targs[aname]} -> {getattr(args, aname)}")
+if not args.ignore_arg_diff:
+    args_to_ignore = ['studyname', 'max_opt', 'gpu_size']
+    args_to_warn = ['num_workers', 'gpu_size_gb', 'no_commit']
+    changed_args_to_warn = []
+    for aname, avalue in vars(args).items():
+        if aname in targs and avalue != targs[aname]:
+            if aname in args_to_ignore:
+                continue
+            elif aname in args_to_warn:
+                changed_args_to_warn.append(aname)
+            else:
+                raise ValueError(f'args.{aname} is different: {targs[aname]}, {avalue}')
+    if len(changed_args_to_warn) > 0:
+        print(f"WARNING: following args were changed from training:")
+        for aname in changed_args_to_warn:
+            print(f"    {aname}: {targs[aname]} -> {getattr(args, aname)}")
 
 if args.pretrain_opt is None:
     args.pretrain_opt = targs['max_opt']

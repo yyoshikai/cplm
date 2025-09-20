@@ -32,7 +32,7 @@ from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
 from .utils.path import cleardir, timestamp
 from .utils.ddp import reduce_float
-from .utils import TimerTqdm, IterateRecorder, ddp_set_random_seed, set_deterministic
+from .utils import TimerTqdm, IterateRecorder, ddp_set_random_seed, set_deterministic, remove_module
 
 NO_DUP = {'extra': {'no_dup': True}}
 def get_process_ranks() -> tuple[int, int, dict[str, int]]:
@@ -44,7 +44,6 @@ def get_process_ranks() -> tuple[int, int, dict[str, int]]:
         {key: rank % size for key, rank in DATA_RANK.items()}
 
 def sync_train_dir(result_dir):
-    size = dist.get_world_size()
     main_rank = get_process_ranks()[0]
     if dist.get_rank() == main_rank:
         cleardir(result_dir)
@@ -355,7 +354,9 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         num_layers = args.n_layer or 12
         model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
     if init_state_path is not None:
-        model.load_state_dict(torch.load(init_state_path, map_location=device, weights_only=True))
+        state = torch.load(init_state_path, map_location=device, weights_only=True)
+        state = remove_module(state) # temp
+        model.load_state_dict(state)
     model.to(device)
     if args.model_bfloat16:
         model.to(torch.bfloat16)
@@ -559,7 +560,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             dfval.to_csv(f"{result_dir}/vals/{rank}.csv", index_label='val')
             
             if is_main:
-                torch.save(model.state_dict(), f"{result_dir}/models/{opt}.pth")
+                torch.save(model.module.state_dict(), f"{result_dir}/models/{opt}.pth")
                 cleardir(f"{result_dir}/optimizers")
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt}.pth")
 
