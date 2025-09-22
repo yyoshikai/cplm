@@ -118,6 +118,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--loss-scale")
     ## scheduler
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--warmup-ratio", type=float, default=0.04)
     parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
     parser.add_argument("--schedule-free", action='store_true')
     # process
@@ -189,8 +190,7 @@ def set_default_args(args: Namespace):
     return args
 
 def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int, 
-        warmup_ratio: float=0.04):
-    warmup_step = epoch_step*warmup_ratio
+        warmup_step: int):
     match scheduler:
         case 'warmup':
             def schedule(step: int):
@@ -438,7 +438,8 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     else:
         optimizer = torch.optim.AdamW(params, lr=args.lr)
         optimizer.zero_grad()
-        scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt)
+        scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt, 
+                args.max_opt*args.warmup_ratio)
     if 'optimizer' in args.check:
         logger.debug(f"{optimizer=}")
         logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")
