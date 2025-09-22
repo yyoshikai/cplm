@@ -233,17 +233,10 @@ class DDPStringCollateLoader(Iterable[T_out]):
             # TODO: simplify
             # Sync StopIteration
             self.start('sync_stop')
-            self.start('sync_stop_fill')
             self.stop_iteration.fill_(0)
-            self.start('sync_stop_dup')
             stop_iterations = [self.stop_iteration for rank in range(self.size)] if self.is_main else None
-            self.start('sync_stop_scatter')
             dist.scatter(self.stop_iteration, stop_iterations, src=self.main_rank)
-            self.start('sync_stop_sync')
-            torch.cuda.synchronize()
-            self.start('sync_stop_item')
             if self.stop_iteration.item(): break
-            self.start('after_sync_stop')
 
             # Send & yield batch
             yield self.scatter_batches(batches)
