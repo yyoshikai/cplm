@@ -157,9 +157,11 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--log-large-freq", type=int)
     parser.add_argument("--log-step", type=int)
     parser.add_argument("--log-opt", type=int)
+    ## compatibility
+    parser.add_argument("--model-bfloat16", action='store_true')
+    parser.add_argument("--weight-decay-all", action='store_true')
     ## test
     parser.add_argument("--sync-every-step", action='store_true')
-    parser.add_argument("--model-bfloat16", action='store_true')
     parser.add_argument("--deterministic", action='store_true')
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
@@ -361,6 +363,8 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     if args.model_bfloat16:
         model.to(torch.bfloat16)
     model = DistributedDataParallel(model)
+    logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
+    logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
 
     # Make timer here to send to DDPStringCollateLoader
     step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv", file_interval=10000, log_interval=10000, desc='step', disable_bar=True)
@@ -403,23 +407,29 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
 
     # optimizer & scheduler 
-    ## get param group: Partially from TRL
-    not_norm_params = get_parameter_names(model,
-            forbidden_layer_types=ALL_LAYERNORM_LAYERS, 
-            forbidden_layer_names=["bias", "layernorm", "rmsnorm"])
-    params = [{   
-        "weight_decay": args.weight_decay,
-        "params": [param for name, param in model.named_parameters() 
-            if name in not_norm_params and param.requires_grad], 
-    }, {
-        "weight_decay": 0.0,
-        "params": [param for name, param in model.named_parameters()
-            if name not in not_norm_params and param.requires_grad]
-    }]
-    if 'optimizer' in args.check:
-        logger.debug(f"weight_decay: {[name for name, param in model.named_parameters() if name in not_norm_params and param.requires_grad]}")
-        logger.debug(f"non weight_decay: {[name for name, param in model.named_parameters() if name not in not_norm_params and param.requires_grad]}")
-
+    ## param groups
+    if args.weight_decay_all:
+        params = [{
+            "weight_decay": args.weight_decay, 
+            "params": list(model.parameters())
+        }]
+    else:
+        # Partially from TRL
+        params_to_decay = get_parameter_names(model,
+                forbidden_layer_types=ALL_LAYERNORM_LAYERS, 
+                forbidden_layer_names=["bias", "layernorm", "rmsnorm"])
+        params = [{   
+            "weight_decay": args.weight_decay,
+            "params": [param for name, param in model.named_parameters() 
+                if name in params_to_decay and param.requires_grad], 
+        }, {
+            "weight_decay": 0.0,
+            "params": [param for name, param in model.named_parameters()
+                if name not in params_to_decay and param.requires_grad]
+        }]
+        if 'optimizer' in args.check:
+            logger.debug(f"weight_decay: {[name for name, param in model.named_parameters() if name in params_to_decay and param.requires_grad]}")
+            logger.debug(f"non weight_decay: {[name for name, param in model.named_parameters() if name not in params_to_decay and param.requires_grad]}")
     ## optimizer & scheduler
     if args.schedule_free:
         optimizer = RAdamScheduleFree(params, lr=args.lr)
@@ -429,6 +439,9 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         optimizer = torch.optim.AdamW(params, lr=args.lr)
         optimizer.zero_grad()
         scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt)
+    if 'optimizer' in args.check:
+        logger.debug(f"{optimizer=}")
+        logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")
     ## loss scale
     match args.loss_scale:
         case None:
@@ -458,13 +471,6 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     ## recorder
     step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", 
             ["batch_size", "max_len", "worker_weight" , "worker_loss"], 1000)
-
-    # Show model size
-    logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
-    logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
-    if 'optimizer' in args.check:
-        logger.debug(f"{optimizer=}")
-        logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")
 
     train_start = time()
     logger.info("Training started.", **NO_DUP)
