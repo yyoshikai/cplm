@@ -5,8 +5,6 @@ from typing import TypeVar, Optional
 from logging import getLogger
 from time import time
 
-import pandas as pd
-import torch.distributed as dist
 from tqdm import tqdm
 
 from .utils import IterateRecorder
@@ -165,6 +163,7 @@ class TimerTqdm(tqdm):
 
     def start(self, name, never_sync: bool=False):
         if self.sync_ddp and not never_sync:
+            import torch.distributed as dist
             dist.barrier()
         t = time()
         self.name2time[self.cur_job] += t - self.start_

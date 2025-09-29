@@ -18,6 +18,7 @@ from torch.utils.data import Dataset, DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence
 from torch.distributions import Categorical
 import transformers.utils.logging
+import rdkit
 
 from src.data._sampler import InfiniteRandomSampler
 from src.model import Model, MambaModel2
@@ -140,6 +141,7 @@ logger.info(f"num_workers={args.num_workers}")
 if auto_finetune_step:
     logger.info(f"finetune_step was set to {args.finetune_step}")
 log_step = 1
+logger.info(f"{rdkit.__version__=}")
 
 ### logging on other libraries
 RDLogger.DisableLog("rdApp.*")

@@ -2,7 +2,7 @@ import sys, os
 import argparse
 
 import numpy as np
-from torch.utils.data import StackDataset, Subset
+from torch.utils.data import StackDataset
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 sys.path.append(WORKDIR)
 
@@ -11,11 +11,11 @@ from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
     SentenceDataset, VocEncoder, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from src.data.coord import CoordTransformDataset
-from src.data.datasets.unimol import UniMolLigandNoMolNetDataset, UniMolPocketDataset
+from src.data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.molecule import MolProcessDataset
 from src.data.protein import ProteinProcessDataset, CoordFollowDataset
-from src.data import CacheDataset
+from src.data import CacheDataset, Subset
 from src.train import train, add_train_args, set_default_args
 
 # arguments
@@ -23,10 +23,11 @@ parser = argparse.ArgumentParser()
 ## settings
 add_train_args(parser)
 ## dataset
-for cls in [UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]:
+for cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]:
     dname = cls.__name__.removesuffix('Dataset')
     parser.add_argument(f'--{dname}', type=int, default=0)
     parser.add_argument(f'--{dname}-val-sample', type=float, default=1.0)
+parser.add_argument('--init-state')
 args = parser.parse_args()
 set_default_args(args)
 
@@ -46,14 +47,12 @@ for split in ['valid', 'train']:
     datas = []
     weight_datas = []
     datas_to_log = []
-    data_names = []
     ## Molecule
-    for d_seed, cls in enumerate([UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]):
+    for d_seed, cls in enumerate([UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]):
 
         dname = cls.__name__.removesuffix('Dataset')
         repeat = getattr(args, dname)
         if repeat == 0: continue
-        data_names.append(cls.__name__)
         
         raw = cls(split='valid' if 'data_epoch' in args.check else split)
         
@@ -72,7 +71,7 @@ for split in ['valid', 'train']:
         
         ## process
         ### Molecules
-        if cls in [UniMolLigandNoMolNetDataset]:
+        if cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset]:
             mol = raw
             smi, coord = MolProcessDataset(mol, args.seed+d_seed, 
                 h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, 
@@ -126,5 +125,5 @@ for split in ['valid', 'train']:
     datas = [StackDataset(data, weight_data) for data, weight_data in zip(datas, weight_datas)]
     split2datas[split] = datas
 
-train('training', args, split2datas['train'], split2datas['valid'], split2datas_to_log['train'], split2datas_to_log['valid'], voc_encoder)
+train('training', args, split2datas['train'], split2datas['valid'], split2datas_to_log['train'], split2datas_to_log['valid'], voc_encoder, args.init_state)
 

@@ -8,6 +8,7 @@ from logging import getLogger, Logger
 
 import numpy as np
 import torch
+import torch.utils.data as torch_data
 from torch import Tensor
 from torch.utils.data import Dataset, get_worker_info
 
@@ -25,13 +26,13 @@ class WrapDataset(Dataset[T_co]):
         self.dataset = dataset
     def __len__(self):
         return len(self.dataset)
+    def __str__(self):
+        return f"{type(self).__name__}({self.dataset})"
 
-class WrapTupleDataset(Dataset[T_co]):
+class WrapTupleDataset(WrapDataset[T_co]):
     def __init__(self, dataset: Dataset[T], tuple_size: int):
+        super().__init__(dataset)
         self.tuple_size = tuple_size
-        self.dataset = dataset
-    def __len__(self):
-        return len(self.dataset)
     def untuple(self):
         return untuple(self, self.tuple_size)
         
@@ -41,7 +42,12 @@ class ApplyDataset(WrapDataset[T_co]):
         self.func = func
     def __getitem__(self, idx: int):
         return self.func(self.dataset[idx])
-    
+
+# Override Pytorch class
+class Subset(torch_data.Subset[T_co]):
+    def __str__(self):
+        return f"Subset({self.dataset}, size={len(self.indices)}/{len(self.dataset)})"
+
 # Indexing
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):
@@ -53,9 +59,10 @@ class RepeatDataset(Dataset):
         if (idx >= self.net_size*self.n_repeat):
             raise IndexError("Dataset index out of range")
         return self.net_dataset[idx%self.net_size]
-
     def __len__(self):
         return self.net_size * self.n_repeat
+    def __str__(self):
+        return f"RepeatDataset({self.net_dataset}, {self.n_repeat})"
 
 class SampleDataset(Dataset[T_co]):
     epoch: int = 0

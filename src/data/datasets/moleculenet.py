@@ -9,11 +9,12 @@ from rdkit import Chem
 from rdkit.Chem import rdDistGeom
 from rdkit.Chem import rdDepictor
 
-WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
-MOLNET_DIR = f"{WORKDIR}//cheminfodata/molnet"
+from ...utils.path import WORKDIR
+MOLNET_DIR = f"{WORKDIR}/cheminfodata/molnet"
 
 class MoleculeNetDataset(Dataset[tuple[Chem.Mol, float]]):
     def __init__(self, dataset_name: str, task_name: str):
+        raise NotImplementedError("Need to be modified to use versions/unimol")
         with open(f"{MOLNET_DIR}/strict/{dataset_name}/canonical.txt") as f:
             self.smiles = f.read().splitlines()
         self.target = pd.read_csv(f"{MOLNET_DIR}/strict/{dataset_name}/info.csv")[task_name].values.astype(float)
@@ -41,6 +42,7 @@ class MoleculeNetDataset(Dataset[tuple[Chem.Mol, float]]):
 
 class MoleculeNetTrainDataset(Subset[tuple[Chem.Mol, float]]):
     def __init__(self, dataset_name: str, task_name: str):
+        raise NotImplementedError("Need to be modified to use versions/unimol")
         folds = pd.read_csv(f"{MOLNET_DIR}/strict/{dataset_name}/info2.csv")['gem_sfold']
         idxs = np.where(folds == 0)[0]
         dataset = MoleculeNetDataset(dataset_name, task_name)
