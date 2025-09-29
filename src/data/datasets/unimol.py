@@ -1,15 +1,14 @@
 import sys, os
 from typing import Optional, Literal
 from logging import getLogger
-from pathlib import Path
 import numpy as np, pandas as pd
-from torch.utils.data import Dataset, Subset, get_worker_info
+from torch.utils.data import Dataset, get_worker_info
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
 from ..lmdb import PickleLMDBDataset
 from ..protein import Protein
-from ..data import is_main_worker
+from ..data import is_main_worker, Subset
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
@@ -66,11 +65,14 @@ class UniMolLigandDataset(Dataset[Chem.Mol]):
         return len(self.dataset) * self.n_conformer
 
 # (TODO: not tested)
+# Uni-Molが除いてないなら除く必要はないと思う。
 class UniMolLigandNoMolNetDataset(Subset[Chem.Mol]):
     def __init__(self, split: Literal['train', 'valid'], sample_save_dir: Optional[str]=None, unimol_dir=DEFAULT_UNIMOL_DIR):
         dataset = UniMolLigandDataset(split, sample_save_dir, unimol_dir)
         indices = np.load(f"{unimol_dir}/ligands_mask/remove_molnet_test/large/{split}_idxs.npy")
         super().__init__(dataset, indices)
+    def __str__(self):
+        return type(self).__name__
 
 class UniMolPocketDataset(Dataset[Protein]):
     def __init__(self, split: Literal['train', 'valid'], unimol_dir=DEFAULT_UNIMOL_DIR):
@@ -84,12 +86,5 @@ class UniMolPocketDataset(Dataset[Protein]):
 
     def __len__(self):
         return len(self.dataset)
-
-# /workspace/cheminfodata/unimol/pocket_mask/remove_targetdif_test.py でこのマスクを作成
-# (not tested)
-class UniMolPocketNoTDTestDataset(Subset[Protein]):
-    def __init__(self, split: Literal['train', 'valid'], unimol_dir=DEFAULT_UNIMOL_DIR):
-        whole_data = UniMolPocketDataset(split, unimol_dir)
-        idxs = np.load(f"{WORKDIR}/cheminfodata/unimol/pocket_mask/remove_targetdiff_test/{split}_idxs.npy")
-        super().__init__(whole_data, idxs)
-
+    def __str__(self):
+        return type(self).__name__

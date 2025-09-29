@@ -39,7 +39,11 @@ class MolProcessDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
             smi = Chem.MolToSmiles(mol, canonical=False)
         else:
             smi = Chem.MolToSmiles(mol)
-        atom_order = mol.GetProp('_smilesAtomOutputOrder', autoConvert=True)
+        try:
+            atom_order = mol.GetProp('_smilesAtomOutputOrder', autoConvert=True)
+        except Exception as e:
+            print(f"{mol=}")
+            raise e
         if self.h_atom and not self.h_coord:
             atom_order = [o for o in atom_order if mol.GetAtomWithIdx(o).GetSymbol() != 'H']
         coord = mol.GetConformer().GetPositions()

@@ -1,7 +1,10 @@
 import sys, os, shutil, stat
 from glob import glob
+from pathlib import Path
 from datetime import datetime
 from addict import Dict
+
+WORKDIR = os.environ.get('WORKDIR', "/workspace")
 
 def cleardir(path):
     _cleardir(path)

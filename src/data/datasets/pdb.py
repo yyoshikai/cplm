@@ -61,3 +61,6 @@ class PDBUniMolRandomDataset(Subset[Protein]):
             raise ValueError
         
         super().__init__(whole_data, indices)
+
+    def __str__(self):
+        return type(self).__name__

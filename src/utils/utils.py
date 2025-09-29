@@ -1,66 +1,15 @@
-import sys, random, struct, psutil, traceback, warnings, subprocess
+import sys, struct, traceback, warnings, subprocess
 from functools import partial
 from bisect import bisect_right
 from logging import getLogger
 from typing import Any
 import numpy as np
 import pandas as pd
-import torch
-import torch.distributed as dist
+try:    
+    import torch
+except ImportError:
+    torch = None
 from .logger import get_logger
-
-
-# random
-def set_random_seed(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
-def set_deterministic():
-    torch.backends.cudnn.deterministic = True
-    torch.use_deterministic_algorithms(True, warn_only=True)
-    torch.backends.cudnn.benchmark = False
-
-
-def random_state_dict():
-    state_dict = {
-        'random': random.getstate(),
-        'numpy': np.random.get_state(),
-        'torch': torch.get_rng_state(),
-        'cuda': torch.cuda.get_rng_state_all()
-    }
-    return state_dict
-
-def load_random_state_dict(state_dict: dict):
-    random.setstate(state_dict['random'])
-    np.random.set_state(state_dict['numpy'])
-    torch.set_rng_state(state_dict['torch'])
-    torch.cuda.set_rng_state_all(state_dict['cuda'])
-
-def ddp_set_random_seed(seed: int):
-    """
-    DDPでの挙動について
-    1(採用). 各プロセスでmanual_seed(): 
-        set_device()前だと0しか初期化されない
-        → current_deviceでdeviceを確認する。
-    2(x). masterのみでmanual_seed_all():
-        node間並列ではmaster nodeしか初期化されない
-    3(x). 各プロセスでmanual_seed_all()
-        あるプロセスが初期化後処理を行った後別のプロセスが再度初期化しないよう, 処理をブロックする。
-        (masterのみでの初期化を防止することを兼ねる。)
-        init_process_group()前(is_initialized()=False)だと同期できないのでエラー
-        → プロセスごとに異なるseedを指定するかもしれないのでやめる
-    """
-    # check init_process_group() and set_device() was called.
-    assert dist.is_initialized()
-    estimated_device = dist.get_rank() % torch.cuda.device_count()
-    assert estimated_device == torch.cuda.current_device()
-
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
 
 # others
 def load_gninatypes(path, struct_fmt='fffi'):
@@ -78,8 +27,8 @@ def slice_str(x: np.ndarray, end: int):
 def remove_module(state: dict):
     new_state = {}
     for key, value in state.items():
-        assert key[:7] == 'module.'
-        new_state[key[7:]] = value
+        key = key.removeprefix('module.')
+        new_state[key] = value
     return new_state
 
 class CompressedArray:
@@ -166,7 +115,7 @@ def reveal_data(data, max_iterable_size: int=20, max_str_size: int=160) -> str:
             return start + ', '.join(item_strs) + end
     elif isinstance(data, (int, float, type)):
         return str(data)
-    elif isinstance(data, (np.ndarray, torch.Tensor)):
+    elif isinstance(data, np.ndarray) or (torch is not None and isinstance(data, torch.Tensor)):
         items = data.ravel()
         if len(items) > 10:
             items = items[:8].tolist()+['...']+items[-2:].tolist()

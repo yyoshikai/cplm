@@ -8,10 +8,11 @@ from time import time
 from typing import Literal
 import numpy as np
 import pandas as pd
-import transformers
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import transformers
+import rdkit
 from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn.parallel import DistributedDataParallel
@@ -32,7 +33,9 @@ from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
 from .utils.path import cleardir, timestamp
 from .utils.ddp import reduce_float
-from .utils import TimerTqdm, IterateRecorder, ddp_set_random_seed, set_deterministic, remove_module
+from .utils.random import ddp_set_random_seed, set_deterministic
+from .utils.time import TimerTqdm
+from .utils import IterateRecorder, remove_module
 
 NO_DUP = {'extra': {'no_dup': True}}
 def get_process_ranks() -> tuple[int, int, dict[str, int]]:
@@ -306,6 +309,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     ## logging
     logger, token_logger = get_train_logger(result_dir)
     logger.debug(f"{device=}, {torch.cuda.device_count()=}")
+    logger.info(f"{rdkit.__version__=}")
 
     ## save args
     if is_main:
@@ -357,8 +361,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
     if init_state_path is not None:
         state = torch.load(init_state_path, map_location=device, weights_only=True)
-        state = remove_module(state) # temp
-        model.load_state_dict(state)
+        model.load_state_dict(remove_module(state)) # temp
     model.to(device)
     if args.model_bfloat16:
         model.to(torch.bfloat16)
@@ -557,12 +560,12 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             val2opt_step.append(opt)
             val2mean_loss.append(mean_loss)
             dfval = pd.DataFrame({
-                ('opt', ''): val2opt_step,
-                ('mean_loss', ''): val2mean_loss
+                'opt': val2opt_step,
+                'mean_loss': val2mean_loss
             })
-            dfval[[('process_weight', data_name) for data_name in data_names]] \
+            dfval[[f'process_weight {data_name}' for data_name in data_names]] \
                 = np.array(val2process_weights)
-            dfval[[('process_loss', data_name) for data_name in data_names]] \
+            dfval[[f'process_loss {data_name}' for data_name in data_names]] \
                 = np.array(val2process_losses)
             dfval.to_csv(f"{result_dir}/vals/{rank}.csv", index_label='val')
             

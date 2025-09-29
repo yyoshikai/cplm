@@ -1,5 +1,4 @@
-import itertools, re, queue
-import multiprocessing as mp
+import itertools, re
 from collections.abc import Iterable
 from collections import defaultdict
 from logging import getLogger
@@ -10,7 +9,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from .data import WorkerAggregator, is_main_worker
+from .data import WorkerAggregator, is_main_worker, WrapDataset
 
 T_co = TypeVar('T_co', covariant=True)
 
@@ -208,9 +207,9 @@ class FloatTokenizer(Tokenizer):
         vocs |= {'.'+str(i).zfill(self.decimal) for i in range(10**self.decimal)}
         return vocs
 
-class TokenizeDataset(Dataset[list[str]]):
+class TokenizeDataset(WrapDataset[list[str]]):
     def __init__(self, dataset: Dataset, tokenizer: Tokenizer):
-        self.dataset = dataset
+        super().__init__(dataset)
         self.tokenizer = tokenizer
     
     def __getitem__(self, idx: int):
@@ -264,16 +263,19 @@ class SentenceDataset(Dataset[list[str]]):
             else:
                     vocs |= word.vocs()
         return vocs
-from collections.abc import Mapping
-class TokenWeightDataset(Dataset[Tensor]):
+    
+    def __str__(self):
+        return f"SentenceDataset([{', '.join(str(word) for word in self.sentence)}])"
+
+class TokenWeightDataset(WrapDataset[Tensor]):
     def __init__(self, token_dataset: Dataset[list[str]], separates: set[str], separates2weight: dict[tuple[str], float]|list[float], by_n_separate: bool=False):
-        self.token_dataset = token_dataset
+        super().__init__(token_dataset)
         self.separates = set(separates)
         self.separates2weight = separates2weight
         self.by_n_separate = by_n_separate
 
     def __getitem__(self, idx):
-        tokens = self.token_dataset[idx]
+        tokens = self.dataset[idx]
         weights = []
         separates = 0 if self.by_n_separate else tuple()
         self.separates2weight[0] if self.by_n_separate else self.separates2weight.get(separates, None)
@@ -283,12 +285,8 @@ class TokenWeightDataset(Dataset[Tensor]):
                 cur_weight = self.separates2weight[separates]
             weights.append(cur_weight)
         return torch.tensor(weights, dtype=torch.float)
-    def __len__(self):
-        return len(self.token_dataset)
 
-class RemoveLastDataset(Dataset[T_co]):
-    def __init__(self, dataset: Dataset[T_co]):
-        self.dataset = dataset
+class RemoveLastDataset(WrapDataset[T_co]):
     def __getitem__(self, idx: int):
         return self.dataset[idx][:-1]
     def __len__(self):
