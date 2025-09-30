@@ -193,7 +193,8 @@ def set_default_args(args: Namespace):
     return args
 
 def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int, 
-        warmup_step: int):
+        warmup_ratio: int):
+    warmup_step = warmup_ratio * epoch_step
     match scheduler:
         case 'warmup':
             def schedule(step: int):
@@ -303,7 +304,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     is_save_rank = rank == SAVE_RANK
 
     ## make result dir
-    result_dir = os.path.join(tname, 'results', f"{timestamp()}_{args.studyname}")
+    result_dir = os.path.join(tname, 'results',args.studyname)
     result_dir = sync_train_dir(result_dir)
 
     ## logging
@@ -442,7 +443,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         optimizer = torch.optim.AdamW(params, lr=args.lr)
         optimizer.zero_grad()
         scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt, 
-                args.max_opt*args.warmup_ratio)
+                args.warmup_ratio)
     if 'optimizer' in args.check:
         logger.debug(f"{optimizer=}")
         logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")

@@ -174,7 +174,7 @@ class IterateRecorder:
         if len(kwargs) > 0:
             new_cols = list(kwargs.keys())
             if self.step > 1:
-                self.logger.warning(f"Recorder[{self.path}] New columns were added: {kwargs.keys()}")
+                self.logger.warning(f"Recorder[{self.path}] New columns were added: {new_cols}")
 
             ## Modify DataFrame
             if self.flushed:
@@ -183,7 +183,8 @@ class IterateRecorder:
                 df.to_csv(self.path, index=False)
 
             ## Modify self.data
-            self.data.update({col: ['']*self.data_size+[value] for col, value in kwargs.items()})
+            for col in new_cols:
+                self.data[col] = ['']*self.data_size+[kwargs[col]]
         self.data_size += 1
 
         # Flush
