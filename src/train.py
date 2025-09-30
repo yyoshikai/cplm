@@ -1,11 +1,11 @@
-import os, math, yaml, psutil, logging
+import sys, os, math, yaml, psutil, logging
 import itertools as itr
 from argparse import ArgumentParser, Namespace
 from collections.abc import Callable
 from contextlib import nullcontext
 from logging import Logger, getLogger
 from time import time
-from typing import Literal
+from glob import glob
 import numpy as np
 import pandas as pd
 import torch
@@ -18,12 +18,12 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import Dataset, DataLoader, Subset, RandomSampler, ConcatDataset
+from torch.utils.data import Dataset, DataLoader, RandomSampler, ConcatDataset
 from transformers.trainer_pt_utils import get_parameter_names
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from schedulefree import RAdamScheduleFree
 
-from .data import RepeatDataset, RevealIterator
+from .data import RevealIterator
 from .data.tokenizer import VocEncoder
 from .data.collator import DDPStringCollateLoader, InfiniteLoader
 from .model import Model, MambaModel2
@@ -31,7 +31,7 @@ from .utils import git_commit, git_get_hash, reveal_data, should_show
 from .utils.logger import add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
-from .utils.path import cleardir, timestamp
+from .utils.path import cleardir
 from .utils.ddp import reduce_float
 from .utils.random import ddp_set_random_seed, set_deterministic
 from .utils.time import TimerTqdm
@@ -49,13 +49,26 @@ def get_process_ranks() -> tuple[int, int, dict[str, int]]:
 def sync_train_dir(result_dir):
     main_rank = get_process_ranks()[0]
     if dist.get_rank() == main_rank:
-        cleardir(result_dir)
-        for subdir in ['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log']:
-            os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
-        result_dirs = [result_dir]
+        try:
+            # Check if trained model already exists
+            exist_max_step = max([int(path.split('/')[-1].split('.')[0]) 
+                    for path in glob(f"{result_dir}/models/*.pth")]+[0])
+            if exist_max_step >= 50:
+                raise ValueError(f"{result_dir} already exists(step={exist_max_step})")
+
+            cleardir(result_dir)
+            for subdir in ['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log']:
+                os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
+            result_dirs = [result_dir]
+        except Exception as e:
+            print("Exception at sync_train_dir", e, file=sys.stderr)
+            result_dirs = [None]
     else:
         result_dirs = [None]
     dist.broadcast_object_list(result_dirs, src=main_rank)
+    result_dir = result_dirs[0]
+    if result_dir is None:
+        raise ValueError
     return result_dir
 
 def set_sdp_kernel(sdp_kernel: str|None):
@@ -220,45 +233,6 @@ def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int,
             raise ValueError
     return LambdaLR(optimizer, schedule)
 
-def just_data(datas: list, side: Literal['l', 'r']) -> list[str]:
-    strings = [str(d) for d in datas]
-    max_len = max(len(s) for s in strings)
-    return [s.ljust(max_len) if side == 'l' else s.rjust(max_len) for s in strings]
-
-def just_nums(datas: list[int|float]) -> list[str]:
-    if any(not isinstance(d, int) for d in datas):
-        datas = [f"{d}   " if isinstance(d, int) else f"{d:.02f}" for d in datas]
-    return just_data(datas, 'r')
-
-def log_dataset(logger: Logger, split: str, datasets: list[Dataset]):
-    # info
-    n_data = len(datasets)
-    names = []
-    net_sizes = []
-    augments = []
-    sizes = []
-    for data in datasets:
-        sizes.append(len(data))
-        augment = 1
-        if isinstance(data, RepeatDataset):
-            augment = data.n_repeat
-            data = data.net_dataset
-        elif type(data) == Subset:
-            augment = len(data) / len(data.dataset) 
-            data = data.dataset
-        augments.append(augment)
-        names.append(type(data).__name__)
-        net_sizes.append(len(data))
-
-    # just data
-    names = just_data(names, 'l')
-    net_sizes, augments, sizes = map(just_nums, (net_sizes, augments, sizes))
-
-    # log
-    logger.info(f"{split} data:")
-    for i in range(n_data):
-        logger.info(f"    {names[i]}: {net_sizes[i]}*{augments[i]}={sizes[i]}", **NO_DUP)
-
 class CrossEntropyLoss(nn.CrossEntropyLoss):
     def forward(self, input: Tensor, target: Tensor):
         output = super().forward(input.reshape(target.numel(), -1), target.ravel())
@@ -290,7 +264,7 @@ def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch
         msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
         token_logger.debug(msg)
 
-def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], train_datas_to_log: list[Dataset], valid_datas_to_log: list[Dataset], voc_encoder: VocEncoder, init_state_path: str=None):
+def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
 
     # Environment
     ## DDP
@@ -340,8 +314,10 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     logger.debug(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
 
     ## Log args
-    log_dataset(logger, 'train', train_datas_to_log)
-    log_dataset(logger, 'valid', valid_datas_to_log)
+    logger.info(f"[Logs in preparation]")
+    for log in preparation_logs:
+        logger.info(log, **NO_DUP)
+    logger.info('')
     logger.info(f"num_workers={args.num_workers}", **NO_DUP)
     logger.debug(f"{args.log_opt=}")
     logger.debug(f"{args.log_step=}")
@@ -460,7 +436,6 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     valid2train_r = torch.tensor([len(train_data)/len(valid_data) 
             for train_data, valid_data in zip(train_datas, valid_datas)], 
             device=device, dtype=torch.float)
-    data_names = [type(data).__name__ for data in valid_datas_to_log]
     val2opt_step = []
     val2mean_loss = []
     val2process_weights = []
@@ -493,12 +468,11 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             process_losses = []
             if args.schedule_free: optimizer.eval()
             for i_data, data_name in enumerate(data_names):
-                logger.info(f"    Validating {data_name}", **NO_DUP)
+                logger.info(f"    Validating [{data_name}]", **NO_DUP)
                 ## Make Loader
                 if rank == DATA_RANK['valid']:
-                    valid_data = valid_datas[i_data]
                     os.environ['EPOCH'] = '0'
-                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_data, batch_size=None, 
+                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_datas[i_data], batch_size=None, 
                             shuffle=True if check_data_dist else False, num_workers=args.num_workers, 
                             pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
                     if valid_is_starting:

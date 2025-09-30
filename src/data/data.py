@@ -48,6 +48,14 @@ class Subset(torch_data.Subset[T_co]):
     def __str__(self):
         return f"Subset({self.dataset}, size={len(self.indices)}/{len(self.dataset)})"
 
+class StackDataset(torch_data.StackDataset[T_co]):
+    def __str__(self):
+        if isinstance(self.datasets, tuple):
+            return f"StackDataset({', '.join([str(dataset) for dataset in self.datasets])})"
+        else:
+            return f"StackDataset({', '.join([f'{key}={value}' for key, value in self.datasets.items()])})"
+
+
 # Indexing
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):

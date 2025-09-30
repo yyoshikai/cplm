@@ -40,7 +40,7 @@ class MolProcessDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
         else:
             smi = Chem.MolToSmiles(mol)
         try:
-            atom_order = mol.GetProp('_smilesAtomOutputOrder', autoConvert=True)
+            atom_order = eval(mol.GetProp('_smilesAtomOutputOrder'))
         except Exception as e:
             print(f"{mol=}")
             raise e

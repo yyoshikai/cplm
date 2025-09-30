@@ -2,11 +2,10 @@ import sys, os
 import argparse
 
 import numpy as np
-from torch.utils.data import StackDataset
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 sys.path.append(WORKDIR)
 
-from src.data import RepeatDataset
+from src.data import RepeatDataset, StackDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
     SentenceDataset, VocEncoder, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
@@ -30,6 +29,7 @@ for cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDatase
 parser.add_argument('--init-state')
 args = parser.parse_args()
 set_default_args(args)
+logs = []
 
 # data
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
@@ -41,12 +41,14 @@ pocket_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_int
 # datasets
 vocs = set()
 split2datas = {}
-split2datas_to_log = {split: [] for split in ['valid', 'train']}
 for split in ['valid', 'train']:
-    
+
+    ### make logs
+    logs.append(f"{split} data actual_size/total_size=")
+
     datas = []
     weight_datas = []
-    datas_to_log = []
+    dnames = []
     ## Molecule
     for d_seed, cls in enumerate([UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]):
 
@@ -55,24 +57,21 @@ for split in ['valid', 'train']:
         if repeat == 0: continue
         
         raw = cls(split='valid' if 'data_epoch' in args.check else split)
-        
         ## repeat / sample
+        data = raw
         if split == 'train' and repeat != 1:
-            raw = RepeatDataset(raw, repeat)
+            data = RepeatDataset(data, repeat)
         sample = getattr(args, dname+'_val_sample')
         if (split == 'valid' or 'data_epoch' in args.check) and sample < 1.0:
             rng = np.random.default_rng(args.seed+d_seed)
-            idxs = rng.choice(len(raw), size=round(len(raw)*sample))
-            raw = Subset(raw, idxs)
-            assert len(raw) > 0
-
-        ## log data at this point
-        split2datas_to_log[split].append(raw)
+            idxs = rng.choice(len(data), size=round(len(data)*sample))
+            data = Subset(data, idxs)
+            assert len(data) > 0
         
         ## process
         ### Molecules
         if cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset]:
-            mol = raw
+            mol = data
             smi, coord = MolProcessDataset(mol, args.seed+d_seed, 
                 h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, 
                 randomize=args.lig_randomize).untuple()
@@ -92,7 +91,7 @@ for split in ['valid', 'train']:
             weight_data = RemoveLastDataset(TokenWeightDataset(mol_data, separates, separates2weight))
         ### Pockets
         else:
-            pocket = raw
+            pocket = data
             atoms, coord, coord_position = ProteinProcessDataset(pocket, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
 
             coords = CoordTransformDataset(coord, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
@@ -115,8 +114,10 @@ for split in ['valid', 'train']:
 
         datas.append(data)
         weight_datas.append(weight_data)
+        dnames.append(dname)
+        logs.append(f"    {dname}: {len(data):,}/{len(raw):,}")
         d_seed += 1
-
+    
     ### encode words
     voc_encoder = VocEncoder(vocs)
     datas = [TokenEncodeDataset(data, voc_encoder) for data in datas]
@@ -125,5 +126,6 @@ for split in ['valid', 'train']:
     datas = [StackDataset(data, weight_data) for data, weight_data in zip(datas, weight_datas)]
     split2datas[split] = datas
 
-train('training', args, split2datas['train'], split2datas['valid'], split2datas_to_log['train'], split2datas_to_log['valid'], voc_encoder, args.init_state)
+
+train('training', args, split2datas['train'], split2datas['valid'], voc_encoder, logs, dnames, args.init_state)
 
