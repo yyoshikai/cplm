@@ -230,7 +230,6 @@ class DDPStringCollateLoader(Iterable[T_out]):
     def __iter__(self) -> Generator[Optional[T_out], None, None]:
         self.start('iter_batches')
         for batches in batched(self.batch_iterator, self.size):
-            # TODO: simplify
             # Sync StopIteration
             self.start('sync_stop')
             self.stop_iteration.fill_(0)
