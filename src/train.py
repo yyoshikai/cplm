@@ -61,7 +61,7 @@ def sync_train_dir(result_dir):
                 os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
             result_dirs = [result_dir]
         except Exception as e:
-            print("Exception at sync_train_dir", e, file=sys.stderr)
+            print("Exception at sync_train_dir", e, file=sys.stderr, flush=True)
             result_dirs = [None]
     else:
         result_dirs = [None]
@@ -284,7 +284,8 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     ## logging
     logger, token_logger = get_train_logger(result_dir)
     logger.debug(f"{device=}, {torch.cuda.device_count()=}")
-    logger.info(f"{rdkit.__version__=}")
+    logger.info(f"{rdkit.__version__=}", **NO_DUP)
+    logger.info(f"{transformers.__version__=}", **NO_DUP)
 
     ## save args
     if is_main:
@@ -314,7 +315,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     logger.debug(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
 
     ## Log args
-    logger.info(f"[Logs in preparation]")
+    logger.info(f"[Logs in preparation]", **NO_DUP)
     for log in preparation_logs:
         logger.info(log, **NO_DUP)
     logger.info('')
