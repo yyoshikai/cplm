@@ -135,7 +135,7 @@ def add_train_args(parser: ArgumentParser):
     ## scheduler
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--warmup-ratio", type=float, default=0.04)
-    parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'step'])
+    parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'warmup_inverse', 'step'])
     parser.add_argument("--schedule-free", action='store_true')
     # process
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
