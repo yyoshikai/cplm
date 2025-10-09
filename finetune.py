@@ -3,8 +3,6 @@ import argparse
 
 import yaml
 from torch.utils.data import Subset, StackDataset
-WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
-sys.path.append(WORKDIR)
 from src.data import CacheDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
@@ -113,7 +111,7 @@ for split in ['valid', 'train']:
   
     ## weight
     weight_data = RemoveLastDataset(TokenWeightDataset(train_data, separates, weights, by_n_separate=True))
-
+    logs.append(f"    {split} data: {len(token_data):,}/{len(cddata):,}")
     split2datas[split] = [StackDataset(token_data, weight_data)]
 
 train('finetune', args, split2datas['train'], split2datas['valid'], voc_encoder, logs, data_names, f"{pretrain_dir}/models/{args.pretrain_opt}.pth")
