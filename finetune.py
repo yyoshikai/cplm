@@ -40,7 +40,7 @@ pretrain_dir = f"training/results/{args.pretrain_name}"
 targs = yaml.safe_load(open(f"{pretrain_dir}/args.yaml"))
 ## check consistency of args
 if not args.ignore_arg_diff:
-    args_to_ignore = ['studyname', 'max_opt', 'gpu_size', 'no_commit', 'num_workers']
+    args_to_ignore = ['studyname', 'max_opt', 'gpu_size', 'no_commit', 'num_workers', 'warmup_ratio', 'eval_opt', 'patience_opt', 'log_opt']
     args_to_warn = ['gpu_size_gb']
     changed_args_to_warn = []
     for aname, avalue in vars(args).items():
