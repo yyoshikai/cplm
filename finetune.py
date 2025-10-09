@@ -35,13 +35,15 @@ parser.add_argument("--ignore-arg-diff", action='store_true')
 args = parser.parse_args()
 set_default_args(args)
 
+logs = []
+
 # get pretrain info
 pretrain_dir = f"training/results/{args.pretrain_name}"
 targs = yaml.safe_load(open(f"{pretrain_dir}/args.yaml"))
 ## check consistency of args
 if not args.ignore_arg_diff:
-    args_to_ignore = ['studyname', 'max_opt', 'gpu_size']
-    args_to_warn = ['num_workers', 'gpu_size_gb', 'no_commit']
+    args_to_ignore = ['studyname', 'max_opt', 'gpu_size', 'no_commit', 'num_workers']
+    args_to_warn = ['gpu_size_gb']
     changed_args_to_warn = []
     for aname, avalue in vars(args).items():
         if aname in targs and avalue != targs[aname]:
@@ -52,9 +54,9 @@ if not args.ignore_arg_diff:
             else:
                 raise ValueError(f'args.{aname} is different: {targs[aname]}, {avalue}')
     if len(changed_args_to_warn) > 0:
-        print(f"WARNING: following args were changed from training:")
+        logs.append(f"following args were changed from training:")
         for aname in changed_args_to_warn:
-            print(f"    {aname}: {targs[aname]} -> {getattr(args, aname)}")
+            logs.append(f"    {aname}: {targs[aname]} -> {getattr(args, aname)}")
 
 if args.pretrain_opt is None:
     args.pretrain_opt = targs['max_opt']
@@ -68,15 +70,13 @@ if not args.no_score:
 protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 
 split2datas = {}
-split2datas_to_log = {}
 for split in ['valid', 'train']:
     if args.protein:
         cddata = TargetDiffScafCDProteinDataset(split)
     else:
         cddata = TargetDiffScafCDDataset(split)
+    data_names = [type(cddata).__name__]
     protein, lig, score = cddata.untuple()
-
-    split2datas_to_log[split] = [cddata]
 
     lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=args.no_lig_h_coord, randomize=args.lig_randomize).untuple()
     pocket_atom, pocket_coord, pocket_coord_position = ProteinProcessDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
@@ -116,4 +116,4 @@ for split in ['valid', 'train']:
 
     split2datas[split] = [StackDataset(token_data, weight_data)]
 
-train('finetune', args, split2datas['train'], split2datas['valid'], split2datas_to_log['train'], split2datas_to_log['valid'], voc_encoder, init_state_path=f"{pretrain_dir}/models/{args.pretrain_opt}.pth")
+train('finetune', args, split2datas['train'], split2datas['valid'], voc_encoder, logs, data_names, f"{pretrain_dir}/models/{args.pretrain_opt}.pth")

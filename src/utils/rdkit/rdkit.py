@@ -10,9 +10,9 @@ def ignore_warning():
 
 def set_rdkit_logger():
     rdkit_logger = logging.getLogger('rdkit')
+    rdBase.LogToPythonLogger()
     for handler in rdkit_logger.handlers: 
         rdkit_logger.removeHandler(handler)
-    rdBase.LogToPythonLogger()
     return rdkit_logger
 
 sanitize_ops = 0
