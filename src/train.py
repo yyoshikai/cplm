@@ -26,7 +26,7 @@ from schedulefree import RAdamScheduleFree
 from .data import RevealIterator
 from .data.tokenizer import VocEncoder
 from .data.collator import DDPStringCollateLoader, InfiniteLoader
-from .model import Model, MambaModel2
+from .model import Model, MambaModel
 from .utils import git_commit, git_get_hash, reveal_data, should_show
 from .utils.logger import add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger

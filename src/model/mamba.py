@@ -17,7 +17,7 @@ from transformers.generation.streamers import BaseStreamer
 from .transformer import save_vocs, align_embedding
 from ..utils.memory import get_mems
 
-class MambaModel2(nn.Module):
+class MambaModel(nn.Module):
     """
     Contents in ./gpuuse are from /workspace/resource_test/240921_transformer_size
     """
@@ -288,10 +288,3 @@ class ProgressStreamer(BaseStreamer):
         
     def end(self):
         pass
-
-def mamba2mamba2(state: dict):
-    new_state = {}
-    for key, value in state.items():
-        if key != 'vocs': key = f"model.{key}"
-        new_state[key] = value
-    return new_state
