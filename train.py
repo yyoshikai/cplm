@@ -1,9 +1,6 @@
-import sys, os
 import argparse
 
 import numpy as np
-WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
-sys.path.append(WORKDIR)
 
 from src.data import RepeatDataset, StackDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, \

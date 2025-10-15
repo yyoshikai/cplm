@@ -333,7 +333,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     if args.mamba:
         kwargs = {}
         if args.n_layer is not None: kwargs['num_hidden_layers'] = args.n_layer
-        model = MambaModel2(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
+        model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
     else:
         num_layers = args.n_layer or 12
         model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)

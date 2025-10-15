@@ -1,8 +1,7 @@
-import sys, os
 import argparse
 
 import yaml
-from torch.utils.data import Subset, StackDataset
+from torch.utils.data import StackDataset
 from src.data import CacheDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
