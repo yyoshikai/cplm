@@ -138,6 +138,8 @@ class KeyDataset(WrapDataset):
         self.key = key
     def __getitem__(self, idx):
         return self.dataset[idx][self.key]
+    def __str__(self):
+        return f"{self.dataset}[{self.key}]"
 
 def untuple_dataset(dataset: Dataset, size: int):
     if not isinstance(dataset, CacheDataset):

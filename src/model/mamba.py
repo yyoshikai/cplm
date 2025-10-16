@@ -66,20 +66,6 @@ class MambaModel(nn.Module):
         else:
             return x
     
-    def generate(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True) -> list[torch.Tensor]:
-        """
-        250801 generate2からgenerateにした。generate2はbatchごとの生成ができるようなものにした。
-        context: [L, B]
-        """
-        assert self.model.config.pad_token_id == pad_token
-        assert self.model.config.eos_token_id == self.vocs.index(end_voc)
-        output = []
-        for i, item in enumerate(context.T):
-            if pad_token in item:
-                item = item[:torch.where(item == pad_token)[0][0]]
-            output.append(self.model.generate(item.unsqueeze(0), do_sample=True, max_new_tokens=max_len, streamer=ProgressStreamer(str(i), max_len, self) if tqdm else None)[0])
-        return output
-    
     @torch.no_grad()
     def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm: bool=True, do_sample: bool=True):
         

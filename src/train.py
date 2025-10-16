@@ -240,6 +240,23 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
+def get_model(args: Namespace, voc_encoder: VocEncoder, init_state_path: str, device: torch.device):
+    
+    if args.mamba:
+        kwargs = {}
+        if args.n_layer is not None: kwargs['num_hidden_layers'] = args.n_layer
+        model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
+    else:
+        num_layers = args.n_layer or 12
+        model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
+    model.to(device)
+    if args.model_bfloat16:
+        model.to(torch.bfloat16)
+    if init_state_path is not None:
+        state = torch.load(init_state_path, map_location=device, weights_only=True)
+        model.load_state_dict(remove_module(state)) # temp
+    return model
+
 def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch: Tensor, weight_batch: Tensor, voc_encoder: VocEncoder, step: int, check_data_dist: bool, gpuuse_getter: Callable[[int, int], float]):
 
     # weight
@@ -330,19 +347,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     check_fb_time = 'forward_backward_time' in args.check
     
     # Model
-    if args.mamba:
-        kwargs = {}
-        if args.n_layer is not None: kwargs['num_hidden_layers'] = args.n_layer
-        model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
-    else:
-        num_layers = args.n_layer or 12
-        model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
-    if init_state_path is not None:
-        state = torch.load(init_state_path, map_location=device, weights_only=True)
-        model.load_state_dict(remove_module(state)) # temp
-    model.to(device)
-    if args.model_bfloat16:
-        model.to(torch.bfloat16)
+    model = get_model(args, voc_encoder, init_state_path, device)
     model = DistributedDataParallel(model)
     logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
     logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)

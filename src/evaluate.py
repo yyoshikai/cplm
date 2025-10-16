@@ -42,9 +42,9 @@ def parse_mol_tokens(tokens: list[str]) -> tuple[str, str, np.ndarray|None]:
     -------
     coord_error:
         '': No error
-        'LONG_PREFIX': No '[LIGAND]' token
-        'NOT_FLOAT': [XYZ]~[END] tokens do not fit `xx .xxx`+
-        'SIZE': coord_len % 3 != 0
+        'COORD_LONG_PREFIX': No '[LIGAND]' token
+        'COORD_NOT_FLOAT': [XYZ]~[END] tokens do not match `xx .xxx`+
+        'COORD_SIZE': coord_len % 3 != 0
     smiles: str
     coords: np.ndarray[*, 3]
     """

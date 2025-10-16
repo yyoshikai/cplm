@@ -1,19 +1,9 @@
 import argparse
 
 import yaml
-from torch.utils.data import StackDataset
-from src.data import CacheDataset
-from src.data.tokenizer import StringTokenizer, FloatTokenizer, \
-    ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
-    SentenceDataset, VocEncoder, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
-from src.data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
-from src.data.protein import ProteinProcessDataset
-from src.data.molecule import MolProcessDataset
-from src.data.coord import CoordTransformDataset
-from src.data.tokenizer import TokenEncodeDataset, VocEncoder, \
-        ProteinAtomTokenizer, FloatTokenizer, StringTokenizer
-from src.data.protein import CoordFollowDataset
 from src.train import train, add_train_args, set_default_args
+from src.finetune import get_data
+from src.data import StackDataset
 
 # arguments
 parser = argparse.ArgumentParser()
@@ -59,58 +49,12 @@ if args.pretrain_opt is None:
     args.pretrain_opt = targs['max_opt']
 
 # data
-smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
-coord_tokenizer = FloatTokenizer('ligand', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
-protein_coord_tokenizer = FloatTokenizer('pocket', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
-if not args.no_score:
-    score_tokenizer = FloatTokenizer('score', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
-protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
-
 split2datas = {}
 for split in ['valid', 'train']:
-    if args.protein:
-        cddata = TargetDiffScafCDProteinDataset(split)
-    else:
-        cddata = TargetDiffScafCDDataset(split)
-    data_names = [type(cddata).__name__]
-    protein, lig, score = cddata.untuple()
-
-    lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=args.no_lig_h_coord, randomize=args.lig_randomize).untuple()
-    pocket_atom, pocket_coord, pocket_coord_position = ProteinProcessDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
-
-    lig_coord, pocket_coord, _center, _rotation_matrix \
-        = CoordTransformDataset(lig_coord, pocket_coord, base_seed=args.seed, normalize_coord=True, random_rotate=True).untuple()
-
-    ## sentence
-    separates = {'[POCKET]', '[XYZ]', '[SCORE]', '[LIGAND]', '[END]'}
-    pocket_atom = TokenizeDataset(pocket_atom, protein_atom_tokenizer)
-    pocket_coord = ArrayTokenizeDataset(pocket_coord, protein_coord_tokenizer)
-    if args.coord_follow_atom:
-        assert args.pocket_atom_weight == args.pocket_coord_weight
-        sentence = ['[POCKET]', CoordFollowDataset(pocket_atom, pocket_coord, pocket_coord_position), '[END]']
-        weights = [None, args.pocket_coord_weight, 0.0]
-    else:
-        sentence = ['[POCKET]', pocket_atom, '[XYZ]', pocket_coord, '[END]']
-        weights = [None, args.pocket_atom_weight, args.pocket_coord_weight, 0.0]
-    if not args.no_score:
-        score = TokenizeDataset(score, score_tokenizer)
-        sentence += ['[SCORE]', score, '[END]']
-        weights += [0.0, 0.0]
-    lig_smi = TokenizeDataset(lig_smi, StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()))
-    lig_coord = ArrayTokenizeDataset(lig_coord, coord_tokenizer)
-    sentence += ['[LIGAND]', lig_smi, '[XYZ]', lig_coord, '[END]']
-    weights += [args.lig_smiles_weight, args.lig_coord_weight, 0.0]
-    train_data = SentenceDataset(*sentence)
-    vocs = train_data.vocs()
-    train_data = CacheDataset(train_data)
-
-    ## token
-    voc_encoder = VocEncoder(vocs)
-    token_data = TokenEncodeDataset(train_data, voc_encoder)
-  
-    ## weight
-    weight_data = RemoveLastDataset(TokenWeightDataset(train_data, separates, weights, by_n_separate=True))
-    logs.append(f"    {split} data: {len(token_data):,}/{len(cddata):,}")
+    voc_encoder, raw_data, token_data, weight_data, _center_data, _rotation_data \
+        = get_data(args, split, True, True, set())
+    logs.append(f"    {split} data: {len(token_data):,}/{len(raw_data):,}")
+    data_names = [type(raw_data).__name__]
     split2datas[split] = [StackDataset(token_data, weight_data)]
 
 train('finetune', args, split2datas['train'], split2datas['valid'], voc_encoder, logs, data_names, f"{pretrain_dir}/models/{args.pretrain_opt}.pth")

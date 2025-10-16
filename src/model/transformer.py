@@ -142,12 +142,12 @@ class TransformerEncoderLayer(nn.Module):
         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         return self.dropout2(x)
     
-    def generate_init_cache(self, batch_size, device: torch.device=None) -> dict[str, torch.Tensor]:
+    def generate_init_cache(self, B, device: torch.device=None) -> dict[str, torch.Tensor]:
         if device is None: device = self.linear2.weight.device
         return {
-            'k': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
+            'k': torch.zeros((B, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
                     device=device, dtype=self.linear2.weight.dtype),
-            'v': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
+            'v': torch.zeros((B, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
                     device=device, dtype=self.linear2.weight.dtype),
         }
     
@@ -338,56 +338,6 @@ class Model(nn.Module):
         else:
             return x
 
-    def generate(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int) -> torch.Tensor:
-        """
-        Use kv-cache for generation
-
-        context: torch.Tensor(long)[L, B]
-        """
-        
-        device = self.predictor.weight.device
-        vocs = np.array(self.vocs)
-        end_token = np.where(vocs == end_voc)[0][0]
-        context_len, batch_size = context.shape
-        assert context_len >= 1
-
-        sin_buf, cos_buf, mask_buf = self.sin, self.cos, self.mask \
-            if max_len <= self.pos_buffer_len else self.make_pos_buffer(max_len)
-        del mask_buf
-
-        is_finished = torch.full((batch_size,), fill_value=False, device=device)
-        input = context[:1] # [1, B]
-        cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
-        outputs = [input.squeeze(0)]
-        for pos in _tqdm(range(max_len), dynamic_ncols=True):
-
-            x = self.embedding(input)
-
-            sin = sin_buf[pos:pos+1]
-            cos = cos_buf[pos:pos+1]
-
-            layer: TransformerEncoderLayer
-            for i_layer, layer in enumerate(self.layers):
-                x, cache[i_layer] = layer.forward_one(x, cache[i_layer], sin, cos)
-
-            if self.norm is not None:
-                x = self.norm(x)
-
-            x = self.predictor(x)
-            prob = F.softmax(x[0], dim=1) # [B, D]
-            output = torch.multinomial(prob, num_samples=1) # [B, 1]
-            output = output.view(-1) # [B]
-            if pos < context_len-1:
-                pos_context = context[pos+1]
-                output[pos_context != pad_token] = pos_context[pos_context != pad_token]
-            outputs.append(output)
-                
-            is_finished = torch.logical_or(is_finished, output == end_token)
-            input = output.unsqueeze(0)
-            if torch.all(is_finished): break
-        outputs = torch.stack(outputs, dim=1)
-        return outputs
-
     def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True) -> list[torch.Tensor]:
         """
         Use kv-cache, remove finished samples
@@ -398,23 +348,30 @@ class Model(nn.Module):
         device = self.predictor.weight.device
         vocs = np.array(self.vocs)
         end_token = np.where(vocs == end_voc)[0][0]
-        context_len, batch_size = context.shape
-        assert context_len >= 1
+        L, B = context.shape
+        assert L >= 1
+        Ngen = L+max_len-1
+        """
+        ex. If max_len = 5, L = 1:
+        generate [START], *, *, *, *, * -> 5 times
+        """
 
         finished_idxs = []
         finished_outputs = []
 
-        indices = torch.arange(batch_size, dtype=torch.int, device=device) # [B,]
-        is_finished = torch.full((batch_size,), fill_value=False, device=device) # [B,]
+        indices = torch.arange(B, dtype=torch.int, device=device) # [B,]
+        is_finished = torch.full((B,), fill_value=False, device=device) # [B,]
+        n_generated = torch.zeros(B, dtype=torch.int, device=device)
         input = context[:1] # [1, B]
-        cache = [layer.generate_init_cache(batch_size) for layer in self.layers]
+        cache = [layer.generate_init_cache(B) for layer in self.layers]
         outputs = input # [1, B]
 
-        sin_buf, cos_buf, mask_buf = self.sin, self.cos, self.mask \
-            if max_len <= self.pos_buffer_len else self.make_pos_buffer(max_len)
+        sin_buf, cos_buf, mask_buf = (self.sin, self.cos, self.mask) \
+            if Ngen <= self.pos_buffer_len else self.make_pos_buffer(Ngen)
         del mask_buf
 
-        for pos in _tqdm(range(max_len)) if tqdm else range(max_len):
+        poss_pbar = _tqdm(range(Ngen)) if tqdm else range(Ngen)
+        for pos in poss_pbar:
 
             x = self.embedding(input)
 
@@ -429,12 +386,18 @@ class Model(nn.Module):
             prob = F.softmax(x[0], dim=1) # [B, D]
             output = torch.multinomial(prob, num_samples=1) # [B, 1]
             output = output.view(-1) # [B]
-            if pos < context_len-1:
+            if pos < L-1:
                 pos_context = context[pos+1]
-                output[pos_context != pad_token] = pos_context[pos_context != pad_token]
-            outputs = torch.cat([outputs, output.unsqueeze(0)], dim=0) # [L, B]
+                is_in_context = pos_context != pad_token
+                output[is_in_context] = pos_context[is_in_context]
+            else:
+                is_in_context = torch.full_like(output, fill_value=False, dtype=torch.bool)
                 
-            is_finished = torch.logical_or(is_finished, output == end_token)
+            end_token_generated = (~is_in_context)&(output == end_token)
+            n_generated[~is_in_context] += 1
+            outputs = torch.cat([outputs, output.unsqueeze(0)], dim=0) # [L, B]
+
+            is_finished = is_finished|end_token_generated|(n_generated >= max_len)
             input = output.unsqueeze(0)
             if torch.all(is_finished): break
 
@@ -445,140 +408,22 @@ class Model(nn.Module):
                 finished_idxs += indices[finished_js].tolist()
                 finished_outputs += list(outputs[:, finished_js].T)
 
-                
                 indices = indices[remain_js]
                 is_finished = is_finished[remain_js]
+                n_generated = n_generated[remain_js]
                 input = input[:, remain_js]
                 cache = [layer.slice_cache(c, remain_js) for c, layer in zip(cache, self.layers)]
                 outputs = outputs[:, remain_js]
                 context = context[:, remain_js]
+
+                if tqdm:
+                    poss_pbar.set_postfix_str(f"{len(remain_js)}/{B} remains, {is_in_context.sum()} in context")
         finished_idxs += indices.tolist()
         finished_outputs += list(outputs.T)
             
         # Order outputs
         finished_idxs_inv = np.argsort(finished_idxs)
         outputs = [finished_outputs[idx] for idx in finished_idxs_inv]
-        return outputs
-
-    def generate3(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tokens_per_batch: int, rebatch_lens: Iterable[int]) -> list[torch.Tensor]:
-        """
-        Use kv-cache, dynamic batching
-
-        context: torch.Tensor(long)[L, B]
-
-        遅かった。
-        """
-
-        assert tokens_per_batch >= max_len
-
-        device = self.predictor.weight.device
-        cpu = torch.device('cpu')
-
-        vocs = np.array(self.vocs)
-        end_token = np.where(vocs == end_voc)[0][0]
-
-        context_len, batch_size = context.shape
-        assert context_len >= 1
-        rebatch_lens = sorted(list(rebatch_lens))
-        assert rebatch_lens[-1] == max_len
-
-        
-        sin_buf, cos_buf, mask_buf = self.sin, self.cos, self.mask \
-            if max_len <= self.pos_buffer_len else self.make_pos_buffer(max_len)
-        del mask_buf
-
-        finished_idxs = []
-        finished_outputs = []
-
-        all_context = context.cpu()
-        all_indices = torch.arange(batch_size, dtype=torch.int, device=cpu) # [B,]
-        all_input = context[:1] # [1, B]
-        all_cache = [layer.generate_init_cache(batch_size, cpu) for layer in self.layers]
-        all_outputs = all_input # [1, B]
-
-        pbar = _tqdm(total=max_len)
-        l_start = 0
-        for l_end in rebatch_lens:
-            cb_size = tokens_per_batch // l_end
-
-            all_remain_js = []
-            new_input = []
-            new_cache = []
-            new_outputs = []
-
-            cb_total_step = 0
-            ncb = len(range(0, len(all_indices), cb_size))
-            for cb_start in range(0, len(all_indices), cb_size):
-                cb_end = min(cb_start+cb_size, len(all_indices))
-
-                context = all_context[:, cb_start:cb_end].to(device)
-                input = all_input[:, cb_start:cb_end].to(device)
-                cache = [{k: v[cb_start:cb_end].to(device) for k, v in c.items()}
-                    for c in all_cache]
-                outputs = [all_outputs[:, cb_start:cb_end]]
-                is_finished = torch.full((cb_end-cb_start,), fill_value=False, dtype=torch.bool, device=device)
-
-                for pos in range(l_start, l_end):
-
-                    x = self.embedding(input)
-
-                    layer: TransformerEncoderLayer
-                    for i_layer, layer in enumerate(self.layers):
-                        x, cache[i_layer] = layer.forward_one(x, cache[i_layer], sin_buf[pos:pos+1], cos_buf[pos:pos+1])
-
-                    if self.norm is not None:
-                        x = self.norm(x)
-
-                    x = self.predictor(x)
-                    prob = F.softmax(x[0], dim=1) # [B, D]
-                    output = torch.multinomial(prob, num_samples=1) # [B, 1]
-                    output = output.view(-1) # [B]
-                    if pos < context_len-1:
-                        pos_context = context[pos+1]
-                        output[pos_context != pad_token] = pos_context[pos_context != pad_token]
-                    is_finished = torch.logical_or(is_finished, output == end_token)
-                    output = output.unsqueeze(0)
-                    outputs.append(output.cpu())
-                    input = output
-                    cb_total_step += 1
-                    if cb_total_step % ncb == 0:
-                        pbar.update()
-                outputs = torch.cat(outputs, dim=0) # [L, B]    
-                
-                finished_js = torch.where(is_finished)[0].cpu()
-                remain_js = torch.where(~is_finished)[0].cpu()
-
-                finished_idxs += all_indices[finished_js+cb_start].tolist()
-                finished_outputs += list(outputs[:, finished_js].T.cpu())
-
-                all_remain_js.append(remain_js.cpu()+cb_start)
-                new_input.append(input[:, remain_js].cpu()) # [1, B]
-                new_cache.append([{k: v[remain_js].cpu() for k, v in c.items()} 
-                    for c in cache])
-                new_outputs.append(output[:, remain_js].cpu())
-
-
-            all_remain_js = torch.cat(all_remain_js)
-            all_outputs = torch.cat(new_outputs, dim=1)
-            if len(all_remain_js) == 0:
-                break
-            all_context = all_context[:, all_remain_js]
-            all_indices = all_indices[all_remain_js]
-
-
-            all_input = torch.cat(new_input, dim=1)
-            all_cache = []
-            for cs in zip(*new_cache):
-                c = {key: torch.cat([c[key] for c in cs]) for key in cs[0].keys()}
-                all_cache.append(c)
-            l_start = l_end
-        finished_idxs += all_remain_js.tolist()
-        finished_outputs += list(all_outputs.T)
-
-        # Order outputs
-        outputs = [(idx, output) for idx, output in zip(finished_idxs, finished_outputs)]
-        outputs.sort(key=lambda x: x[0])
-        outputs = [output[1] for output in outputs]
         return outputs
 
     def _get_mname(self, bf16: bool, kernel: str):        
@@ -624,7 +469,7 @@ class Model(nn.Module):
                 coef = float(eval(n)) * itemsize
                 shape = shape.split(' ') if len(shape) > 0 else []
                 for d in shape:
-                    if d == 'batch_size':
+                    if d == 'B':
                         batch_size_dim += 1
                     elif d == 'length':
                         length_dim += 1
@@ -641,7 +486,7 @@ class Model(nn.Module):
             capture_rates = yaml.safe_load(f)
         return capture_rates[self._get_mname(bf16, kernel)]
 
-    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str, 
+    def get_gpuuse(self, B: int, length: int, bf16: bool, kernel: str, 
             capture_rate: bool=True):
 
         t2dim2coefs = self.gpuuse_coef(bf16, kernel)
@@ -649,7 +494,7 @@ class Model(nn.Module):
         for dim2coefs in t2dim2coefs.values():
             gpuuse = 0
             for (batch_size_dim, length_dim), coef in dim2coefs.items():
-                gpuuse += (batch_size**batch_size_dim) * (length**length_dim) * coef
+                gpuuse += (B**batch_size_dim) * (length**length_dim) * coef
             max_gpuuse = max(gpuuse, max_gpuuse)
         if capture_rate:
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16=bf16, kernel=kernel)
