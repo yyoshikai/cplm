@@ -142,12 +142,12 @@ class TransformerEncoderLayer(nn.Module):
         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         return self.dropout2(x)
     
-    def generate_init_cache(self, B, device: torch.device=None) -> dict[str, torch.Tensor]:
+    def generate_init_cache(self, batch_size, device: torch.device=None) -> dict[str, torch.Tensor]:
         if device is None: device = self.linear2.weight.device
         return {
-            'k': torch.zeros((B, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
+            'k': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
                     device=device, dtype=self.linear2.weight.dtype),
-            'v': torch.zeros((B, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
+            'v': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
                     device=device, dtype=self.linear2.weight.dtype),
         }
     
@@ -469,7 +469,7 @@ class Model(nn.Module):
                 coef = float(eval(n)) * itemsize
                 shape = shape.split(' ') if len(shape) > 0 else []
                 for d in shape:
-                    if d == 'B':
+                    if d == 'batch_size':
                         batch_size_dim += 1
                     elif d == 'length':
                         length_dim += 1
@@ -486,7 +486,7 @@ class Model(nn.Module):
             capture_rates = yaml.safe_load(f)
         return capture_rates[self._get_mname(bf16, kernel)]
 
-    def get_gpuuse(self, B: int, length: int, bf16: bool, kernel: str, 
+    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str, 
             capture_rate: bool=True):
 
         t2dim2coefs = self.gpuuse_coef(bf16, kernel)
@@ -494,7 +494,7 @@ class Model(nn.Module):
         for dim2coefs in t2dim2coefs.values():
             gpuuse = 0
             for (batch_size_dim, length_dim), coef in dim2coefs.items():
-                gpuuse += (B**batch_size_dim) * (length**length_dim) * coef
+                gpuuse += (batch_size**batch_size_dim) * (length**length_dim) * coef
             max_gpuuse = max(gpuuse, max_gpuuse)
         if capture_rate:
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16=bf16, kernel=kernel)
