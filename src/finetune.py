@@ -14,7 +14,7 @@ from .data.protein import CoordFollowDataset
 from .utils.path import WORKDIR
 
 
-def get_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
+def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
         added_vocs: set[str]):
     
     # tokenizer
@@ -29,7 +29,7 @@ def get_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool,
         raw_data = TargetDiffScafCDProteinDataset(split)
     else:
         raw_data = TargetDiffScafCDDataset(split)
-    protein, lig, score = raw_data.untuple()
+    protein, lig, score, protein_filename, ligand_filename = raw_data.untuple()
 
     lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize).untuple()
     pocket_atom, pocket_coord, pocket_coord_position = ProteinProcessDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
@@ -72,4 +72,4 @@ def get_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool,
   
     ## weight
     weight = RemoveLastDataset(TokenWeightDataset(sentence, separates, weights, by_n_separate=True))
-    return voc_encoder, raw_data, token, weight, center, rotation
+    return voc_encoder, raw_data, token, weight, center, rotation, protein_filename, ligand_filename

@@ -25,7 +25,7 @@ def dist_broadcast_object(obj: Optional[T], src: int) -> T:
     return obj_box[0]
 
 def dist_broadcast_tensor(t: Tensor|None, device: torch.device, src: int,
-            shape: torch.Size|None=None, dtype: torch.dtype|None=None) -> Tensor:
+        shape: torch.Size|None=None, dtype: torch.dtype|None=None) -> Tensor:
     is_src = dist.get_rank() == src
     
     # Check tensor at src rank
@@ -33,6 +33,7 @@ def dist_broadcast_tensor(t: Tensor|None, device: torch.device, src: int,
         assert t is not None
         if shape is not None: assert tuple(t.shape) == tuple(shape)
         if dtype is not None: assert t.dtype == dtype
+        t = t.to(device, dtype)
 
     # Check tensor info & collect missing info
     info_to_send = []

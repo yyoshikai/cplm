@@ -37,6 +37,14 @@ from .utils.random import ddp_set_random_seed, set_deterministic
 from .utils.time import TimerTqdm
 from .utils import IterateRecorder, remove_module
 
+def init_ddp():
+    dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
+    rank = dist.get_rank()
+    size = dist.get_world_size()
+    device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
+        if torch.cuda.is_available() else torch.device('cpu')
+    return rank, size, device
+
 NO_DUP = {'extra': {'no_dup': True}}
 def get_process_ranks() -> tuple[int, int, dict[str, int]]:
     MAIN_RANK = 1
@@ -46,7 +54,7 @@ def get_process_ranks() -> tuple[int, int, dict[str, int]]:
     return MAIN_RANK % size, SAVE_RANK % size, \
         {key: rank % size for key, rank in DATA_RANK.items()}
 
-def sync_train_dir(result_dir):
+def _sync_result_dir(result_dir, subdirs):
     main_rank = get_process_ranks()[0]
     if dist.get_rank() == main_rank:
         try:
@@ -57,11 +65,11 @@ def sync_train_dir(result_dir):
                 raise ValueError(f"{result_dir} already exists(step={exist_max_step})")
 
             cleardir(result_dir)
-            for subdir in ['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log']:
+            for subdir in subdirs:
                 os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
             result_dirs = [result_dir]
         except Exception as e:
-            print("Exception at sync_train_dir", e, file=sys.stderr, flush=True)
+            print("Exception at _sync_result_dir", e, file=sys.stderr, flush=True)
             result_dirs = [None]
     else:
         result_dirs = [None]
@@ -69,9 +77,8 @@ def sync_train_dir(result_dir):
     result_dir = result_dirs[0]
     if result_dir is None:
         raise ValueError
-    return result_dir
 
-def set_sdp_kernel(sdp_kernel: str|None):
+def _set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:
         assert sdp_kernel in ['FLASH', 'CUDNN', 'MATH', 'EFFICIENT', 'ALL'] # 全て無効にするとエラーになる
         torch.backends.cuda.enable_flash_sdp(sdp_kernel in ['FLASH', 'ALL'])
@@ -128,6 +135,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--studyname", default='noname')
     parser.add_argument("--weight-per-opt", type=int, default=int(1.6e6))
     parser.add_argument("--max-opt", type=int, required=True)
+    ## optimizer
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--clip-grad-value", type=float, default=None)
     parser.add_argument("--clip-grad-norm", type=float, default=1.0)
@@ -179,7 +187,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--weight-decay-all", action='store_true')
     ## test
     parser.add_argument("--sync-every-step", action='store_true')
-    parser.add_argument("--deterministic", action='store_true')
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
             'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
@@ -281,35 +288,27 @@ def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch
         msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
         token_logger.debug(msg)
 
-def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
-
-    # Environment
-    ## DDP
-    dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
-    rank = dist.get_rank()
-    size = dist.get_world_size()
-    device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
-        if torch.cuda.is_available() else torch.device('cpu')
+def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
+    # init DDP
+    rank, size, device = init_ddp()
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
     is_main = rank == MAIN_RANK
-    is_save_rank = rank == SAVE_RANK
 
-    ## make result dir
-    result_dir = os.path.join(tname, 'results',args.studyname)
-    result_dir = sync_train_dir(result_dir)
+    # make result dir
+    _sync_result_dir(result_dir, subdirs)
 
-    ## logging
+    # logging
     logger, token_logger = get_train_logger(result_dir)
     logger.debug(f"{device=}, {torch.cuda.device_count()=}")
     logger.info(f"{rdkit.__version__=}", **NO_DUP)
     logger.info(f"{transformers.__version__=}", **NO_DUP)
 
-    ## save args
+    # save args
     if is_main:
         with open(f"{result_dir}/args.yaml", 'w') as f:
             yaml.dump({**vars(args), 'ddp_size': size}, f)
 
-    ## commit & log hash of git
+    # commit & log hash of git
     if is_main:
         if args.test or args.no_commit:
             committed = False
@@ -318,13 +317,13 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         logger.debug('git committed.' if committed else 'git not committed.')
         logger.debug(f"git hash={git_get_hash()}")
     
-    ## Fix seed
+    # Fix seed
     ddp_set_random_seed(args.seed)
     if args.test or args.deterministic: 
         set_deterministic()
 
-    ## scaled dot product attention kernel
-    set_sdp_kernel(args.sdp_kernel)
+    # scaled dot product attention kernel
+    _set_sdp_kernel(args.sdp_kernel)
     logger.debug(f"{torch.backends.cuda.cudnn_sdp_enabled()=}")
     logger.debug(f"{torch.backends.cuda.flash_sdp_enabled()=}")
     logger.debug(f"{torch.backends.cuda.math_sdp_enabled()=}")
@@ -336,9 +335,59 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     for log in preparation_logs:
         logger.info(log, **NO_DUP)
     logger.info('')
+
+    return logger, token_logger, rank, device
+
+def get_optimizer_scheduler(args, model, max_opt: int):
+    logger = getLogger('optimizer_scheduler')
+    
+    ## param groups
+    if args.weight_decay_all:
+        params = [{
+            "weight_decay": args.weight_decay, 
+            "params": list(model.parameters())
+        }]
+    else:
+        # Partially from TRL
+        params_to_decay = get_parameter_names(model,
+                forbidden_layer_types=ALL_LAYERNORM_LAYERS, 
+                forbidden_layer_names=["bias", "layernorm", "rmsnorm"])
+        params = [{   
+            "weight_decay": args.weight_decay,
+            "params": [param for name, param in model.named_parameters() 
+                if name in params_to_decay and param.requires_grad], 
+        }, {
+            "weight_decay": 0.0,
+            "params": [param for name, param in model.named_parameters()
+                if name not in params_to_decay and param.requires_grad]
+        }]
+        if 'optimizer' in args.check:
+            logger.debug(f"weight_decay: {[name for name, param in model.named_parameters() if name in params_to_decay and param.requires_grad]}")
+            logger.debug(f"non weight_decay: {[name for name, param in model.named_parameters() if name not in params_to_decay and param.requires_grad]}")
+    ## optimizer & scheduler
+    if args.schedule_free:
+        optimizer = RAdamScheduleFree(params, lr=args.lr)
+        scheduler = None
+        optimizer.train()
+    else:
+        optimizer = torch.optim.AdamW(params, lr=args.lr)
+        optimizer.zero_grad()
+        scheduler = get_scheduler(optimizer, args.scheduler, max_opt, 
+                args.warmup_ratio)
+    if 'optimizer' in args.check:
+        logger.debug(f"{optimizer=}")
+        logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")
+    return optimizer, scheduler
+
+def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
+
+    result_dir = os.path.join(tname, 'results', args.studyname)
+    logger, token_logger, rank, device = set_env(result_dir, args, preparation_logs, 
+            subdirs=['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log'])
     logger.info(f"num_workers={args.num_workers}", **NO_DUP)
     logger.debug(f"{args.log_opt=}")
     logger.debug(f"{args.log_step=}")
+    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 
     ## checks
     check_data_dist = 'data_dist' in args.check
@@ -393,42 +442,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
 
     # optimizer & scheduler 
-    ## param groups
-    if args.weight_decay_all:
-        params = [{
-            "weight_decay": args.weight_decay, 
-            "params": list(model.parameters())
-        }]
-    else:
-        # Partially from TRL
-        params_to_decay = get_parameter_names(model,
-                forbidden_layer_types=ALL_LAYERNORM_LAYERS, 
-                forbidden_layer_names=["bias", "layernorm", "rmsnorm"])
-        params = [{   
-            "weight_decay": args.weight_decay,
-            "params": [param for name, param in model.named_parameters() 
-                if name in params_to_decay and param.requires_grad], 
-        }, {
-            "weight_decay": 0.0,
-            "params": [param for name, param in model.named_parameters()
-                if name not in params_to_decay and param.requires_grad]
-        }]
-        if 'optimizer' in args.check:
-            logger.debug(f"weight_decay: {[name for name, param in model.named_parameters() if name in params_to_decay and param.requires_grad]}")
-            logger.debug(f"non weight_decay: {[name for name, param in model.named_parameters() if name not in params_to_decay and param.requires_grad]}")
-    ## optimizer & scheduler
-    if args.schedule_free:
-        optimizer = RAdamScheduleFree(params, lr=args.lr)
-        scheduler = None
-        optimizer.train()
-    else:
-        optimizer = torch.optim.AdamW(params, lr=args.lr)
-        optimizer.zero_grad()
-        scheduler = get_scheduler(optimizer, args.scheduler, args.max_opt, 
-                args.warmup_ratio)
-    if 'optimizer' in args.check:
-        logger.debug(f"{optimizer=}")
-        logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")
+    optimizer, scheduler = get_optimizer_scheduler(args, model, args.max_opt)
     ## loss scale
     match args.loss_scale:
         case None:
@@ -550,7 +564,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 = np.array(val2process_losses)
             dfval.to_csv(f"{result_dir}/vals/{rank}.csv", index_label='val')
             
-            if is_main:
+            if rank == MAIN_RANK:
                 torch.save(model.module.state_dict(), f"{result_dir}/models/{opt}.pth")
                 cleardir(f"{result_dir}/optimizers")
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt}.pth")
@@ -626,7 +640,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                         logger.debug(f"{name}: {n_nan=}, {n_inf=}", **NO_DUP)
 
                 ## save situation
-                if is_save_rank and not nan_grad_step_saved:
+                if rank == SAVE_RANK and not nan_grad_step_saved:
                     nan_dir = f"{result_dir}/nan_steps/{step}/{rank}"
                     os.makedirs(nan_dir, exist_ok=True)
                     torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")

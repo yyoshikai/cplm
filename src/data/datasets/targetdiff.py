@@ -14,7 +14,7 @@ DEFAULT_TARGETDIFF_DIR = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff"
 # 処理を確認 @ /workspace/cplm/experiments/250824_modify_data_code/source.ipynb
 class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float]]):
     def __init__(self, split: str, targetdiff_dir: str=DEFAULT_TARGETDIFF_DIR, 
-            crossdocked_dir: str=DEFAULT_CD1_1_TYPES_DIR, out_fname: bool=False):
+            crossdocked_dir: str=DEFAULT_CD1_1_TYPES_DIR):
         """
         NOTE: 
             For ligand, hydrogen is NOT included
@@ -25,10 +25,9 @@ class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float]]):
         - 
         
         """
-        super().__init__(5 if out_fname else 3)
+        super().__init__(5)
         self.targetdiff_dir = targetdiff_dir
         self.crossdocked_dir = crossdocked_dir
-        self.out_fname = out_fname
         self.lmdb_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0_pocket10_processed_final.lmdb"
         self.score_lmdb_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0_pocket10_processed_final_score.lmdb"
         self.key_idxs = np.load(f"{self.targetdiff_dir}/mask/split_mol/250920_0/{split}_idxs.npy")
@@ -53,18 +52,14 @@ class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float]]):
         score_env, score_txn = load_lmdb(self.score_lmdb_path)
         score = pickle.loads(score_txn.get(key))
 
-        output = (pocket, mol, score)
-        if self.out_fname:
-            output += (data['protein_filename'], data['ligand_filename'])
-
-        return output
+        return pocket, mol, score, data['protein_filename'], data['ligand_filename']
 
     def __len__(self):
         return len(self.key_idxs)
 
 class TargetDiffScafCDProteinDataset(TupleDataset[tuple[Protein, Chem.Mol, float]]):
     def __init__(self, split: str, targetdiff_dir: str=DEFAULT_TARGETDIFF_DIR, 
-            crossdocked_dir: str=DEFAULT_CD1_1_TYPES_DIR, out_fname: bool=False):
+            crossdocked_dir: str=DEFAULT_CD1_1_TYPES_DIR):
         """
         NOTE: 
             For ligand, hydrogen is NOT included
@@ -75,10 +70,9 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[Protein, Chem.Mol, float
         - 
         
         """
-        super().__init__(5 if out_fname else 3)
+        super().__init__(5)
         self.targetdiff_dir = targetdiff_dir
         self.crossdocked_dir = crossdocked_dir
-        self.out_fname = out_fname
         self.lmdb_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0_pocket10_processed_final.lmdb"
         self.score_lmdb_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0_pocket10_processed_final_score.lmdb"
         self.key_idxs = np.load(f"{self.targetdiff_dir}/mask/split_mol/250920_0/{split}_idxs.npy")
@@ -106,11 +100,7 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[Protein, Chem.Mol, float
         score_env, score_txn = load_lmdb(self.score_lmdb_path)
         score = pickle.loads(score_txn.get(key))
 
-        output = (protein, mol, score)
-        if self.out_fname:
-            output += (data['protein_filename'], data['ligand_filename'])
-
-        return output
+        return protein, mol, score, data['protein_filename'], data['ligand_filename']
 
     def __len__(self):
         return len(self.key_idxs)

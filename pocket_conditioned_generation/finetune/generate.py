@@ -8,7 +8,7 @@ WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path += [f"{WORKDIR}/cplm"]
 from src.utils.path import subs_vars
 from src.data.tokenizer import StringTokenizer
-from src.finetune import get_data
+from src.finetune import get_finetune_data
 from src.train import get_model
 from src.generate import generate
 
@@ -58,8 +58,9 @@ if __name__ == '__main__':
 
     # Data
     added_vocs = StringTokenizer(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines()).vocs()
-    voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation_data \
-        = get_data(fargs, 'test', False, True, added_vocs)
+    voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation_data, \
+        _protein_filename_data, _ligand_filename_data \
+        = get_finetune_data(fargs, 'test', False, True, added_vocs)
     def collate_fn(batch):
         indices, batch, centers = list(zip(*batch))
         batch = pad_sequence(batch, padding_value=voc_encoder.pad_token)

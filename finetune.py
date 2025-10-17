@@ -2,7 +2,7 @@ import argparse
 
 import yaml
 from src.train import train, add_train_args, set_default_args
-from src.finetune import get_data
+from src.finetune import get_finetune_data
 from src.data import StackDataset
 
 # arguments
@@ -51,8 +51,9 @@ if args.pretrain_opt is None:
 # data
 split2datas = {}
 for split in ['valid', 'train']:
-    voc_encoder, raw_data, token_data, weight_data, _center_data, _rotation_data \
-        = get_data(args, split, True, True, set())
+    voc_encoder, raw_data, token_data, weight_data, _center_data, _rotation_data, \
+        _protein_filename_data, _ligand_filename_data \
+        = get_finetune_data(args, split, True, True, set())
     logs.append(f"    {split} data: {len(token_data):,}/{len(raw_data):,}")
     data_names = [type(raw_data).__name__]
     split2datas[split] = [StackDataset(token_data, weight_data)]
