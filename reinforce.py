@@ -22,7 +22,6 @@ from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder
 from src.utils.path import cleardir
-from src.utils.logger import INFO_WORKER
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.evaluate import eval_vina, eval_qvina3
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks
@@ -131,30 +130,22 @@ match args.target:
     case 'min_vina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             score, min_score = eval_vina(lig_path, rec_path, out_dir)
-            if min_score is None:
-                return np.nan
-            return -min_score
+            return -min_score if min_score is not None else np.nan
         error_score = -50
     case 'vina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             score, min_score = eval_vina(lig_path, rec_path, out_dir)
-            if score is None:
-                return np.nan
-            return -score
+            return -score if min_score is not None else np.nan
         error_score = -50
     case 'mw_max':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             mol = Chem.SDMolSupplier(lig_path).__next__()
-            if mol is None: 
-                return np.nan
-            return rdMolDescriptors.CalcExactMolWt(mol)
+            return rdMolDescriptors.CalcExactMolWt(mol) if mol is not None else np.nan
         error_score = 0
     case 'qvina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, path_to_qvina=args.path_to_qvina)
-            if score is None:
-                return np.nan
-            return -score
+            return -score if score is not None else np.nan
         error_score = -50
     case 'dummy':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
@@ -236,6 +227,7 @@ class ReinforceIter:
         items_box = [None]
         dist.scatter_object_list(items_box, batched_items)
         tokens, centers, rotations, lfnames, pfnames = zip(*items_box[0])
+        print(f"{type(centers[0])=}")
         tokens = pad_sequence(tokens, False, voc_encoder.pad_token)
         return all_idxs, tokens, centers, rotations, lfnames, pfnames
 train_iter = ReinforceIter(train_data, args.num_workers, 
@@ -446,7 +438,7 @@ for step in range(args.max_opt):
             if rank == SAVE_RANK and not nan_grad_step_saved:
                 nan_dir = f"{result_dir}/nan_step_{step}/{rank}"
                 os.makedirs(nan_dir, exist_ok=True)
-                torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
+                torch.save(tokens.detach().cpu(), f"{nan_dir}/batch.pt")
                 torch.save(model.state_dict(), f"{nan_dir}/model.pth")
                 nan_grad_step_saved = True
             
