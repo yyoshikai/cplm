@@ -60,6 +60,7 @@ parser.add_argument('--loss-scale')
 parser.add_argument('--lr', type=float, default=1.4e-5) # same as BindGPT
 parser.add_argument('--scheduler', default='constant') # same as BindGPT
 parser.add_argument("--schedule-free", action='store_true')
+parser.add_argument("--warmup-ratio", type=float, default=0.04)
 ## finetune
 parser.add_argument('--finetune-name', required=True)
 parser.add_argument('--finetune-opt', type=int)
