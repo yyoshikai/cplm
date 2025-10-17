@@ -338,6 +338,7 @@ for step in range(args.max_opt):
                 continue
             
             rotation_inv = np.linalg.inv(rotation)
+            print(type(coords), type(rotation_inv), type(center), flush=True)
             coords = np.matmul(coords, rotation_inv) + center
             error, mol = parse_mol(smiles, coords)
             errors.append(error)
