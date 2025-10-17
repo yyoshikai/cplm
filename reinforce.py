@@ -122,7 +122,6 @@ added_vocs = set(vocs)
 voc_encoder, raw_data, token_data, weight_data, center_data, rotation_data,\
         protein_filename_data, ligand_filename_data \
         = get_finetune_data(fargs, 'train', False, True, added_vocs)
-print(f"{type(center_data[0])=}")
 index_data, token_data = index_dataset(token_data)
 train_data = StackDataset(index_data, token_data, center_data, rotation_data, 
         protein_filename_data, ligand_filename_data)
@@ -217,6 +216,7 @@ class ReinforceIter:
             all_items = []
             for _ in range(self.batch_size*self.size // self.repeat_per_sample):
                 idx_item = self.fixed_item if self.fix_pocket else self.iter.__next__()
+                print([type(i) for i in idx_item])
                 all_idxs += [idx_item[0]] * self.repeat_per_sample
                 all_items += [idx_item[1:]] * self.repeat_per_sample
             all_idxs = torch.tensor(all_idxs, dtype=torch.int, device=device)
@@ -228,7 +228,6 @@ class ReinforceIter:
         items_box = [None]
         dist.scatter_object_list(items_box, batched_items)
         tokens, centers, rotations, lfnames, pfnames = zip(*items_box[0])
-        print(f"{type(centers[0])=}")
         tokens = pad_sequence(tokens, False, voc_encoder.pad_token)
         return all_idxs, tokens, centers, rotations, lfnames, pfnames
 train_iter = ReinforceIter(train_data, args.num_workers, 
