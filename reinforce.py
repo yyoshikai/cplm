@@ -340,6 +340,8 @@ for step in range(args.max_opt):
             
             lig_path = f"{eval_dir}/lig.sdf"
             rec_path = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff/crossdocked_v1.1_rmsd1.0/{pfname}"
+            print(f"{lig_path=}")
+            print(f"{rec_path=}")
             if args.num_score_workers >= 2:
                 futures.append(e.submit(get_score, 
                         lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
