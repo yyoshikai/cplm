@@ -274,7 +274,8 @@ for step in range(args.max_opt):
     L, B = tokens.shape
 
     # forward
-    with torch.autocast('cuda', dtype=torch.bfloat16):
+    from contextlib import nullcontext
+    with nullcontext(): # torch.autocast('cuda', dtype=torch.bfloat16):
 
         ## generate sample
         model.eval()
