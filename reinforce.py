@@ -275,7 +275,7 @@ for step in range(args.max_opt):
 
     # forward
     from contextlib import nullcontext
-    with nullcontext(): # torch.autocast('cuda', dtype=torch.bfloat16):
+    with torch.autocast('cuda', dtype=torch.bfloat16):
 
         ## generate sample
         model.eval()
