@@ -279,7 +279,7 @@ for step in range(args.max_opt):
     Lo, B = out_batch.shape
     dtype = torch.float
     weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
-    for b, (prompt_size, output) in enumerate(prompt_sizes, outputs):
+    for b, (prompt_size, output) in enumerate(zip(prompt_sizes, outputs)):
         weight[prompt_size:prompt_size+len(output)] = 1.0
 
     ## Log output
