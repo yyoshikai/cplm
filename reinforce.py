@@ -267,8 +267,8 @@ for step in range(args.max_opt):
 
     # get batch
     all_idxs, tokens, centers, rotations, lfnames, pfnames = train_iter.__next__()
-    batch = batch.to(device)
-    L, B = batch.shape
+    tokens = tokens.to(device)
+    L, B = tokens.shape
 
     # forward
     with torch.autocast('cuda', dtype=torch.bfloat16):
@@ -276,7 +276,7 @@ for step in range(args.max_opt):
         ## generate sample
         model.eval()
         with torch.inference_mode():
-            outputs = net_model.generate2(batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
+            outputs = net_model.generate2(tokens, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
 
         out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
         Lo, B = out_batch.shape
