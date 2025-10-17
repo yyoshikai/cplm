@@ -222,7 +222,7 @@ class ReinforceIter:
             all_items = []
             for _ in range(self.batch_size*self.size // self.repeat_per_sample):
                 idx_item = self.fixed_item if self.fix_pocket else self.iter.__next__()
-                all_idxs = [idx_item[0]] * self.repeat_per_sample
+                all_idxs += [idx_item[0]] * self.repeat_per_sample
                 all_items += [idx_item[1:]] * self.repeat_per_sample
             all_idxs = torch.tensor(all_idxs, dtype=torch.int, device=device)
             batched_items = [all_items[r*self.batch_size:(r+1)*self.batch_size] for r in range(self.size)]
