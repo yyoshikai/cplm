@@ -184,6 +184,7 @@ init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
 init_model = get_model(pargs, voc_encoder, init_state_path, device)
 net_model = get_model(pargs, voc_encoder, init_state_path, device)
 model = DistributedDataParallel(net_model)
+model.to(device)
 from src.utils.ddp import dist_broadcast_tensor
 
 # DataLoader
