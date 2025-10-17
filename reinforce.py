@@ -267,7 +267,7 @@ for step in range(args.max_opt):
     prompt_sizes = [len(token) for token in prompt_tokens]
     prompt_batch = pad_sequence(prompt_tokens, False, voc_encoder.pad_token)
     prompt_batch = prompt_batch.to(device)
-    L, B = prompt_tokens.shape
+    L, B = prompt_batch.shape
 
     # forward
     ## generate sample
