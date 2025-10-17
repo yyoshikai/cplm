@@ -339,7 +339,7 @@ for step in range(args.max_opt):
                 f.write(Chem.MolToMolBlock(mol))
             
             lig_path = f"{eval_dir}/lig.sdf"
-            actual_pfname = re.match(r"(.+?/.+?_rec)_.+", pfname).group(0)+'.pdb'
+            actual_pfname = re.match(r"(.+?/.+?_rec)_.+", pfname).group(1)+'.pdb'
             rec_path = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff/crossdocked_v1.1_rmsd1.0/{actual_pfname}"
             print(f"{lig_path=}")
             print(f"{rec_path=}")
