@@ -122,6 +122,7 @@ added_vocs = set(vocs)
 voc_encoder, raw_data, token_data, weight_data, center_data, rotation_data,\
         protein_filename_data, ligand_filename_data \
         = get_finetune_data(fargs, 'train', False, True, added_vocs)
+print(f"{type(center_data[0])=}")
 index_data, token_data = index_dataset(token_data)
 train_data = StackDataset(index_data, token_data, center_data, rotation_data, 
         protein_filename_data, ligand_filename_data)
