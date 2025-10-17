@@ -60,7 +60,7 @@ if __name__ == '__main__':
     added_vocs = StringTokenizer(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines()).vocs()
     voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation_data, \
         _protein_filename_data, _ligand_filename_data \
-        = get_finetune_data(fargs, 'test', False, True, added_vocs)
+        = get_finetune_data(fargs, 'test', False, True, added_vocs, prompt_score='none' if args.no_score else 'low')
     def collate_fn(batch):
         indices, batch, centers = list(zip(*batch))
         batch = pad_sequence(batch, padding_value=voc_encoder.pad_token)

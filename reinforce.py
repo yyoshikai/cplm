@@ -24,7 +24,8 @@ from src.utils import IterateRecorder
 from src.utils.path import cleardir
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.evaluate import eval_vina, eval_qvina3
-from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks
+from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks, log_batch
+from src.model import Model, MambaModel
 from src.finetune import get_finetune_data
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
@@ -79,7 +80,7 @@ parser.add_argument('--tokenizer-log-interval', type=int)
 parser.add_argument('--use-categorical', action='store_true')
 parser.add_argument('--fix-pocket', action='store_true')
 parser.add_argument("--weight-decay-all", action='store_true')
-parser.add_argument('--check', nargs='*', default=[])
+parser.add_argument('--check', nargs='*', default=[], choices=['data_dist'])
 add_env_args(parser)
 args = parser.parse_args()
 ## set default args
@@ -98,6 +99,9 @@ pname = fargs.pretrain_name
 pretrain_dir = f"training/results/{pname}"
 pargs = Dict(yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
 coord_follow_atom = pargs.get('coord_follow_atom', False)
+
+## check finetuning
+assert fargs.no_score
 
 ## get last finetune step
 if args.finetune_opt is None:
@@ -121,7 +125,7 @@ vocs = state_dict['vocs' if 'vocs' in state_dict else 'module.vocs'][1:]
 added_vocs = set(vocs)
 voc_encoder, raw_data, token_data, weight_data, center_data, rotation_data,\
         protein_filename_data, ligand_filename_data \
-        = get_finetune_data(fargs, 'train', False, True, added_vocs)
+        = get_finetune_data(fargs, 'train', False, True, added_vocs, 'none')
 index_data, token_data = index_dataset(token_data)
 train_data = StackDataset(index_data, token_data, center_data, rotation_data, 
         protein_filename_data, ligand_filename_data)
@@ -144,19 +148,15 @@ match args.target:
         error_score = 0
     case 'qvina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
-            score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, path_to_qvina=args.path_to_qvina, verbose=True)
+            score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, path_to_qvina=args.path_to_qvina)
             return -score if score is not None else np.nan
         error_score = -50
     case 'dummy':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
             return random.random()
         error_score = 0
-
 if args.error_score is not None:
     error_score = args.error_score
-
-
-# training
 
 # Environment
 result_dir = f"reinforce/results/{args.studyname}"
@@ -179,6 +179,11 @@ net_model.to(device)
 model = DistributedDataParallel(net_model)
 model.to(device)
 from src.utils.ddp import dist_broadcast_tensor
+def get_gpuuse(batch_size: int, length: int):
+    if isinstance(model.module, Model):
+        return model.module.get_gpuuse(batch_size, length, True, args.sdp_kernel)
+    else:
+        return model.module.get_gpuuse(batch_size, length, True)
 
 # DataLoader
 class ReinforceIter:
@@ -226,7 +231,6 @@ class ReinforceIter:
         items_box = [None]
         dist.scatter_object_list(items_box, batched_items)
         tokens, centers, rotations, pfnames, lfnames = zip(*items_box[0])
-        tokens = pad_sequence(tokens, False, voc_encoder.pad_token)
         return all_idxs, tokens, centers, rotations, pfnames, lfnames
 train_iter = ReinforceIter(train_data, args.num_workers, 
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
@@ -259,39 +263,34 @@ logger.info("Training started.")
 for step in range(args.max_opt): 
 
     # get batch
-    all_idxs, tokens, centers, rotations, pfnames, lfnames= train_iter.__next__()
-    tokens = tokens.to(device)
-    L, B = tokens.shape
+    all_idxs, prompt_tokens, centers, rotations, pfnames, lfnames= train_iter.__next__()
+    prompt_tokens = prompt_tokens.to(device)
+    prompt_sizes = [len(token) for token in prompt_tokens]
+    prompt_batch = pad_sequence(prompt_tokens, False, voc_encoder.pad_token)
+    L, B = prompt_tokens.shape
 
     # forward
-    from contextlib import nullcontext
-
     ## generate sample
     model.eval()
     with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
-        outputs = net_model.generate2(tokens, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
+        outputs = net_model.generate2(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
 
-    out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
+    out_batch = pad_sequence([torch.cat(prompt, output) for prompt, output in zip(prompt_tokens, outputs)], batch_first, padding_value=voc_encoder.pad_token) # [L, B]
     Lo, B = out_batch.shape
     dtype = torch.float
     weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
-    lig_count = torch.cumsum(out_batch == voc_encoder.voc2i['[LIGAND]'], dim=0) # [L, B]
-    weight[lig_count[:-1] > 0] = 1.0
-    end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
-    weight[end_count[:-1] > 0] = 0.0
+    for b, (prompt_size, output) in enumerate(prompt_sizes, outputs):
+        weight[prompt_size:prompt_size+len(output)] = 1.0
 
     ## Log output
     if step < log_sample_step:
-        for idx in np.arange(B):
-            context = voc_encoder.decode(tokens[:,idx])
-            output = voc_encoder.decode(outputs[idx])
-            logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
+        log_batch('train', logger, token_logger, out_batch[1:], weight, voc_encoder, step, 'data_dist' in args.check, get_gpuuse)
         ## check distribution
         if rank == ddp_size-1:
-            logger.debug(f"step {step}{all_idxs=}")
-            logger.debug(f"step {step}{pfnames=}")
-            logger.debug(f"step {step}{lfnames=}")
-            logger.debug(f"step {step}{centers=}")
+            logger.debug(f"step[{step}]{all_idxs=}")
+            logger.debug(f"step[{step}]{pfnames=}")
+            logger.debug(f"step[{step}]{lfnames=}")
+            logger.debug(f"step[{step}]{centers=}")
             
     ## Get score
     do_save = step in do_save_steps
@@ -312,7 +311,7 @@ for step in range(args.max_opt):
                 eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
 
             score = np.nan
-            out_tokens = voc_encoder.decode(outputs[idx].tolist())
+            out_tokens = ['[LIGAND]']+voc_encoder.decode(outputs[idx].tolist())
 
             if do_save:
                 info = {'pfname': pfname, 'lfname': lfname, 'idx': idx, 
@@ -341,8 +340,6 @@ for step in range(args.max_opt):
             lig_path = f"{eval_dir}/lig.sdf"
             actual_pfname = re.match(r"(.+?/.+?_rec)_.+", pfname).group(1)+'.pdb'
             rec_path = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff/crossdocked_v1.1_rmsd1.0/{actual_pfname}"
-            print(f"{lig_path=}")
-            print(f"{rec_path=}")
             if args.num_score_workers >= 2:
                 futures.append(e.submit(get_score, 
                         lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
@@ -438,7 +435,7 @@ for step in range(args.max_opt):
             if rank == SAVE_RANK and not nan_grad_step_saved:
                 nan_dir = f"{result_dir}/nan_step_{step}/{rank}"
                 os.makedirs(nan_dir, exist_ok=True)
-                torch.save(tokens.detach().cpu(), f"{nan_dir}/batch.pt")
+                torch.save(out_batch.detach().cpu(), f"{nan_dir}/batch.pt")
                 torch.save(model.state_dict(), f"{nan_dir}/model.pth")
                 nan_grad_step_saved = True
             
@@ -457,7 +454,6 @@ for step in range(args.max_opt):
     scheduler.step()
     
     if step % args.record_opt == 0:
-        pd.DataFrame(steps).to_csv(f"{result_dir}/steps/{rank}.csv")
         pd.DataFrame(scoress).to_csv(f"{result_dir}/scores/{rank}.csv")
         pd.DataFrame(errorss).to_csv(f"{result_dir}/errors/{rank}.csv")
         if rank == SAVE_RANK:

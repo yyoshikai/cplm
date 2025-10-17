@@ -1,12 +1,12 @@
 from argparse import Namespace
-
+from typing import Literal
 from .data import CacheDataset
 from .data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
     SentenceDataset, VocEncoder, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from .data.protein import ProteinProcessDataset
-from .data.molecule import MolProcessDataset
+from .data.molecule import MolProcessDataset, RandomScoreDataset
 from .data.coord import CoordTransformDataset
 from .data.tokenizer import TokenEncodeDataset, VocEncoder, \
         ProteinAtomTokenizer, FloatTokenizer, StringTokenizer
@@ -15,13 +15,11 @@ from .utils.path import WORKDIR
 
 
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
-        added_vocs: set[str]):
+        added_vocs: set[str], prompt_score: Literal['data', 'low', 'none']):
     
     # tokenizer
     coord_tokenizer = FloatTokenizer('ligand', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
     protein_coord_tokenizer = FloatTokenizer('pocket', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
-    if not args.no_score:
-        score_tokenizer = FloatTokenizer('score', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
     protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 
     # raw data
@@ -50,10 +48,15 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
         sentence = ['[POCKET]', pocket_atom, '[XYZ]', pocket_coord, '[END]']
         weights = [None, args.pocket_atom_weight, args.pocket_coord_weight, 0.0]
     ## score
-    if not args.no_score:
+    assert prompt_score in ['none', 'data', 'low']
+    if prompt_score != 'none':
+        if prompt_score == 'low':
+            score = RandomScoreDataset(-12.0, -10.0, len(sentence), args.seed)
+        score_tokenizer = FloatTokenizer('score', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
         score = TokenizeDataset(score, score_tokenizer)
         sentence += ['[SCORE]', score, '[END]']
         weights += [0.0, 0.0]
+        
     ## ligand
     sentence.append('[LIGAND]')
     weights.append(args.lig_smiles_weight)

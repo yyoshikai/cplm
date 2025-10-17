@@ -84,12 +84,6 @@ def generate(model: Model|MambaModel, voc_encoder: VocEncoder, prompt_token_data
             pbar.start("generation")
             outputs = model.generate2(batch, '[END]', max_len, pad_token, 10)
             outputs = [out.cpu().numpy() for out in outputs]
-            # cut outputs
-            cut_outputs = []
-            for b in range(B):
-                prompt_size = torch.sum(batch[:,b] != pad_token)
-                cut_outputs.append(outputs[b][prompt_size:prompt_size+max_len])
-            outputs = cut_outputs
 
             # Log tokens
             for batch_idx, batch_index, input, output in zip(batch_idxs, batch_indices, batch.T, outputs):

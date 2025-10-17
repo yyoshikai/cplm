@@ -53,7 +53,7 @@ split2datas = {}
 for split in ['valid', 'train']:
     voc_encoder, raw_data, token_data, weight_data, _center_data, _rotation_data, \
         _protein_filename_data, _ligand_filename_data \
-        = get_finetune_data(args, split, True, True, set())
+        = get_finetune_data(args, split, True, True, set(), prompt_score='none' if args.no_score else 'data')
     logs.append(f"    {split} data: {len(token_data):,}/{len(raw_data):,}")
     data_names = [type(raw_data).__name__]
     split2datas[split] = [StackDataset(token_data, weight_data)]

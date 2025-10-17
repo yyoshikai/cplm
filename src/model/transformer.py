@@ -358,10 +358,11 @@ class Model(nn.Module):
 
         finished_idxs = []
         finished_outputs = []
-
+        finished_ns_generated = []
+        context_sizes = torch.sum(context != pad_token, dim=0)
         indices = torch.arange(B, dtype=torch.int, device=device) # [B,]
         is_finished = torch.full((B,), fill_value=False, device=device) # [B,]
-        n_generated = torch.zeros(B, dtype=torch.int, device=device)
+        ns_generated = torch.zeros(B, dtype=torch.int, device=device)
         input = context[:1] # [1, B]
         cache = [layer.generate_init_cache(B) for layer in self.layers]
         outputs = input # [1, B]
@@ -394,10 +395,10 @@ class Model(nn.Module):
                 is_in_context = torch.full_like(output, fill_value=False, dtype=torch.bool)
                 
             end_token_generated = (~is_in_context)&(output == end_token)
-            n_generated[~is_in_context] += 1
+            ns_generated[(~is_in_context)&(~is_finished)] += 1
             outputs = torch.cat([outputs, output.unsqueeze(0)], dim=0) # [L, B]
 
-            is_finished = is_finished|end_token_generated|(n_generated >= max_len)
+            is_finished = is_finished|end_token_generated|(ns_generated >= max_len)
             input = output.unsqueeze(0)
             if torch.all(is_finished): break
 
@@ -407,10 +408,11 @@ class Model(nn.Module):
                 remain_js = torch.where(~is_finished)[0]
                 finished_idxs += indices[finished_js].tolist()
                 finished_outputs += list(outputs[:, finished_js].T)
+                finished_ns_generated += ns_generated[finished_js].tolist()
 
                 indices = indices[remain_js]
                 is_finished = is_finished[remain_js]
-                n_generated = n_generated[remain_js]
+                ns_generated = ns_generated[remain_js]
                 input = input[:, remain_js]
                 cache = [layer.slice_cache(c, remain_js) for c, layer in zip(cache, self.layers)]
                 outputs = outputs[:, remain_js]
@@ -420,10 +422,16 @@ class Model(nn.Module):
                     poss_pbar.set_postfix_str(f"{len(remain_js)}/{B} remains, {is_in_context.sum()} in context")
         finished_idxs += indices.tolist()
         finished_outputs += list(outputs.T)
+        finished_ns_generated += ns_generated.tolist()
             
         # Order outputs
         finished_idxs_inv = np.argsort(finished_idxs)
         outputs = [finished_outputs[idx] for idx in finished_idxs_inv]
+        ns_generated = [finished_ns_generated[idx] for idx in finished_idxs_inv]
+
+        # cut outputs
+        outputs = [output[context_size:context_size+n_generated] 
+                for output, context_size, n_generated in zip(outputs, context_sizes, ns_generated)]
         return outputs
 
     def _get_mname(self, bf16: bool, kernel: str):        
