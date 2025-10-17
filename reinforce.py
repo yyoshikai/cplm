@@ -199,7 +199,7 @@ class ReinforceIter:
         if self.rank == self.main_rank:
             loader = DataLoader(dataset, batch_size=None, 
                 sampler=InfiniteRandomSampler(dataset, generator=torch.Generator().manual_seed(args.seed)),
-                num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
+                num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor, collate_fn=lambda x: x)
             self.logger.info(f"Loading filenames.csv.gz ...")
             self.logger.info("Loaded.")
             self.iter = loader.__iter__()
