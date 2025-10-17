@@ -199,7 +199,7 @@ class ReinforceIter:
         if self.rank == self.main_rank:
             loader = DataLoader(dataset, batch_size=None, 
                 sampler=InfiniteRandomSampler(dataset, generator=torch.Generator().manual_seed(args.seed)),
-                num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor, collate_fn=lambda x: x)
+                num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
             self.logger.info(f"Loading filenames.csv.gz ...")
             self.logger.info("Loaded.")
             self.iter = loader.__iter__()
@@ -216,12 +216,10 @@ class ReinforceIter:
             all_items = []
             for _ in range(self.batch_size*self.size // self.repeat_per_sample):
                 idx_item = self.fixed_item if self.fix_pocket else self.iter.__next__()
-                print([type(i) for i in idx_item])
                 all_idxs += [idx_item[0]] * self.repeat_per_sample
                 all_items += [idx_item[1:]] * self.repeat_per_sample
             all_idxs = torch.tensor(all_idxs, dtype=torch.int, device=device)
             batched_items = [all_items[r*self.batch_size:(r+1)*self.batch_size] for r in range(self.size)]
-            print(f"{all_idxs.shape=}, {self.batch_size*self.size=}")
         else:
             all_idxs = batched_items = None
         all_idxs = dist_broadcast_tensor(all_idxs, device, self.main_rank, (self.batch_size*self.size,), torch.int)
@@ -303,8 +301,8 @@ for step in range(args.max_opt):
         valid_scores = []
         for idx in range(len(outputs)):
 
-            center = centers[idx]
-            rotation = rotations[idx]
+            center = centers[idx].numpy()
+            rotation = rotations[idx].numpy()
             lfname = lfnames[idx]
             pfname = pfnames[idx]
             if do_save:
@@ -330,7 +328,6 @@ for step in range(args.max_opt):
                 continue
             
             rotation_inv = np.linalg.inv(rotation)
-            print(type(coords), type(rotation_inv), type(center), flush=True)
             coords = np.matmul(coords, rotation_inv) + center
             error, mol = parse_mol(smiles, coords)
             errors.append(error)
