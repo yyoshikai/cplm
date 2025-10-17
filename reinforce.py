@@ -275,7 +275,7 @@ for step in range(args.max_opt):
     with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
         outputs = net_model.generate2(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
 
-    out_batch = pad_sequence([torch.cat([prompt, output]) for prompt, output in zip(prompt_tokens, outputs)], batch_first, padding_value=voc_encoder.pad_token) # [L, B]
+    out_batch = pad_sequence([torch.cat([prompt.to(device), output]) for prompt, output in zip(prompt_tokens, outputs)], batch_first, padding_value=voc_encoder.pad_token) # [L, B]
     Lo, B = out_batch.shape
     dtype = torch.float
     weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
