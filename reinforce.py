@@ -275,140 +275,141 @@ for step in range(args.max_opt):
 
     # forward
     from contextlib import nullcontext
-    with torch.autocast('cuda', dtype=torch.bfloat16):
 
-        ## generate sample
-        model.eval()
-        with torch.inference_mode():
-            print(tokens.dtype, tokens.device, flush=True)
-            outputs = net_model.generate2(tokens, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
+    ## generate sample
+    model.eval()
+    with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
+        print(tokens.dtype, tokens.device, flush=True)
+        outputs = net_model.generate2(tokens, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
 
-        out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
-        Lo, B = out_batch.shape
-        dtype = torch.float
-        weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
-        lig_count = torch.cumsum(out_batch == voc_encoder.voc2i['[LIGAND]'], dim=0) # [L, B]
-        weight[lig_count[:-1] > 0] = 1.0
-        end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
-        weight[end_count[:-1] > 0] = 0.0
+    out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
+    Lo, B = out_batch.shape
+    dtype = torch.float
+    weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
+    lig_count = torch.cumsum(out_batch == voc_encoder.voc2i['[LIGAND]'], dim=0) # [L, B]
+    weight[lig_count[:-1] > 0] = 1.0
+    end_count  = torch.cumsum(out_batch == voc_encoder.voc2i['[END]'], dim=0)
+    weight[end_count[:-1] > 0] = 0.0
 
-        ## Log output
-        if step < log_sample_step:
-            for idx in np.arange(B):
-                context = voc_encoder.decode(tokens[:,idx])
-                output = voc_encoder.decode(outputs[idx])
-                logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
-            ## check distribution
-            if rank == ddp_size-1:
-                logger.debug(f"step {step}{all_idxs=}")
-                logger.debug(f"step {step}{pfnames=}")
-                logger.debug(f"step {step}{lfnames=}")
-                logger.debug(f"step {step}{centers=}")
-                
-        ## Get score
-        do_save = step in do_save_steps
-        errors = []
-        with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
-            futures = []
-            valid_scores = []
-            for idx in range(len(outputs)):
+    ## Log output
+    if step < log_sample_step:
+        for idx in np.arange(B):
+            context = voc_encoder.decode(tokens[:,idx])
+            output = voc_encoder.decode(outputs[idx])
+            logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
+        ## check distribution
+        if rank == ddp_size-1:
+            logger.debug(f"step {step}{all_idxs=}")
+            logger.debug(f"step {step}{pfnames=}")
+            logger.debug(f"step {step}{lfnames=}")
+            logger.debug(f"step {step}{centers=}")
+            
+    ## Get score
+    do_save = step in do_save_steps
+    errors = []
+    with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
+        futures = []
+        valid_scores = []
+        for idx in range(len(outputs)):
 
-                center = centers[idx]
-                rotation = rotations[idx]
-                lfname = lfnames[idx]
-                pfname = pfnames[idx]
-                if do_save:
-                    eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
-                    os.makedirs(eval_dir, exist_ok=True)
-                else:
-                    eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
-
-                score = np.nan
-                out_tokens = voc_encoder.decode(outputs[idx].tolist())
-
-                if do_save:
-                    info = {'pfname': pfname, 'lfname': lfname, 'idx': idx, 
-                            'center': center.tolist(), 'rotation': rotation.tolist()}
-                    with open(f"{eval_dir}/info.yaml", 'w') as f:
-                        yaml.dump(info, f)
-                    with open(f"{eval_dir}/tokens.txt", 'w') as f:
-                        f.write(','.join(out_tokens)+'\n')
-                error, smiles, coords = parse_mol_tokens(out_tokens)
-                
-                if error != '':
-                    errors.append(error)
-                    continue
-                
-                rotation_inv = np.linalg.inv(rotation)
-                coords = np.matmul(coords, rotation_inv) + center
-                error, mol = parse_mol(smiles, coords)
-                errors.append(error)
-
-                if error != '':
-                    continue
-                
-                with open(f"{eval_dir}/lig.sdf", 'w') as f:
-                    f.write(Chem.MolToMolBlock(mol))
-                
-                lig_path = f"{eval_dir}/lig.sdf"
-                rec_path = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff/crossdocked_v1.1_rmsd1.0/{pfname}"
-                if args.num_score_workers >= 2:
-                    futures.append(e.submit(get_score, 
-                            lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
-                else:
-                    valid_scores.append(get_score(lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
-            if args.num_score_workers >= 2:
-                valid_scores = np.array([f.result() for f in futures])
+            center = centers[idx]
+            rotation = rotations[idx]
+            lfname = lfnames[idx]
+            pfname = pfnames[idx]
+            if do_save:
+                eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
+                os.makedirs(eval_dir, exist_ok=True)
             else:
-                valid_scores = np.array(valid_scores)
+                eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
 
-        errors = np.array(errors)
-        scores = np.full(len(errors), np.nan)
-        scores[errors == ""] = valid_scores
-        errors[errors == ""][np.isnan(valid_scores)] = 'VINA'
+            score = np.nan
+            out_tokens = voc_encoder.decode(outputs[idx].tolist())
 
-        errorss.append(errors)
-        scores = torch.tensor(scores, device=device, dtype=torch.float)
-        if not args.ignore_error:
-            scores[torch.isnan(scores)] = error_score
-        torch.clamp_(scores, min=args.min_score)
-        scoress.append(scores.cpu().tolist())
+            if do_save:
+                info = {'pfname': pfname, 'lfname': lfname, 'idx': idx, 
+                        'center': center.tolist(), 'rotation': rotation.tolist()}
+                with open(f"{eval_dir}/info.yaml", 'w') as f:
+                    yaml.dump(info, f)
+                with open(f"{eval_dir}/tokens.txt", 'w') as f:
+                    f.write(','.join(out_tokens)+'\n')
+            error, smiles, coords = parse_mol_tokens(out_tokens)
+            
+            if error != '':
+                errors.append(error)
+                continue
+            
+            rotation_inv = np.linalg.inv(rotation)
+            coords = np.matmul(coords, rotation_inv) + center
+            error, mol = parse_mol(smiles, coords)
+            errors.append(error)
 
-        ## gather & normalize score
-        all_scores = [torch.zeros(args.batch_size, dtype=torch.float, device=device)
-                for _ in range(ddp_size)]
-        dist.all_gather(all_scores, scores)
-        all_scores = torch.cat(all_scores)
-        
-        match args.reward_scale:
-            case 'none': 
-                pass
-            case 'all_mean':
-                if torch.any(torch.isfinite(all_scores)):
-                    scores = scores - torch.nanmean(all_scores)
-            case 'sample_mean':
-                idxs = all_idxs[rank*args.batch_size:(rank+1)*args.batch_size]
-                unique_idxs = idxs.unique()
-                for uidx in unique_idxs:
-                    if torch.any(torch.isfinite(all_scores[all_idxs == uidx])):
-                        scores[idxs == uidx] -= torch.nanmean(all_scores[all_idxs == uidx])
-            case 'rank_mean':
-                if torch.any(torch.isfinite(scores)):
-                    scores = scores - torch.nanmean(scores)
-            case 'rank_mean_std':
-                if torch.any(torch.isfinite(scores)):
-                    scores = scores - torch.nanmean(scores)
-                    if torch.sum(torch.isfinite(scores)) >= 2:
-                        scores = scores / (torch.std(scores[torch.isfinite(scores)])+1.0e-8)
-        if args.ignore_error:
-            scores[torch.isnan(scores)] = 0.0
+            if error != '':
+                continue
+            
+            with open(f"{eval_dir}/lig.sdf", 'w') as f:
+                f.write(Chem.MolToMolBlock(mol))
+            
+            lig_path = f"{eval_dir}/lig.sdf"
+            rec_path = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff/crossdocked_v1.1_rmsd1.0/{pfname}"
+            if args.num_score_workers >= 2:
+                futures.append(e.submit(get_score, 
+                        lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
+            else:
+                valid_scores.append(get_score(lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
+        if args.num_score_workers >= 2:
+            valid_scores = np.array([f.result() for f in futures])
+        else:
+            valid_scores = np.array(valid_scores)
 
-        if step < 5:
-            logger.info(f"step {step} scores={scores.cpu().tolist()}")
+    errors = np.array(errors)
+    scores = np.full(len(errors), np.nan)
+    scores[errors == ""] = valid_scores
+    errors[errors == ""][np.isnan(valid_scores)] = 'VINA'
 
-        ## Get prob & reward loss
-        model.train()
+    errorss.append(errors)
+    scores = torch.tensor(scores, device=device, dtype=torch.float)
+    if not args.ignore_error:
+        scores[torch.isnan(scores)] = error_score
+    torch.clamp_(scores, min=args.min_score)
+    scoress.append(scores.cpu().tolist())
+
+    ## gather & normalize score
+    all_scores = [torch.zeros(args.batch_size, dtype=torch.float, device=device)
+            for _ in range(ddp_size)]
+    dist.all_gather(all_scores, scores)
+    all_scores = torch.cat(all_scores)
+    
+    match args.reward_scale:
+        case 'none': 
+            pass
+        case 'all_mean':
+            if torch.any(torch.isfinite(all_scores)):
+                scores = scores - torch.nanmean(all_scores)
+        case 'sample_mean':
+            idxs = all_idxs[rank*args.batch_size:(rank+1)*args.batch_size]
+            unique_idxs = idxs.unique()
+            for uidx in unique_idxs:
+                if torch.any(torch.isfinite(all_scores[all_idxs == uidx])):
+                    scores[idxs == uidx] -= torch.nanmean(all_scores[all_idxs == uidx])
+        case 'rank_mean':
+            if torch.any(torch.isfinite(scores)):
+                scores = scores - torch.nanmean(scores)
+        case 'rank_mean_std':
+            if torch.any(torch.isfinite(scores)):
+                scores = scores - torch.nanmean(scores)
+                if torch.sum(torch.isfinite(scores)) >= 2:
+                    scores = scores / (torch.std(scores[torch.isfinite(scores)])+1.0e-8)
+    if args.ignore_error:
+        scores[torch.isnan(scores)] = 0.0
+
+    if step < 5:
+        logger.info(f"step {step} scores={scores.cpu().tolist()}")
+
+    ## Get prob & reward loss
+    model.train()
+    with torch.autocast('cuda', torch.bfloat16):
         logits = model(out_batch[:-1]) # [Lo-1, B, T]
+        init_logits = init_model(out_batch[:-1]) # [L, B, N]
         if args.use_categorical:
             cat = Categorical(logits=logits) # ~[Lo-1, B]
             log_probs = cat.log_prob(out_batch[1:]) # [Lo-1, B]
@@ -420,7 +421,6 @@ for step in range(args.max_opt):
         ## KL loss
         log_probs_all = F.log_softmax(logits, dim=-1)
         with torch.inference_mode():
-            init_logits = init_model(out_batch[:-1]) # [L, B, N]
             init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
         kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
             log_target=True) # [Lo-1, B, N]
