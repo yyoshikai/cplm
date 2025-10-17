@@ -92,16 +92,18 @@ logs = []
 
 # get finetune info
 finetune_dir = f"finetune/results/{args.finetune_name}"
-fargs = Dict(yaml.safe_load(open(f"{finetune_dir}/config.yaml")))
+fargs = Dict(yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
 pname = fargs.pretrain_name
 pretrain_dir = f"training/results/{pname}"
-pargs = Dict(yaml.safe_load(open(f"{pretrain_dir}/config.yaml")))
+pargs = Dict(yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
 coord_follow_atom = pargs.get('coord_follow_atom', False)
 
 ## get last finetune step
 if args.finetune_opt is None:
     steps = [os.path.splitext(os.path.basename(step))[0] for step in glob(f"{finetune_dir}/models/*")]
     steps = [int(step) for step in steps if step.isdigit()]
+    if len(steps) == 0:
+        raise ValueError("No checkpoint was found to get args.finetune_opt")
     args.finetune_opt = max(steps)
     logs.append(f"finetune_opt was set to {args.finetune_opt}")
 
@@ -113,7 +115,7 @@ do_save_steps = [0, 1, 2, 3, 4, 50, 100]+list(range(200, 1000, 200)) \
 # data
 ## vocs from state_dict
 state_dict = torch.load(f"{finetune_dir}/models/{args.finetune_opt}.pth", weights_only=True)
-vocs = state_dict.get('vocs', state_dict['module.vocs'])[1:]
+vocs = state_dict['vocs' if 'vocs' in state_dict else 'module.vocs'][1:]
 
 added_vocs = set(vocs)
 voc_encoder, raw_data, token_data, weight_data, center_data, rotation_data,\
