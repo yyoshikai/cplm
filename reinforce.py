@@ -279,7 +279,6 @@ for step in range(args.max_opt):
     ## generate sample
     model.eval()
     with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
-        print(tokens.dtype, tokens.device, flush=True)
         outputs = net_model.generate2(tokens, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
 
     out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
