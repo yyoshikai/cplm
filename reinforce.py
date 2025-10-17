@@ -161,7 +161,7 @@ if args.error_score is not None:
 # Environment
 result_dir = f"reinforce/results/{args.studyname}"
 logger, token_logger, rank, device = set_env(result_dir, args, logs, 
-        subdirs=['models', 'opts', 'errors', 'scores', 'cplm'])
+        subdirs=['models', 'opts', 'errors', 'scores'])
 MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
 for i in range(args.batch_size):
@@ -280,7 +280,7 @@ for step in range(args.max_opt):
     dtype = torch.float
     weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
     for b, (prompt_size, output) in enumerate(zip(prompt_sizes, outputs)):
-        weight[prompt_size:prompt_size+len(output)] = 1.0
+        weight[prompt_size-1:prompt_size+len(output)-1] = 1.0
 
     ## Log output
     if step < log_sample_step:
