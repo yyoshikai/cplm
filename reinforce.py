@@ -161,7 +161,7 @@ if args.error_score is not None:
 # Environment
 result_dir = f"reinforce/results/{args.studyname}"
 logger, token_logger, rank, device = set_env(result_dir, args, logs, 
-        subdirs=['models', 'steps', 'errors', 'scores', 'cplm'])
+        subdirs=['models', 'opts', 'errors', 'scores', 'cplm'])
 MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
 for i in range(args.batch_size):
