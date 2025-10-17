@@ -279,6 +279,7 @@ for step in range(args.max_opt):
         ## generate sample
         model.eval()
         with torch.inference_mode():
+            print(tokens.dtype, tokens.device, flush=True)
             outputs = net_model.generate2(tokens, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
 
         out_batch = pad_sequence(outputs, batch_first, padding_value=voc_encoder.pad_token) # [L, B]
@@ -293,7 +294,7 @@ for step in range(args.max_opt):
         ## Log output
         if step < log_sample_step:
             for idx in np.arange(B):
-                context = voc_encoder.decode(batch[:,idx])
+                context = voc_encoder.decode(tokens[:,idx])
                 output = voc_encoder.decode(outputs[idx])
                 logger.debug(f"step {step}[{idx}]weight={weight[:,idx].tolist()}")
             ## check distribution
