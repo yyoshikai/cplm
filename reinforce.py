@@ -264,9 +264,9 @@ for step in range(args.max_opt):
 
     # get batch
     all_idxs, prompt_tokens, centers, rotations, pfnames, lfnames= train_iter.__next__()
-    prompt_tokens = prompt_tokens.to(device)
     prompt_sizes = [len(token) for token in prompt_tokens]
     prompt_batch = pad_sequence(prompt_tokens, False, voc_encoder.pad_token)
+    prompt_batch = prompt_batch.to(device)
     L, B = prompt_tokens.shape
 
     # forward
