@@ -225,9 +225,9 @@ class ReinforceIter:
         all_idxs = dist_broadcast_tensor(all_idxs, device, self.main_rank, (self.batch_size*self.size,), torch.int)
         items_box = [None]
         dist.scatter_object_list(items_box, batched_items)
-        tokens, centers, rotations, lfnames, pfnames = zip(*items_box[0])
+        tokens, centers, rotations, pfnames, lfnames = zip(*items_box[0])
         tokens = pad_sequence(tokens, False, voc_encoder.pad_token)
-        return all_idxs, tokens, centers, rotations, lfnames, pfnames
+        return all_idxs, tokens, centers, rotations, pfnames, lfnames
 train_iter = ReinforceIter(train_data, args.num_workers, 
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
     voc_encoder.pad_token, args.generate_per_sample, args.fix_pocket)
@@ -259,7 +259,7 @@ logger.info("Training started.")
 for step in range(args.max_opt): 
 
     # get batch
-    all_idxs, tokens, centers, rotations, lfnames, pfnames = train_iter.__next__()
+    all_idxs, tokens, centers, rotations, pfnames, lfnames= train_iter.__next__()
     tokens = tokens.to(device)
     L, B = tokens.shape
 
