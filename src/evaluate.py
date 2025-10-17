@@ -98,7 +98,7 @@ def parse_mol(smiles: str, coords: np.ndarray) -> tuple[str, Chem.Mol|None]:
     if smi_out != smiles:
         return 'SMILES_MISMATCH', None
     
-    atom_idxs = mol.GetProp('_smilesAtomOutputOrder', autoConvert=True)
+    atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
     natom = mol.GetNumAtoms()
     if not np.all(np.array(atom_idxs) == np.arange(natom)):
         return 'INDEX_MISMATCH', None
