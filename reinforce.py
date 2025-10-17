@@ -226,7 +226,7 @@ class ReinforceIter:
                 all_items += [idx_item[1:]] * self.repeat_per_sample
             all_idxs = torch.tensor(all_idxs, dtype=torch.int, device=device)
             batched_items = [all_items[r*self.batch_size:(r+1)*self.batch_size] for r in range(self.size)]
-                    
+            print(f"{all_idxs.shape=}, {self.batch_size*self.size=}")
         else:
             all_idxs = batched_items = None
         all_idxs = dist_broadcast_tensor(all_idxs, device, self.main_rank, (self.batch_size*self.size,), torch.int)
