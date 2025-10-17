@@ -44,6 +44,7 @@ parser.add_argument('--ignore-error', action='store_true')
 parser.add_argument('--min-score', type=float, default=-math.inf)
 parser.add_argument('--max-len', type=int, default=2500)
 parser.add_argument('--reward-scale', choices=['none', 'all_mean', 'sample_mean', 'rank_mean', 'rank_mean_std'], default='none')
+parser.add_argument('--alpha', type=float, default=0.05) # same as BindGPT
 ## Data
 parser.add_argument('--generate-per-sample', type=int, default=1)
 ## training
@@ -58,7 +59,7 @@ parser.add_argument('--loss-scale')
 ## scheduler
 parser.add_argument('--lr', type=float, default=1.4e-5) # same as BindGPT
 parser.add_argument('--scheduler', default='constant') # same as BindGPT
-parser.add_argument('--alpha', type=float, default=0.05) # same as BindGPT
+parser.add_argument("--schedule-free", action='store_true')
 ## finetune
 parser.add_argument('--finetune-name', required=True)
 parser.add_argument('--finetune-opt', type=int)
