@@ -1,7 +1,0 @@
-MambaModel2.generate2: outputs = self.model(**model_inputs, use_cache=generation_config.use_cache, return_dict=True)
-    MambaForCausalLM.forward: mamba_outputs = self.backbone(
-        MambaModel.forward: hidden_states = mixer_block(
-            MambaBlock.forward: hidden_states = self.mixer(
-                MambaMixer.forward: self.cuda_kernels_forward(hidden_states, cache_params, cache_position, attention_mask)
-                    MambaMixer.cuda_kernels_forward: hidden_states = causal_conv1d_update(
-MambaModel2.generate: output = self.model(src.T.contiguous(), )
