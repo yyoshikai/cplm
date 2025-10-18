@@ -230,6 +230,8 @@ class ReinforceIter:
         items_box = [None]
         logger.debug("Broadcast items...")
         dist.scatter_object_list(items_box, batched_items)
+        logger.debug("Broadcast items finished.")
+        
         tokens, centers, rotations, protein_paths, lfnames = zip(*items_box[0])
         return all_idxs, tokens, centers, rotations, protein_paths, lfnames
 train_iter = ReinforceIter(train_data, args.num_workers, 
