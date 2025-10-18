@@ -269,8 +269,12 @@ for step in range(args.max_opt):
     # forward
     ## generate sample
     model.eval()
-    with torch.inference_mode(): #, torch.autocast('cuda', torch.bfloat16): autocast causes error when model is Mamba
+    if pargs.mamba:
+        model.to(torch.bfloat16)
+    with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
         outputs = net_model.generate2(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
+    if pargs.mamba:
+        model.to(torch.float32)
 
     out_batch = pad_sequence([torch.cat([prompt.to(device), output]) for prompt, output in zip(prompt_tokens, outputs)], batch_first, padding_value=voc_encoder.pad_token) # [L, B]
     Lo, B = out_batch.shape
