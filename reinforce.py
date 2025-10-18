@@ -204,8 +204,6 @@ class ReinforceIter:
             loader = DataLoader(dataset, batch_size=None, 
                 sampler=InfiniteRandomSampler(dataset, generator=torch.Generator().manual_seed(args.seed)),
                 num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
-            self.logger.info(f"Loading filenames.csv.gz ...")
-            self.logger.info("Loaded.")
             self.iter = loader.__iter__()
             self.next_item = None
             self.step = 0
@@ -215,6 +213,7 @@ class ReinforceIter:
                 del self.iter
 
     def __next__(self) -> tuple[Tensor, Tensor, Tensor]:
+        logger.debug('Preparing data...')
         if self.rank == self.main_rank:
             all_idxs = []
             all_items = []
@@ -226,8 +225,10 @@ class ReinforceIter:
             batched_items = [all_items[r*self.batch_size:(r+1)*self.batch_size] for r in range(self.size)]
         else:
             all_idxs = batched_items = None
+        logger.debug("Broadcast idx...")
         all_idxs = dist_broadcast_tensor(all_idxs, device, self.main_rank, (self.batch_size*self.size,), torch.int)
         items_box = [None]
+        logger.debug("Broadcast items...")
         dist.scatter_object_list(items_box, batched_items)
         tokens, centers, rotations, protein_paths, lfnames = zip(*items_box[0])
         return all_idxs, tokens, centers, rotations, protein_paths, lfnames
@@ -262,7 +263,9 @@ logger.info("Training started.")
 for step in range(args.max_opt): 
 
     # get batch
+    logger.debug("Iteration started.")
     all_idxs, prompt_tokens, centers, rotations, protein_paths, lfnames= train_iter.__next__()
+    logger.debug("Iteration finished.")
     prompt_sizes = [len(token) for token in prompt_tokens]
     prompt_batch = pad_sequence(prompt_tokens, False, voc_encoder.pad_token)
     prompt_batch = prompt_batch.to(device)
