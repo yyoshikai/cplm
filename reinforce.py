@@ -16,6 +16,7 @@ from rdkit import Chem, RDLogger
 from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import Dataset, DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.distributions import Categorical
 
 from src.data._sampler import InfiniteRandomSampler
@@ -83,6 +84,8 @@ parser.add_argument('--check', nargs='*', default=[], choices=['data_dist'])
 add_env_args(parser)
 args = parser.parse_args()
 ## set default args
+sdp_kernel = args.sdp_kernel
+args.sdp_kernel = None # Do not set_sdp_kernel to use EFFICIENT in inference
 if args.test: args.studyname+='_test'
 if args.record_opt is None:
     args.record_opt = 1 if args.test else 500
@@ -169,6 +172,9 @@ RDLogger.DisableLog("rdApp.*")
 ## check generate_per_sample
 ddp_size = dist.get_world_size()
 
+## SDP kernel
+SDP_KERNEL = {'FLASH': SDPBackend.FLASH_ATTENTION, 'EFFICIENT': SDPBackend.EFFICIENT_ATTENTION}[sdp_kernel]
+
 # model
 init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
 init_model = get_model(pargs, voc_encoder, init_state_path, device)
@@ -180,7 +186,7 @@ model.to(device)
 from src.utils.ddp import dist_broadcast_tensor
 def get_gpuuse(batch_size: int, length: int):
     if isinstance(model.module, Model):
-        return model.module.get_gpuuse(batch_size, length, True, args.sdp_kernel)
+        return model.module.get_gpuuse(batch_size, length, True, sdp_kernel)
     else:
         return model.module.get_gpuuse(batch_size, length, True)
 
@@ -269,12 +275,8 @@ for step in range(args.max_opt):
     # forward
     ## generate sample
     model.eval()
-    if pargs.mamba:
-        model.to(torch.bfloat16)
-    with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
+    with torch.inference_mode():
         outputs = net_model.generate2(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
-    if pargs.mamba:
-        model.to(torch.float32)
 
     out_batch = pad_sequence([torch.cat([prompt.to(device), output]) for prompt, output in zip(prompt_tokens, outputs)], batch_first, padding_value=voc_encoder.pad_token) # [L, B]
     Lo, B = out_batch.shape
@@ -395,9 +397,11 @@ for step in range(args.max_opt):
 
     ## Get prob & reward loss
     model.train()
-    with torch.autocast('cuda', torch.bfloat16):
+    with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDP_KERNEL):
+        with torch.inference_mode():
+            init_logits = init_model(out_batch[:-1]) # [L, B, N]
+            init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
         logits = model(out_batch[:-1]) # [Lo-1, B, T]
-        init_logits = init_model(out_batch[:-1]) # [L, B, N]
         if args.use_categorical:
             cat = Categorical(logits=logits) # ~[Lo-1, B]
             log_probs = cat.log_prob(out_batch[1:]) # [Lo-1, B]
@@ -408,8 +412,6 @@ for step in range(args.max_opt):
 
         ## KL loss
         log_probs_all = F.log_softmax(logits, dim=-1)
-        with torch.inference_mode():
-            init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
         kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
             log_target=True) # [Lo-1, B, N]
         kl_loss = kl_loss.sum(dim=-1) # [Lo-1, B]
