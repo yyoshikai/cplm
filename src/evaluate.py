@@ -397,7 +397,7 @@ prepare_receptor4.py -r {rec_path} -o rec.pdbqt
         return None
 
 
-def eval_qvina2(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, path_to_qvina=f"{WORKDIR}/github/qvina/bin/qvina02"):
+def eval_qvina2(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None):
     """
     Pocket2Molの実装から変更
     """
@@ -405,6 +405,7 @@ def eval_qvina2(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=Non
     try:
         out_dir = os.path.realpath(out_dir)
         os.makedirs(out_dir, exist_ok=True)
+
 
         rec_path = os.path.realpath(rec_path)
 
@@ -438,7 +439,7 @@ def eval_qvina2(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=Non
         mol = next(pybel.readfile('sdf', f"{out_dir}/lig.sdf"))
         mol.write('pdbqt', f"{out_dir}/lig.pdbqt", overwrite=True)
 
-
+        path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/bin/qvina02")
         commands = f"""
 cd {out_dir}
 echo $PATH
@@ -488,7 +489,7 @@ python {prepare_receptor4.__file__} -r {rec_path} -o rec.pdbqt
         return None
 
 
-def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, path_to_qvina=f"{WORKDIR}/github/qvina/bin/qvina02", pbar: Optional[wtqdm] = None, verbose: bool=False):
+def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False):
     """
     Pocket2Molの実装から変更
     """
@@ -545,7 +546,8 @@ def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=Non
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE
         )
-
+        
+        path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/bin/qvina02")
         commands = f"""cd {out_dir} && {path_to_qvina} --receptor rec.pdbqt --ligand lig.pdbqt --center_x {center[0]:.4f} --center_y {center[1]:.4f} --center_z {center[2]:.4f} --size_x 20 --size_y 20 --size_z 20 --exhaustiveness {exhaustiveness}
         """
         proc.stdin.write(commands.encode('utf-8'))

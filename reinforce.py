@@ -71,7 +71,6 @@ parser.add_argument('--prefetch-factor', type=int)
 parser.add_argument('--num-score-workers', type=int, default=1)
 parser.add_argument('--reset-nan-grad', action='store_true')
 parser.add_argument('--gc', action='store_true')
-parser.add_argument('--path-to-qvina', default=f"{WORKDIR}/github/qvina/bin/qvina02")
 ## verbosity
 parser.add_argument('--tqdm-generate', action='store_true')
 parser.add_argument('--record-opt', type=int)
@@ -148,7 +147,7 @@ match args.target:
         error_score = 0
     case 'qvina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
-            score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, path_to_qvina=args.path_to_qvina)
+            score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60)
             return -score if score is not None else np.nan
         error_score = -50
     case 'dummy':
