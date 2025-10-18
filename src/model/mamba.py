@@ -119,8 +119,7 @@ class MambaModel(nn.Module):
             # prepare model inputs
             model_inputs = self.prepare_inputs_for_generation(input_ids, 
                 cache_params, cache_position, attention_mask)
-            with torch.autocast('cuda', torch.bfloat16):    
-                outputs = self.model(**model_inputs, use_cache=generation_config.use_cache, return_dict=True)
+            outputs = self.model(**model_inputs, use_cache=generation_config.use_cache, return_dict=True)
             
             cache_params = outputs.get("cache_params", None)
             cache_position = cache_position[-1:] + 1
