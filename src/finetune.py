@@ -51,7 +51,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     assert prompt_score in ['none', 'data', 'low']
     if prompt_score != 'none':
         if prompt_score == 'low':
-            score = RandomScoreDataset(-12.0, -10.0, len(sentence), args.seed)
+            score = RandomScoreDataset(-12.0, -10.0, len(pocket_atom), args.seed)
         score_tokenizer = FloatTokenizer('score', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
         score = TokenizeDataset(score, score_tokenizer)
         sentence += ['[SCORE]', score, '[END]']

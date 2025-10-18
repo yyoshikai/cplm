@@ -25,7 +25,7 @@ from src.utils.path import cleardir
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.evaluate import eval_vina, eval_qvina3
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks, log_batch
-from src.model import Model, MambaModel
+from src.model import Model
 from src.finetune import get_finetune_data
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
@@ -38,7 +38,7 @@ def add_env_args(parser: ArgumentParser):
     parser.add_argument("--deterministic", action='store_true')
     parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
 ## reward
-parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', 'qvina', 'dummy'], default='min_vina')
+parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', 'qvina', 'dummy'], required=True)
 parser.add_argument('--error-score', type=float, default=None)
 parser.add_argument('--ignore-error', action='store_true')
 parser.add_argument('--min-score', type=float, default=-math.inf)
@@ -50,7 +50,7 @@ parser.add_argument('--generate-per-sample', type=int, default=1)
 ## training
 parser.add_argument('--studyname', required=True)
 parser.add_argument('--batch-size', type=int, default=32)
-parser.add_argument('--max-opt', type=int, default=1000)
+parser.add_argument('--max-opt', type=int, default=10000)
 ## optimizer
 parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
 parser.add_argument('--clip-grad-value', type=float, default=None)
@@ -86,7 +86,7 @@ args = parser.parse_args()
 ## set default args
 if args.test: args.studyname+='_test'
 if args.record_opt is None:
-    args.record_opt = 1 if args.test else 100
+    args.record_opt = 1 if args.test else 500
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e7)
 
@@ -230,8 +230,8 @@ class ReinforceIter:
         all_idxs = dist_broadcast_tensor(all_idxs, device, self.main_rank, (self.batch_size*self.size,), torch.int)
         items_box = [None]
         dist.scatter_object_list(items_box, batched_items)
-        tokens, centers, rotations, pfnames, lfnames = zip(*items_box[0])
-        return all_idxs, tokens, centers, rotations, pfnames, lfnames
+        tokens, centers, rotations, protein_paths, lfnames = zip(*items_box[0])
+        return all_idxs, tokens, centers, rotations, protein_paths, lfnames
 train_iter = ReinforceIter(train_data, args.num_workers, 
     args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
     voc_encoder.pad_token, args.generate_per_sample, args.fix_pocket)
@@ -263,7 +263,7 @@ logger.info("Training started.")
 for step in range(args.max_opt): 
 
     # get batch
-    all_idxs, prompt_tokens, centers, rotations, pfnames, lfnames= train_iter.__next__()
+    all_idxs, prompt_tokens, centers, rotations, protein_paths, lfnames= train_iter.__next__()
     prompt_sizes = [len(token) for token in prompt_tokens]
     prompt_batch = pad_sequence(prompt_tokens, False, voc_encoder.pad_token)
     prompt_batch = prompt_batch.to(device)
@@ -288,7 +288,7 @@ for step in range(args.max_opt):
         ## check distribution
         if rank == ddp_size-1:
             logger.debug(f"step[{step}]{all_idxs=}")
-            logger.debug(f"step[{step}]{pfnames=}")
+            logger.debug(f"step[{step}]{protein_paths=}")
             logger.debug(f"step[{step}]{lfnames=}")
             logger.debug(f"step[{step}]{centers=}")
             
@@ -303,7 +303,7 @@ for step in range(args.max_opt):
             center = centers[idx].numpy()
             rotation = rotations[idx].numpy()
             lfname = lfnames[idx]
-            pfname = pfnames[idx]
+            protein_path = protein_paths[idx]
             if do_save:
                 eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
                 os.makedirs(eval_dir, exist_ok=True)
@@ -314,7 +314,7 @@ for step in range(args.max_opt):
             out_tokens = ['[LIGAND]']+voc_encoder.decode(outputs[idx].tolist())
 
             if do_save:
-                info = {'pfname': pfname, 'lfname': lfname, 'idx': idx, 
+                info = {'protein_path': protein_path, 'lfname': lfname, 'idx': idx, 
                         'center': center.tolist(), 'rotation': rotation.tolist()}
                 with open(f"{eval_dir}/info.yaml", 'w') as f:
                     yaml.dump(info, f)
@@ -338,13 +338,11 @@ for step in range(args.max_opt):
                 f.write(Chem.MolToMolBlock(mol))
             
             lig_path = f"{eval_dir}/lig.sdf"
-            actual_pfname = re.match(r"(.+?/.+?_rec)_.+", pfname).group(1)+'.pdb'
-            rec_path = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff/crossdocked_v1.1_rmsd1.0/{actual_pfname}"
             if args.num_score_workers >= 2:
                 futures.append(e.submit(get_score, 
-                        lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
+                        lig_path=lig_path, rec_path=protein_path, out_dir=eval_dir))
             else:
-                valid_scores.append(get_score(lig_path=lig_path, rec_path=rec_path, out_dir=eval_dir))
+                valid_scores.append(get_score(lig_path=lig_path, rec_path=protein_path, out_dir=eval_dir))
         if args.num_score_workers >= 2:
             valid_scores = np.array([f.result() for f in futures])
         else:

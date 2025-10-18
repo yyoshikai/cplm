@@ -15,9 +15,9 @@ WORKDIR = PROJ_DIR.parent
 
 sys.path.append(str(PROJ_DIR))
 from src.utils.logger import add_stream_handler, get_logger
-from src.utils.utils import logend
 from src.evaluate import eval_vina as _eval_vina, eval_qvina as _eval_qvina
 from src.utils.path import cleardir
+from src.data.datasets.targetdiff import TargetDiffScafCDDataset
 
 logger = get_logger()
 add_stream_handler(logger, logging.INFO)
@@ -25,42 +25,28 @@ pybel.ob.obErrorLog.SetOutputLevel(0)
 
 parser = ArgumentParser()
 parser.add_argument('--gname', nargs='*')
-parser.add_argument('--all', action='store_true')
 parser.add_argument('--metric', choices={'vina', 'qvina'}, default='vina')
-parser.add_argument('--index', default='250122_500')
 args = parser.parse_args()
 
-if args.all:
-    assert args.gname is None
+if args.gname is None:
     args.gname = []
-    with logend(logger, 'finding results'):
-        prefix, postfix = f"{GEN_DIR}/", "/info.csv"
-        paths = glob(f"{prefix}**{postfix}", recursive=True)
-        gnames = [path[len(prefix):][:-len(postfix)] for path in paths]
-        for gname in gnames:
-            gdir = f"{prefix}{gname}"
-            
-            # check index
-            with open(f"{gdir}/config.yaml") as f:
-                index = yaml.safe_load(f)['index']
-            if index != args.index: 
-                logger.warning(f"{gname} was ignored due to different index.")
-                continue
+    logger.info("Finding results...")
+    prefix, postfix = f"{GEN_DIR}/", "/info.csv"
+    paths = glob(f"{prefix}**{postfix}", recursive=True)
+    gnames = [path[len(prefix):][:-len(postfix)] for path in paths]
+    for gname in gnames:
+        gdir = f"{prefix}{gname}"
 
-            # check if result exists
-            if os.path.exists(f"{gdir}/{args.metric}_score.csv"):
-                continue
-            
-            args.gname.append(gname)
-    logger.info(f"Found {len(args.gname)} generations.")
+        # check if result exists
+        if os.path.exists(f"{gdir}/{args.metric}_score.csv"):
+            continue
         
-with logend(logger, 'reading csv'):
-    dfdata = pd.read_csv(f"{PROJ_DIR}/pocket_conditioned_generation/index/results/{args.index}/filenames.csv", index_col=0)
-
-cddir = "/workspace/cheminfodata/crossdocked/CrossDocked2020"
+        args.gname.append(gname)
+    logger.info(f"Found {len(args.gname)} generations.")
 
 def eval_vina(gname):
     gdir = f"{GEN_DIR}/{gname}"
+    data = TargetDiffScafCDDataset('test')
     dfg = pd.read_csv(f"{gdir}/info.csv", index_col=0, keep_default_na=False)
     is_ = np.where(dfg['error'] == '')[0]
     if args.metric == 'vina':
@@ -73,12 +59,9 @@ def eval_vina(gname):
         fs = []
         for i in is_:
             didx=dfg.loc[i, 'idx']
-            row = dfdata[dfdata.index == didx].iloc[0]
-            dname = row['dname']
-            pname = row['protein_name']
 
             fs.append(e.submit(metric, lig_path=f"{gdir}/sdf/{i}.sdf", 
-                    rec_path=f"{cddir}/{dname}/{pname}", 
+                    rec_path=data[didx][3], 
                     out_dir=f"{gdir}/eval_{args.metric}/{i}"))
         scores += [f.result() for f in tqdm(fs)]
 

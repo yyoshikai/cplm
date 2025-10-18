@@ -14,12 +14,20 @@ from tools.graph import get_scatter_style, COLORS2, tightargs, get_grid
 def compare_loss(fname, snames, slabels, script):
     fig, ax = plt.subplots(1,1,figsize=(6,4))
     for si, sname in enumerate(snames):
-        dfopt = pd.read_csv(f"/workspace/cplm/{script}/results/{sname}/opts/0.csv")
+        path = f"/workspace/cplm/{script}/results/{sname}/opts/0.csv"
+        if not os.path.exists(path):
+            print(f"{script}, {sname} does not exist.")
+            continue
+        dfopt = pd.read_csv(path)
         color, marker = get_scatter_style(si)
         ax.scatter(dfopt.index, dfopt['loss']/dfopt['weight'], color=color, marker=marker, s=1)
 
     for si, sname in enumerate(snames):
-        dfval = pd.read_csv(f"/workspace/cplm/{script}/results/{sname}/vals/0.csv", header=[0,1])
+        path = f"/workspace/cplm/{script}/results/{sname}/vals/0.csv"
+        if not os.path.exists(path):
+            print(f"{script}, {sname} does not exist.")
+            continue
+        dfval = pd.read_csv(path, header=[0,1])
         color, marker = get_scatter_style(si)
         ax.scatter(dfval['opt'].values.ravel(), dfval['mean_loss'].values.ravel(), 
             color=color, marker=marker, s=30, label=slabels[si])

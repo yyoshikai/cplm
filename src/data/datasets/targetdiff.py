@@ -1,4 +1,4 @@
-import os, pickle
+import os, pickle, re
 import numpy as np
 from rdkit import Chem
 from prody import parsePDB, parsePDBStream, confProDy, Contacts, addMissingAtoms
@@ -32,6 +32,8 @@ class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float]]):
         self.score_lmdb_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0_pocket10_processed_final_score.lmdb"
         self.key_idxs = np.load(f"{self.targetdiff_dir}/mask/split_mol/250920_0/{split}_idxs.npy")
 
+        self.pfname_pattern = re.compile(r"(.+?/.+?_rec)_.+")
+
     def __getitem__(self, idx: int):
         env, txn = load_lmdb(self.lmdb_path)
 
@@ -43,16 +45,21 @@ class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float]]):
         # Pocket
         pocket = Protein(np.array(data['protein_atom_name']), data['protein_pos'].numpy())
 
-        # Molecule
+        # Get actual file path
         ligand_filename = data['ligand_filename']
-        with open(f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0/{ligand_filename}") as f:
+        ligand_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0/{ligand_filename}"
+        protein_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0/" \
+            +re.match(self.pfname_pattern, data['protein_filename']).group(1)+'.pdb'
+
+        # Molecule
+        with open(ligand_path) as f:
             mol = Chem.MolFromMolBlock(f.read())
         
         # Score
         score_env, score_txn = load_lmdb(self.score_lmdb_path)
         score = pickle.loads(score_txn.get(key))
 
-        return pocket, mol, score, data['protein_filename'], data['ligand_filename']
+        return pocket, mol, score, protein_path, ligand_path
 
     def __len__(self):
         return len(self.key_idxs)
@@ -77,6 +84,8 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[Protein, Chem.Mol, float
         self.score_lmdb_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0_pocket10_processed_final_score.lmdb"
         self.key_idxs = np.load(f"{self.targetdiff_dir}/mask/split_mol/250920_0/{split}_idxs.npy")
 
+        self.pfname_pattern = re.compile(r"(.+?/.+?_rec)_.+")
+        
     def __getitem__(self, idx: int):
         env, txn = load_lmdb(self.lmdb_path)
 
@@ -85,22 +94,27 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[Protein, Chem.Mol, float
         value = txn.get(key)
         data = pickle.loads(value)
 
+        # Get actual file path
+        ligand_filename = data['ligand_filename']
+        ligand_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0/{ligand_filename}"
+        protein_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0/" \
+            +re.match(self.pfname_pattern, data['protein_filename']).group(1)+'.pdb'
+
+
         # Pocket
-        protein_filename = data['protein_filename']
-        protein_filename = protein_filename.split('_rec_')[0]+'_rec.pdb'
-        protein = parsePDB(f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0/{protein_filename}")
+        protein = parsePDB(protein_path)
         protein = Protein(protein.getData('name'), protein.getCoords())
 
         # Molecule
         ligand_filename = data['ligand_filename']
-        with open(f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0/{ligand_filename}") as f:
+        with open(ligand_path) as f:
             mol = Chem.MolFromMolBlock(f.read())
         
         # Score
         score_env, score_txn = load_lmdb(self.score_lmdb_path)
         score = pickle.loads(score_txn.get(key))
 
-        return protein, mol, score, data['protein_filename'], data['ligand_filename']
+        return protein, mol, score, protein_path, ligand_path
 
     def __len__(self):
         return len(self.key_idxs)

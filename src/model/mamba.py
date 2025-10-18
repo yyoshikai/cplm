@@ -73,13 +73,12 @@ class MambaModel(nn.Module):
         assert self.model.config.pad_token_id == pad_token
 
         max_new_tokens = max_len
-        streamer=ProgressStreamer("", max_new_tokens, self) if tqdm else None
         
         generation_config = copy.deepcopy(self.model.generation_config)
         generation_config.update(**{'max_new_tokens': max_new_tokens, 'do_sample': do_sample})
 
         pad_token_id = generation_config.pad_token_id
-        context = context.T
+        context = context.T # [B, L]
         batch_size, context_len = context.shape
         if pad_token_id in context:
             start_len = torch.where(torch.any(context == pad_token_id, dim=0))[0][0].item()
@@ -97,9 +96,10 @@ class MambaModel(nn.Module):
         generation_config._decoder_start_token_tensor = _tensor_or_none(generation_config.decoder_start_token_id, device=device)
 
         attention_mask = torch.ones(input_ids.shape[:2], dtype=torch.long, device=input_ids.device)
+        generation_config.max_length = generation_config.max_new_tokens + context.shape[1]
+        streamer=ProgressStreamer("", generation_config.max_length-1, self) if tqdm else None
         if streamer is not None:
             streamer.put(input_ids.cpu())
-        generation_config.max_length = generation_config.max_new_tokens + input_ids.shape[1]
         
         # ---- sample ------
 
@@ -139,19 +139,22 @@ class MambaModel(nn.Module):
             else:
                 next_tokens = torch.argmax(next_token_scores, dim=-1)
             if cur_len < context_len:
-                cur_prompt = context[:, cur_len]
-                next_tokens[cur_prompt != pad_token_id] = cur_prompt[cur_prompt != pad_token_id]
-
+                next_prompt = context[:, cur_len]
+                next_tokens[next_prompt != pad_token_id] = next_prompt[next_prompt != pad_token_id]
 
             next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
             input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
             if streamer is not None:
                 streamer.put(next_tokens.cpu())
 
-            is_done = input_ids.shape[1] >= generation_config.max_length
+            is_done = input_ids.shape[1] >= generation_config.max_length # 251018 多分合ってる
+            if cur_len < context_len:
+                end_token_generated = torch.isin(input_ids[:, -1], generation_config._eos_token_tensor) & (next_prompt == pad_token_id)
+            else:
+                end_token_generated = torch.isin(input_ids[:, -1], generation_config._eos_token_tensor)
+            
             unfinished_sequences = unfinished_sequences & ~(
-                torch.isin(input_ids[:, -1], generation_config._eos_token_tensor) | 
-                torch.full((input_ids.shape[0],), is_done, device=input_ids.device, dtype=torch.bool)
+                end_token_generated | torch.full((input_ids.shape[0],), is_done, device=input_ids.device, dtype=torch.bool)
             )
 
             this_peer_finished = unfinished_sequences.max() == 0
@@ -160,13 +163,18 @@ class MambaModel(nn.Module):
             del outputs
         if streamer is not None:
             streamer.end()
+
+        # truncate
+        context_sizes = (context != pad_token_id).sum(dim=1)
         outputs = []
         eos_token_id = generation_config.eos_token_id
         for i in range(batch_size):
-            input_ids0 = input_ids[i]
-            if eos_token_id in input_ids0:
-                input_ids0 = input_ids0[:torch.where(input_ids0 == eos_token_id)[0][0]+1]
-            outputs.append(input_ids0)
+            output = input_ids[i]
+            output = output[context_sizes[i]:]
+            output = output[:max_len]
+            if eos_token_id in output:
+                output = output[:torch.where(output == eos_token_id)[0][0]+1]
+            outputs.append(output)
         return outputs
 
     def prepare_inputs_for_generation(self, 
