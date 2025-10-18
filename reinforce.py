@@ -228,7 +228,7 @@ class ReinforceIter:
             all_idxs = batched_items = None
         all_idxs = dist_broadcast_tensor(all_idxs, device, self.main_rank, (self.batch_size*self.size,), torch.int)
         items_box = [None]
-        dist.scatter_object_list(items_box, batched_items)
+        dist.scatter_object_list(items_box, batched_items, src=self.main_rank)
         tokens, centers, rotations, protein_paths, lfnames = zip(*items_box[0])
         return all_idxs, tokens, centers, rotations, protein_paths, lfnames
 train_iter = ReinforceIter(train_data, args.num_workers, 
