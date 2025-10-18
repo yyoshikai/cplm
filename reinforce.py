@@ -1,4 +1,5 @@
 import sys, os, yaml, shutil, psutil, gc, math, random, re
+print(os.environ, flush=True)
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser
