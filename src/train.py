@@ -186,6 +186,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--model-bfloat16", action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
     ## test
+    parser.add_argument('--deterministic', action='store_true')
     parser.add_argument("--sync-every-step", action='store_true')
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
