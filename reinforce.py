@@ -43,10 +43,11 @@ parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', '
 parser.add_argument('--error-score', type=float, default=None)
 parser.add_argument('--ignore-error', action='store_true')
 parser.add_argument('--min-score', type=float, default=-math.inf)
-parser.add_argument('--max-len', type=int, default=2500)
+parser.add_argument('--max-len', type=int, default=1000)
 parser.add_argument('--reward-scale', choices=['none', 'all_mean', 'sample_mean', 'rank_mean', 'rank_mean_std'], default='none')
 parser.add_argument('--alpha', type=float, default=0.05) # same as BindGPT
 ## Data
+parser.add_argument('--max-prompt-len', type=int)
 parser.add_argument('--generate-per-sample', type=int, default=1)
 ## training
 parser.add_argument('--studyname', required=True)
@@ -211,6 +212,8 @@ class ReinforceIter:
                 sampler=InfiniteRandomSampler(dataset, generator=torch.Generator().manual_seed(args.seed)),
                 num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
             self.iter = loader.__iter__()
+            if args.max_prompt_len is not None:
+                self.iter = itr.filterfalse(lambda x: len(x[1]) > args.max_prompt_len, self.iter)
             self.next_item = None
             self.step = 0
 
