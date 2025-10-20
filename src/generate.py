@@ -1,11 +1,10 @@
-import sys, os, itertools, pickle, yaml, math
+import sys, os, itertools, math
+from argparse import ArgumentParser
 from collections.abc import Sized
 from inspect import getfullargspec
-from typing import Optional, Literal
 import numpy as np, pandas as pd
 import torch
-from torch import Tensor
-from torch.utils.data import DataLoader, Subset, StackDataset, BatchSampler, Dataset
+from torch.utils.data import DataLoader, Subset, StackDataset, BatchSampler
 from torch.nn.utils.rnn import pad_sequence
 from rdkit import Chem, RDLogger
 
@@ -14,22 +13,35 @@ from src.utils.random import set_random_seed
 from src.utils.logger import add_stream_handler, add_file_handler, get_logger
 from src.utils.path import cleardir
 from src.utils.time import wtqdm
-from src.data.tokenizer import VocEncoder
+from src.data.tokenizer import StringTokenizer
+from src.finetune import get_finetune_data
 from src.data import index_dataset
-from src.model import Model
-from src.model.mamba import MambaModel
+from src.train import get_model
 from src.evaluate import parse_mol_tokens, parse_mol
 PROJ_DIR = "/workspace/cplm"
 WORKDIR = "/workspace"
 
-def generate(model: Model|MambaModel, voc_encoder: VocEncoder, prompt_token_data: Dataset[Tensor], center_data: Dataset[Tensor], rdir: str, n_trial: int, batch_size: int, 
-        seed: int, max_len: int):
-    
+def add_generate_args(parser: ArgumentParser):
+    parser.add_argument('--n-trial', type=int, default=1)
+    parser.add_argument("--max-len", type=int, default=1000)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--batch-size", type=int, required=True)
+
+def generate(rdir: str, n_trial: int, batch_size: int, 
+        seed: int, max_len: int, model_args, init_state_path, no_score):
+
     # Environment
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    os.makedirs(rdir, exist_ok=True)
     set_random_seed(seed)
     ## Result dir
     cleardir(rdir)
+    ## device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    ## check if result exists
+    if os.path.exists(f"{rdir}/info.csv"):
+        print(f"{rdir} already finished.", flush=True)
+        sys.exit()
 
     ## Logger
     logger = get_logger()
@@ -46,7 +58,11 @@ def generate(model: Model|MambaModel, voc_encoder: VocEncoder, prompt_token_data
     for name in getfullargspec(generate)[0][2:]:
         logger.info(f"    {name}: {eval(name)}")
 
-    # data
+    # Data
+    added_vocs = StringTokenizer(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines()).vocs()
+    voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation_data, \
+        _protein_filename_data, _ligand_filename_data \
+        = get_finetune_data(model_args, 'test', False, True, added_vocs, prompt_score='none' if no_score else 'low')
     index_data, prompt_token_data = index_dataset(prompt_token_data)
     data = StackDataset(index_data, prompt_token_data, center_data)
     pad_token = voc_encoder.pad_token
@@ -57,7 +73,12 @@ def generate(model: Model|MambaModel, voc_encoder: VocEncoder, prompt_token_data
         return indices, batch, centers
 
     num_workers = min(28, batch_size)
+    
+    # model
+    model = get_model(model_args, voc_encoder, init_state_path, device)
     model.to(device)
+
+
 
     # 生成
     sampler = UnfinishedSampler(data, n_trial)

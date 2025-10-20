@@ -16,17 +16,17 @@ if __name__ == '__main__':
     parser.add_argument("--genname")
     args = parser.parse_args()
     
-    fdir = f"{WORKDIR}/cplm/finetune/results/{args.sname}"
+    rdir = f"{WORKDIR}/cplm/reinforce/results/{args.sname}"
+    rargs = Dict(yaml.safe_load(open(f"{rdir}/args.yaml")))
+    rargs = subs_vars(rargs, {'/work/02/ga97/a97003': WORKDIR})
+    fdir = f"{WORKDIR}/cplm/finetune/results/{rargs.finetune_name}"
     fargs = Dict(yaml.safe_load(open(f"{fdir}/args.yaml")))
-    fargs = subs_vars(fargs, {'/work/02/ga97/a97003': WORKDIR})
-
-    # default args    
     if args.opt is None:
-        opts = [int(path.split('/')[-1].split('.')[0]) for path in glob(f"{fdir}/models/*")]
+        opts = [int(path.split('/')[-1].split('.')[0]) for path in glob(f"{rdir}/models/*")]
         args.opt = max(opts)
     if args.genname is None:
         args.genname = f"{args.n_trial}_{args.max_len}_{args.seed}"
-    rdir = f"{WORKDIR}/cplm/pocket_conditioned_generation/finetune/{args.genname}/{args.sname}/{args.opt}"
+    odir = f"{WORKDIR}/cplm/pocket_conditioned_generation/reinforce/{args.genname}/{args.sname}/{args.opt}"
 
     # generate
-    generate(rdir, args.n_trial, args.batch_size, args.seed, args.max_len, fargs, f"{fdir}/models/{args.opt}.pth", no_score=fargs.no_score)
+    generate(odir, args.n_trial, args.batch_size, args.seed, args.max_len, fargs, f"{rdir}/models/{args.opt}.pth", no_score=True)
