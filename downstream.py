@@ -8,7 +8,7 @@ from src.data.molecule import MolProcessDataset
 from src.data.coord import CoordTransformDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
-from src.train import train, get_early_stop_opt, add_train_args, update_pretrain_args
+from src.train import train, get_early_stop_opt, add_train_args, update_pretrain_args, set_default_args
 
 # Environment
 logs = []
@@ -28,6 +28,7 @@ args = parser.parse_args()
 pretrain_dir = f"training/results/{args.pretrain_name}"
 targs = Dict(yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
 update_pretrain_args(args, targs)
+set_default_args(args)
 if args.seed is None:
     args.seed = targs.seed
 if args.task is None:
