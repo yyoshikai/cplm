@@ -206,6 +206,16 @@ class FloatTokenizer(Tokenizer):
         if self.vmin < 0: vocs.add('-0')
         vocs |= {'.'+str(i).zfill(self.decimal) for i in range(10**self.decimal)}
         return vocs
+    
+class BinaryClassTokenizer(Tokenizer):
+    def __init__(self):
+        pass
+    def tokenize(self, x: int):
+        return ['True'] if bool(x) else ['False']
+    def vocs(self):
+        return {'True', 'False'}
+
+
 
 class TokenizeDataset(WrapDataset[list[str]]):
     def __init__(self, dataset: Dataset, tokenizer: Tokenizer):

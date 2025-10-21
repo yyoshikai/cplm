@@ -7,7 +7,7 @@ from src.data import KeyDataset, CacheDataset, StackDataset
 from src.data.molecule import MolProcessDataset
 from src.data.coord import CoordTransformDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
-from src.data.tokenizer import StringTokenizer, FloatTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
+from src.data.tokenizer import StringTokenizer, FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
 from src.train import train, get_early_stop_opt, add_train_args, update_pretrain_args, set_default_args
 
 # Environment
@@ -58,7 +58,10 @@ def get_downstream_data(args: Namespace, split: str, data_name: str, task: str, 
     coord_tokenizer = FloatTokenizer('coord', -args.coord_range, args.coord_range)
     coord = ArrayTokenizeDataset(coord, coord_tokenizer)
     sentence += ['[XYZ]', coord, '[END]']
-    target_tokenizer = FloatTokenizer('target', -args.coord_range, args.coord_range) # TODO: get range & to classification
+    if raw.dataset.is_cls:
+        target_tokenizer = BinaryClassTokenizer()
+    else:
+        target_tokenizer = FloatTokenizer('target', -args.coord_range, args.coord_range) # TODO: get range
     target = TokenizeDataset(target, target_tokenizer)
     sentence += ['[SCORE]', target, '[END]']
     sentence = SentenceDataset(*sentence)
@@ -78,4 +81,4 @@ voc_encoder, train_token, train_weight = get_downstream_data(args,
 train_datas = [StackDataset(train_token, train_weight)]
 _, valid_token, valid_weight = get_downstream_data(args, 'valid', args.data, args.task, args.seed)
 valid_datas = [StackDataset(valid_token, valid_weight)]
-train('donwstream', args, train_datas, valid_datas, voc_encoder, logs, ['UniMolMoleculeNetDataset'], f"{pretrain_dir}/models/{args.pretrain_opt}.pth")
+train('downstream', args, train_datas, valid_datas, voc_encoder, logs, ['UniMolMoleculeNetDataset'], f"{pretrain_dir}/models/{args.pretrain_opt}.pth")

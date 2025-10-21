@@ -546,7 +546,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                         
                         ### Log result
                         if valid_is_starting and val_step_is_starting:
-                            log_batch(f"valid[{opt}][{data_name}]", logger, token_logger, token_batch, 
+                            log_batch(f"valid[{opt}][{data_name}]", logger, token_logger, target, 
                                     weight_batch, voc_encoder, val_step, check_data_dist, get_gpuuse)
 
                         ### Add
