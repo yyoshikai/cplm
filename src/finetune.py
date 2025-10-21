@@ -32,8 +32,12 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize).untuple()
     pocket_atom, pocket_coord, pocket_coord_position = ProteinProcessDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
 
-    lig_coord, pocket_coord, center, rotation \
-        = CoordTransformDataset(lig_coord, pocket_coord, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
+    if args.protein:
+        pocket_coord, lig_coord, center, rotation \
+            = CoordTransformDataset(pocket_coord, lig_coord, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
+    else:
+        lig_coord, pocket_coord, center, rotation \
+            = CoordTransformDataset(lig_coord, pocket_coord, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
 
     # sentence
     separates = {'[POCKET]', '[XYZ]', '[SCORE]', '[LIGAND]', '[END]'}
