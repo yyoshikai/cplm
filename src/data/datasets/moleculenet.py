@@ -1,49 +1,63 @@
-import os
-from copy import copy
-
+from typing import Literal
+import yaml
 import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset, Subset
 
-from rdkit import Chem
-from rdkit.Chem import rdDistGeom
-from rdkit.Chem import rdDepictor
-
+from ..lmdb import PickleLMDBDataset
 from ...utils.path import WORKDIR
+from .unimol import mol_from_unimol_data
 MOLNET_DIR = f"{WORKDIR}/cheminfodata/molnet"
 
-class MoleculeNetDataset(Dataset[tuple[Chem.Mol, float]]):
-    def __init__(self, dataset_name: str, task_name: str):
-        raise NotImplementedError("Need to be modified to use versions/unimol")
-        with open(f"{MOLNET_DIR}/strict/{dataset_name}/canonical.txt") as f:
-            self.smiles = f.read().splitlines()
-        self.target = pd.read_csv(f"{MOLNET_DIR}/strict/{dataset_name}/info.csv")[task_name].values.astype(float)
+with open(f"{MOLNET_DIR}/versions/unimol/tasks.yaml") as f:
+    tasks = yaml.safe_load(f)
+infos = pd.read_csv(f"{MOLNET_DIR}/versions/unimol/info.csv", index_col=0)
 
-    def __getitem__(self, idx: int):
+class MoleculeNetDataset(PickleLMDBDataset):
+    def __init__(self, data_name: str, split: Literal['train', 'valid', 'test']):
+        self.data_name = data_name
+        self.split = split
+        dname2uname = {
+            'qm7': 'qm7dft',
+            'qm8': 'qm8dft',
+            'qm9': 'qm9dft',
+        }
+        self.unimol_name = dname2uname.get(data_name, data_name)
+        super().__init__(f"{MOLNET_DIR}/versions/unimol/molecular_property_prediction/{self.unimol_name}/{split}.lmdb", idx_to_key='str')
 
-        mol = Chem.MolFromSmiles(self.smiles[idx])
-        rdDepictor.Compute2DCoords(mol)
-        assert mol.GetNumConformers() >= 1, mol
-        mol = Chem.AddHs(mol, addCoords=True)
-        mol_2d = copy(mol)
-        
-        
-        rdDistGeom.EmbedMolecule(mol)
-        if mol.GetNumConformers() >= 1:
-            pass
-        else:
-            mol = mol_2d
-        # assert mol.GetNumConformers() >= 1, mol
-        return mol, self.target[idx]
+        self._lazy_target = None
 
-    def __len__(self, idx):
-        return len(self.target)
+    @property
+    def tasks(self) -> list[str]:
+        return tasks[self.data_name]
     
+    @property
+    def is_cls(self) -> bool:
+        return bool(infos.loc[self.data_name, 'is_cls'])
 
-class MoleculeNetTrainDataset(Subset[tuple[Chem.Mol, float]]):
-    def __init__(self, dataset_name: str, task_name: str):
-        raise NotImplementedError("Need to be modified to use versions/unimol")
-        folds = pd.read_csv(f"{MOLNET_DIR}/strict/{dataset_name}/info2.csv")['gem_sfold']
-        idxs = np.where(folds == 0)[0]
-        dataset = MoleculeNetDataset(dataset_name, task_name)
-        super().__init__(dataset, idxs)
+    @property    
+    def main_metric(self) -> Literal['AUROC', 'AUPR', 'RMSE', 'MAE']:
+        return infos.loc[self.data_name, 'metric']
+    
+    def get_y(self, task: str) -> np.ndarray:
+        assert task in self.tasks
+        if self._lazy_target is None:
+            self._lazy_target = np.load(f"{MOLNET_DIR}/versions/unimol/target/{self.data_name}/{self.split}.npy")
+        return self._lazy_target[self.tasks.index(task)]
+
+from torch.utils.data import Dataset
+from rdkit import Chem
+from ..data import TupleDataset
+class UniMolMoleculeNetDataset(TupleDataset[tuple[Chem.Mol, tuple[int|float,...]]]):
+    def __init__(self, data_name: str, split: Literal['train', 'valid', 'test']):
+        super().__init__(2)
+        self.dataset = MoleculeNetDataset(data_name, split)
+        self.n_conformer = 10
+
+    def __getitem__(self, idx) -> Chem.Mol:
+        mol_idx, conformer_idx = divmod(idx, self.n_conformer)
+        data = self.dataset[mol_idx]
+        mol = mol_from_unimol_data(data['smi'], data['coordinates'][conformer_idx])
+        return mol, data['target']
+    
+    def __len__(self):
+        return len(self.dataset) * self.n_conformer

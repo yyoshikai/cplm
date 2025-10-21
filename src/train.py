@@ -54,6 +54,13 @@ def get_process_ranks() -> tuple[int, int, dict[str, int]]:
     return MAIN_RANK % size, SAVE_RANK % size, \
         {key: rank % size for key, rank in DATA_RANK.items()}
 
+def get_early_stop_opt(result_dir: str, patience_val: int) -> int:
+    df = pd.read_csv(f"{result_dir}/vals/0.csv")
+    losses = df['mean_loss'].values
+    for val in range(len(losses)):
+        if losses[val] <= np.min(losses[val:val+patience_val+1]):
+            return df['opt'].values[val]
+
 def _sync_result_dir(result_dir, subdirs):
     main_rank = get_process_ranks()[0]
     if dist.get_rank() == main_rank:
@@ -86,7 +93,7 @@ def _set_sdp_kernel(sdp_kernel: str|None):
         torch.backends.cuda.enable_math_sdp(sdp_kernel in ['MATH', 'ALL'])
         torch.backends.cuda.enable_mem_efficient_sdp(sdp_kernel in ['EFFICIENT', 'ALL'])
 
-def get_train_logger(result_dir):
+def _get_train_logger(result_dir):
 
     # ddp info
     rank = dist.get_rank()
@@ -131,6 +138,10 @@ def get_train_logger(result_dir):
     return logger, token_logger
 
 def add_train_args(parser: ArgumentParser):
+    """
+    環境変数等の入力
+    finetuning, downstream等でも毎回入力
+    """
     # training
     parser.add_argument("--studyname", default='noname')
     parser.add_argument("--weight-per-opt", type=int, default=int(1.6e6))
@@ -146,29 +157,14 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'warmup_inverse', 'step'])
     parser.add_argument("--schedule-free", action='store_true')
     # process
-    # bool系は何も指定しない場合BindGPTの設定になるようにしている
-    # pocket-heavy-coordはデフォルトで入れるようにした。
-    parser.add_argument("--lig-randomize", action='store_true')
-    parser.add_argument("--no-lig-h-atom", action='store_true')
-    parser.add_argument("--no-lig-h-coord", action='store_true')
-    parser.add_argument("--no-pocket-heavy-atom", action='store_true')
-    parser.add_argument("--no-pocket-heavy-coord", action='store_true')
-    parser.add_argument("--pocket-h-atom", action='store_true') # Datasetによっては無効？
-    parser.add_argument("--pocket-h-coord", action='store_true') # Datasetによっては無効？
     parser.add_argument("--coord-noise-std", type=float, default=50.0)
-    parser.add_argument("--coord-range", type=int, default=250)
-    parser.add_argument("--coord-follow-atom", action='store_true')
-
     # model
-    parser.add_argument('--mamba', action='store_true')
-    parser.add_argument('--n-layer', type=int)
     ## Transformer
     parser.add_argument('--pos-buffer-len', type=int, default=1600)
-
     # environments
     parser.add_argument("--eval-opt", type=int, required=True) # temp
     parser.add_argument("--patience-opt", type=int, required=True)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int)
     parser.add_argument("--pin-memory", action='store_true')
     parser.add_argument("--prefetch-factor", type=int)
     parser.add_argument("--duplicate", default='ask')
@@ -183,7 +179,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--log-step", type=int)
     parser.add_argument("--log-opt", type=int)
     ## compatibility
-    parser.add_argument("--model-bfloat16", action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
     ## test
     parser.add_argument('--deterministic', action='store_true')
@@ -193,6 +188,33 @@ def add_train_args(parser: ArgumentParser):
             'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
             'forward_backward_time', 'optimizer'])
     parser.add_argument('--no-commit', action='store_true')
+
+def add_pretrain_args(parser: ArgumentParser):
+    """
+    finetune時にpretrain時のものを使うもの (変えてはいけないもの)
+    """
+    # process
+    # bool系は何も指定しない場合BindGPTの設定になるようにしている
+    # pocket-heavy-coordはデフォルトで入れるようにした。
+    parser.add_argument("--lig-randomize", action='store_true')
+    parser.add_argument("--no-lig-h-atom", action='store_true')
+    parser.add_argument("--no-lig-h-coord", action='store_true')
+    parser.add_argument("--no-pocket-heavy-atom", action='store_true')
+    parser.add_argument("--no-pocket-heavy-coord", action='store_true')
+    parser.add_argument("--pocket-h-atom", action='store_true') # Datasetによっては無効？
+    parser.add_argument("--pocket-h-coord", action='store_true') # Datasetによっては無効？
+    parser.add_argument("--coord-range", type=int, default=250)
+    parser.add_argument("--coord-follow-atom", action='store_true')
+    # model
+    parser.add_argument('--mamba', action='store_true')
+    parser.add_argument('--n-layer', type=int)
+    ## compatibility
+    parser.add_argument("--model-bfloat16", action='store_true')
+
+def update_pretrain_args(args: Namespace, targs: dict):
+    for key, value in targs.items():
+        if not hasattr(args, key):
+            setattr(args, key, value)
 
 def set_default_args(args: Namespace):
     if args.num_workers > 0 and args.prefetch_factor is None:
@@ -299,7 +321,7 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
     _sync_result_dir(result_dir, subdirs)
 
     # logging
-    logger, token_logger = get_train_logger(result_dir)
+    logger, token_logger = _get_train_logger(result_dir)
     logger.debug(f"{device=}, {torch.cuda.device_count()=}")
     logger.info(f"{rdkit.__version__=}", **NO_DUP)
     logger.info(f"{transformers.__version__=}", **NO_DUP)

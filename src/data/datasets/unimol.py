@@ -12,8 +12,31 @@ from ..data import is_main_worker, Subset
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
+def mol_from_unimol_data(smi: str, coord: np.ndarray):
+    coord = coord.astype(float)
+
+    # Generate mol with conformer
+    mol = Chem.MolFromSmiles(smi)
+    mol = Chem.AddHs(mol)
+    n_atom  = mol.GetNumAtoms()
+    # rdkitのバージョンにより水素の数が違う場合, 重原子の座標から水素の座標を推定する。
+    # experiments/241202_241201_mol_pocket5_debugの `2. 原子のconformerを追加する方法を調べる。`より。
+    if n_atom != len(coord):
+        mol_heavy = Chem.RemoveHs(mol)
+        n_heavy = mol_heavy.GetNumAtoms()
+        conf = Conformer(n_heavy)
+        for i in range(n_heavy):
+            conf.SetAtomPosition(i, Point3D(*coord[i]))
+        mol_heavy.AddConformer(conf)
+        mol = Chem.AddHs(mol_heavy, addCoords=True)
+    else:
+        conf = Conformer(n_atom)
+        for i in range(n_atom):
+            conf.SetAtomPosition(i, Point3D(*coord[i]))
+        mol.AddConformer(conf)
+    return mol
+
 class UniMolLigandDataset(Dataset[Chem.Mol]):
-    logger = getLogger(f'{__module__}.{__qualname__}')
     def __init__(self, split: Literal['train', 'valid'], sample_save_dir: Optional[str]=None, unimol_dir=DEFAULT_UNIMOL_DIR):
         self.dataset = PickleLMDBDataset(f"{unimol_dir}/ligands/{split}.lmdb", idx_to_key='str')
         self.n_conformer = 10
@@ -26,27 +49,7 @@ class UniMolLigandDataset(Dataset[Chem.Mol]):
 
         smi = data['smi']
         coord: np.ndarray = data['coordinates'][conformer_idx]
-        coord = coord.astype(float)
-
-        # Generate mol with conformer
-        mol = Chem.MolFromSmiles(smi)
-        mol = Chem.AddHs(mol)
-        n_atom  = mol.GetNumAtoms()
-        # rdkitのバージョンにより水素の数が違う場合, 重原子の座標から水素の座標を推定する。
-        # experiments/241202_241201_mol_pocket5_debugの `2. 原子のconformerを追加する方法を調べる。`より。
-        if n_atom != len(coord):
-            mol_heavy = Chem.RemoveHs(mol)
-            n_heavy = mol_heavy.GetNumAtoms()
-            conf = Conformer(n_heavy)
-            for i in range(n_heavy):
-                conf.SetAtomPosition(i, Point3D(*coord[i]))
-            mol_heavy.AddConformer(conf)
-            mol = Chem.AddHs(mol_heavy, addCoords=True)
-        else:
-            conf = Conformer(n_atom)
-            for i in range(n_atom):
-                conf.SetAtomPosition(i, Point3D(*coord[i]))
-            mol.AddConformer(conf)
+        mol = mol_from_unimol_data(smi, coord)
 
         # save sample in main process
         if self.sample_save_dir is not None and self.getitem_count < 5 and is_main_worker():
@@ -55,7 +58,7 @@ class UniMolLigandDataset(Dataset[Chem.Mol]):
                 save_dir = f"{self.sample_save_dir}/{idx}"
                 os.makedirs(save_dir, exist_ok=True)
                 with open(f"{save_dir}/data_smi.txt", 'w') as f:
-                    f.write(data['smi'])
+                    f.write(smi)
                 pd.DataFrame(data['coordinates'][conformer_idx]) \
                     .to_csv(f"{save_dir}/data_coord.csv", header=False, index=False)
         self.getitem_count += 1

@@ -12,11 +12,12 @@ from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.molecule import MolProcessDataset
 from src.data.protein import ProteinProcessDataset, CoordFollowDataset
 from src.data import CacheDataset, Subset
-from src.train import train, add_train_args, set_default_args
+from src.train import train, add_pretrain_args, add_train_args, set_default_args
 
 # arguments
 parser = argparse.ArgumentParser()
 ## settings
+add_pretrain_args(parser)
 add_train_args(parser)
 ## dataset
 for cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]:
@@ -26,8 +27,9 @@ for cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDatase
 parser.add_argument('--init-state')
 args = parser.parse_args()
 set_default_args(args)
+if args.seed is None:
+    args.seed = 0
 logs = []
-
 # data
 smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
 mol_coord_tokenizer = FloatTokenizer('ligand', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)

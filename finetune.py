@@ -1,13 +1,19 @@
 import argparse
 
 import yaml
-from src.train import train, add_train_args, set_default_args
+from src.train import train, add_train_args, update_pretrain_args, set_default_args
 from src.finetune import get_finetune_data
 from src.data import StackDataset
 
+logs = []
+
 # arguments
 parser = argparse.ArgumentParser()
+## training
 add_train_args(parser)
+## pretrain
+parser.add_argument("--pretrain-name", required=True)
+parser.add_argument("--pretrain-opt", type=int)
 ## dataset
 parser.add_argument('--pocket-atom-weight', type=float, default=0.0)
 parser.add_argument('--pocket-coord-weight', type=float, default=0.0)
@@ -15,38 +21,15 @@ parser.add_argument('--lig-smiles-weight', type=float, default=1.0)
 parser.add_argument('--lig-coord-weight', type=float, default=5.0)
 parser.add_argument("--no-score", action='store_true')
 parser.add_argument('--protein', action='store_true')
-## pretrain
-parser.add_argument("--pretrain-name", required=True)
-parser.add_argument("--pretrain-opt", type=int)
-parser.add_argument("--ignore-arg-diff", action='store_true')
 args = parser.parse_args()
-set_default_args(args)
-
-logs = []
-
-# get pretrain info
 pretrain_dir = f"training/results/{args.pretrain_name}"
 targs = yaml.safe_load(open(f"{pretrain_dir}/args.yaml"))
-## check consistency of args
-if not args.ignore_arg_diff:
-    args_to_ignore = ['studyname', 'max_opt', 'gpu_size', 'no_commit', 'num_workers', 'warmup_ratio', 'eval_opt', 'patience_opt', 'log_opt', 'seed']
-    args_to_warn = ['gpu_size_gb']
-    changed_args_to_warn = []
-    for aname, avalue in vars(args).items():
-        if aname in targs and avalue != targs[aname]:
-            if aname in args_to_ignore:
-                continue
-            elif aname in args_to_warn:
-                changed_args_to_warn.append(aname)
-            else:
-                raise ValueError(f'args.{aname} is different: {targs[aname]}, {avalue}')
-    if len(changed_args_to_warn) > 0:
-        logs.append(f"following args were changed from training:")
-        for aname in changed_args_to_warn:
-            logs.append(f"    {aname}: {targs[aname]} -> {getattr(args, aname)}")
-
+update_pretrain_args(args, targs)
+set_default_args(args)
 if args.pretrain_opt is None:
-    args.pretrain_opt = targs['max_opt']
+    args.pretrain_opt = args['max_opt']
+if args.seed is None:
+    args.seed = targs.seed
 
 # data
 split2datas = {}
