@@ -1,11 +1,12 @@
 from argparse import ArgumentParser, Namespace
 
 import yaml
+import numpy as np
 from addict import Dict
 
 from src.data import KeyDataset, CacheDataset, StackDataset
 from src.data.molecule import MolProcessDataset
-from src.data.coord import CoordTransformDataset
+from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
 from src.train import train, get_early_stop_opt, add_train_args, update_pretrain_args, set_default_args
@@ -61,7 +62,11 @@ def get_downstream_data(args: Namespace, split: str, data_name: str, task: str, 
     if raw.dataset.is_cls:
         target_tokenizer = BinaryClassTokenizer()
     else:
-        target_tokenizer = FloatTokenizer('target', -args.coord_range, args.coord_range) # TODO: get range
+        ys = MoleculeNetDataset(data_name, 'train').get_y(task)
+        ymin, ymax = np.min(ys), np.max(ys)
+        target = RescaleDataset(target, ymin, ymax, -args.coord_range*0.8, args.coord_range*0.8)
+        logs.append(f"Rescaled ({ymin}, {ymax})->({-args.coord_range*0.8}, {args.coord_range*0.8})")
+        target_tokenizer = FloatTokenizer('target', -args.coord_range, args.coord_range)
     target = TokenizeDataset(target, target_tokenizer)
     sentence += ['[SCORE]', target, '[END]']
     sentence = SentenceDataset(*sentence)

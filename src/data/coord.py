@@ -2,8 +2,24 @@ import os
 from logging import getLogger
 import numpy as np
 from torch.utils.data import Dataset
-from .data import WrapTupleDataset, get_rng
+from .data import WrapDataset, WrapTupleDataset, get_rng, WorkerAggregator
 
+class RescaleDataset(WrapDataset[float]):
+    unk_logger = getLogger(f'unk.{__module__}.{__qualname__}')
+    def __init__(self, dataset: Dataset[float], from_a: float, from_b: float, to_a: float, to_b: float):
+        super().__init__(dataset)
+        self.from_a = from_a
+        self.from_b = from_b
+        self.to_a = to_a
+        self.to_b = to_b
+        assert self.from_b - self.from_a > 0
+        assert self.to_b > self.to_a
+
+    def __getitem__(self, idx: int):
+        from_v = self.dataset[idx]
+        to_v = (from_v-self.from_a) / (self.from_b-self.from_a) \
+            * (self.to_b - self.to_a) + self.to_a
+        return to_v
 
 class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
     logger = getLogger(f'{__module__}.{__qualname__}')

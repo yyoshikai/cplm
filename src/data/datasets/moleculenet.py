@@ -13,6 +13,8 @@ with open(f"{MOLNET_DIR}/versions/unimol/tasks.yaml") as f:
 infos = pd.read_csv(f"{MOLNET_DIR}/versions/unimol/info.csv", index_col=0)
 
 class MoleculeNetDataset(PickleLMDBDataset):
+    data_names = infos.index.tolist()
+
     def __init__(self, data_name: str, split: Literal['train', 'valid', 'test']):
         self.data_name = data_name
         self.split = split
