@@ -61,29 +61,14 @@ def get_early_stop_opt(result_dir: str, patience_val: int) -> int:
         if losses[val] <= np.min(losses[val:val+patience_val+1]):
             return df['opt'].values[val]
 
-def _sync_result_dir(result_dir, subdirs):
-    main_rank = get_process_ranks()[0]
-    if dist.get_rank() == main_rank:
-        try:
-            # Check if trained model already exists
-            exist_max_step = max([int(path.split('/')[-1].split('.')[0]) 
-                    for path in glob(f"{result_dir}/models/*.pth")]+[0])
-            if exist_max_step >= 50:
-                raise ValueError(f"{result_dir} already exists(step={exist_max_step})")
-
-            cleardir(result_dir)
-            for subdir in subdirs:
-                os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
-            result_dirs = [result_dir]
-        except Exception as e:
-            print("Exception at _sync_result_dir", e, file=sys.stderr, flush=True)
-            result_dirs = [None]
-    else:
-        result_dirs = [None]
-    dist.broadcast_object_list(result_dirs, src=main_rank)
-    result_dir = result_dirs[0]
-    if result_dir is None:
-        raise ValueError
+def make_check_result_dir(result_dir, subdirs):
+    exist_max_step = max([int(path.split('/')[-1].split('.')[0]) 
+            for path in glob(f"{result_dir}/models/*.pth")]+[0])
+    if exist_max_step >= 50:
+        raise ValueError(f"{result_dir} already exists(step={exist_max_step})")
+    cleardir(result_dir)
+    for subdir in subdirs:
+        os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
 
 def _set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:
@@ -119,14 +104,9 @@ def _get_train_logger(result_dir):
         for handler in [stream_handler, info_handler]:
             handler.addFilter(lambda record: not getattr(record, 'no_dup', False))
     
-    # debug
     add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", fmt=fmt, mode='a')
-
-    # tokens
     add_file_handler(logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
     add_file_handler(token_logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
-
-    # unknown tokens
     add_file_handler(unk_logger, f"{result_dir}/logs/unknowns.log", fmt=fmt, mode='a')
 
     # third-party modules
@@ -312,13 +292,14 @@ def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch
         token_logger.debug(msg)
 
 def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
+
+    # make result dir
+    make_check_result_dir(result_dir, subdirs)
+
     # init DDP
     rank, size, device = init_ddp()
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
     is_main = rank == MAIN_RANK
-
-    # make result dir
-    _sync_result_dir(result_dir, subdirs)
 
     # logging
     logger, token_logger = _get_train_logger(result_dir)
@@ -480,10 +461,8 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             for train_data, valid_data in zip(train_datas, valid_datas)], 
             device=device, dtype=torch.float)
     val_recorder = IterateRecorder(f"{result_dir}/vals/{rank}.csv", [], 1)
-    val2opt_step = []
+    val2opt = []
     val2mean_loss = []
-    val2process_weights = []
-    val2process_losses = []
     next_eval_opt = 0
 
     # step
@@ -579,13 +558,16 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                         for data_name, process_weight in zip(data_names, process_weights)}, 
                     **{f'process_loss {data_name}': process_loss
                         for data_name, process_loss in zip(data_names, process_losses)})
+            val2opt.append(opt)
+            val2mean_loss.append(mean_loss)
+
             if rank == MAIN_RANK:
                 torch.save(model.module.state_dict(), f"{result_dir}/models/{opt}.pth")
                 cleardir(f"{result_dir}/optimizers")
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt}.pth")
 
             # Judge early stopping
-            best_opt = val2opt_step[np.argmin(val2mean_loss)]
+            best_opt = val2opt[np.argmin(val2mean_loss)]
             if opt - best_opt >= args.patience_opt:
                 logger.info(f"Early stop.", **NO_DUP)
                 break

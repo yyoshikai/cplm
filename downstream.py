@@ -9,28 +9,28 @@ from src.data.molecule import MolProcessDataset
 from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
-from src.train import train, get_early_stop_opt, add_train_args, update_pretrain_args, set_default_args
+from src.train import get_early_stop_opt, add_train_args, update_pretrain_args, set_default_args
 
 # Environment
 logs = []
 
 # args
 parser = ArgumentParser()
-## train
-add_train_args(parser)
+## downstream
+parser.add_argument('--studyname', required=True)
+
 ## pretrain
 parser.add_argument('--pretrain-name', required=True)
 parser.add_argument('--pretrain-opt', type=int)
 parser.add_argument('--pretrain-patience-val', type=int)
-## downstream
+## task
 parser.add_argument('--data', required=True)
 parser.add_argument('--task')
 args = parser.parse_args()
+## pretrain
 pretrain_dir = f"training/results/{args.pretrain_name}"
-targs = Dict(yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
-update_pretrain_args(args, targs)
-set_default_args(args)
-if args.seed is None:
+targs = Namespace(**yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
+if args.seed is None: 
     args.seed = targs.seed
 if args.task is None:
     tasks = MoleculeNetDataset(args.data, 'train').tasks
@@ -42,12 +42,13 @@ if args.pretrain_opt is None:
     else:
         args.pretrain_opt = targs.max_opt
     logs.append(f"args.pretrain_opt was set to {args.pretrain_opt}")
+
 # Data
-def get_downstream_data(args: Namespace, split: str, data_name: str, task: str, seed: int, ):
+def get_downstream_data(targs: Namespace, split: str, data_name: str, task: str, seed: int, ):
 
     raw = UniMolMoleculeNetDataset(data_name, split)
     mol, target = raw.untuple()
-    smi, coord = MolProcessDataset(mol, seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize).untuple()
+    smi, coord = MolProcessDataset(mol, seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize).untuple()
     coord, _center, _rotation = CoordTransformDataset(coord, base_seed=seed, normalize_coord=True, random_rotate=True).untuple()
     target = KeyDataset(CacheDataset(target), raw.dataset.tasks.index(task))
 
@@ -56,7 +57,7 @@ def get_downstream_data(args: Namespace, split: str, data_name: str, task: str, 
     smi_tokenizer = StringTokenizer(open(f"src/data/smiles_tokens.txt").read().splitlines())
     smi = TokenizeDataset(smi, smi_tokenizer)
     sentence += ['[LIGAND]', smi]
-    coord_tokenizer = FloatTokenizer('coord', -args.coord_range, args.coord_range)
+    coord_tokenizer = FloatTokenizer('coord', -targs.coord_range, targs.coord_range)
     coord = ArrayTokenizeDataset(coord, coord_tokenizer)
     sentence += ['[XYZ]', coord, '[END]']
     if raw.dataset.is_cls:
@@ -64,9 +65,9 @@ def get_downstream_data(args: Namespace, split: str, data_name: str, task: str, 
     else:
         ys = MoleculeNetDataset(data_name, 'train').get_y(task)
         ymin, ymax = np.min(ys), np.max(ys)
-        target = RescaleDataset(target, ymin, ymax, -args.coord_range*0.8, args.coord_range*0.8)
-        logs.append(f"Rescaled ({ymin}, {ymax})->({-args.coord_range*0.8}, {args.coord_range*0.8})")
-        target_tokenizer = FloatTokenizer('target', -args.coord_range, args.coord_range)
+        target = RescaleDataset(target, ymin, ymax, -targs.coord_range*0.8, targs.coord_range*0.8)
+        logs.append(f"Rescaled ({ymin}, {ymax})->({-targs.coord_range*0.8}, {targs.coord_range*0.8})")
+        target_tokenizer = FloatTokenizer('target', -targs.coord_range, targs.coord_range)
     target = TokenizeDataset(target, target_tokenizer)
     sentence += ['[SCORE]', target, '[END]']
     sentence = SentenceDataset(*sentence)
@@ -81,12 +82,35 @@ def get_downstream_data(args: Namespace, split: str, data_name: str, task: str, 
     weight = RemoveLastDataset(TokenWeightDataset(sentence, separates, weights, by_n_separate=True))
     return voc_encoder, token, weight
 
+datas = {}
 for split in ['train', 'valid', 'test']:
-    voc_encoder, train_token, train_weight = get_downstream_data(args, 
-            'train', args.data, args.task, args.seed)
+    voc_encoder, token, weight = get_downstream_data(args, 
+            split, args.data, args.task, args.seed)
+    datas[split] = StackDataset(token, weight)
 
+# Model
+init_state_path = f"{pretrain_dir}/models/{args.pretrain_opt}.pth"
 
-train_datas = [StackDataset(train_token, train_weight)]
-_, valid_token, valid_weight = get_downstream_data(args, 'valid', args.data, args.task, args.seed)
-valid_datas = [StackDataset(valid_token, valid_weight)]
-train('downstream', args, train_datas, valid_datas, voc_encoder, logs, ['UniMolMoleculeNetDataset'], f"{pretrain_dir}/models/{args.pretrain_opt}.pth")
+# Environment
+result_dir = f"downstream/{args.studyname}/{args.data}_{args.task}"
+os.makedirs(result_dir)
+
+# train
+from copy import copy
+from optuna.trial import Trial
+from src.train import *
+def objective(trial: Trial):
+    trial_dir = f"{result_dir}/trials/{trial.number}"
+
+    trargs = copy(args)
+    trlogs = []
+
+    # Init DDP
+    logger, token_logger, rank, device = set_env(trial_dir, trargs, logs+trlogs, [])
+    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
+
+    # Model
+    model = get_model(args, voc_encoder, init_state_path, device)
+    model = DistributedDataParallel(model)
+
+    # 

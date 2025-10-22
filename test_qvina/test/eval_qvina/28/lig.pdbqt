@@ -1,0 +1,37 @@
+REMARK  Name = __4j36_B_rec_4j36_1hr_lig_min.pdb
+REMARK  4 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C_1  and  C_3
+REMARK    2  A    between atoms: C_1  and  C_13
+REMARK    3  A    between atoms: C_11  and  C_15
+REMARK    4  A    between atoms: C_15  and  O_16
+REMARK                            x       y       z     vdW  Elec       q    Type
+REMARK                         _______ _______ _______ _____ _____    ______ ____
+ROOT
+ATOM      1  C   UNL     1       3.667  43.599  67.381  0.00  0.00    +0.000 C 
+ATOM      2  O   UNL     1       4.233  42.674  68.025  0.00  0.00    +0.000 OA
+ENDROOT
+BRANCH   1   3
+ATOM      3  C   UNL     1       2.233  43.471  67.015  0.00  0.00    +0.000 A 
+ATOM      4  C   UNL     1       1.499  44.576  66.545  0.00  0.00    +0.000 A 
+ATOM      5  C   UNL     1       0.149  44.443  66.199  0.00  0.00    +0.000 A 
+ATOM      6 CL   UNL     1      -0.722  45.855  65.614  0.00  0.00    +0.000 Cl
+ATOM      7  C   UNL     1      -0.486  43.198  66.325  0.00  0.00    +0.000 A 
+ATOM      8 CL   UNL     1      -2.180  42.990  65.901  0.00  0.00    +0.000 Cl
+ATOM      9  C   UNL     1       0.234  42.097  66.797  0.00  0.00    +0.000 A 
+ATOM     10  C   UNL     1       1.581  42.230  67.141  0.00  0.00    +0.000 A 
+ENDBRANCH   1   3
+BRANCH   1  13
+ATOM     11  C   UNL     1       4.708  45.039  65.554  0.00  0.00    +0.000 C 
+ATOM     12  C   UNL     1       5.839  44.563  66.453  0.00  0.00    +0.000 C 
+ATOM     13  C   UNL     1       4.460  44.833  67.045  0.00  0.00    +0.000 C 
+BRANCH  11  15
+ATOM     14  O   UNL     1       5.799  46.845  64.434  0.00  0.00    +0.000 OA
+ATOM     15  C   UNL     1       4.819  46.470  65.132  0.00  0.00    +0.000 C 
+BRANCH  15  16
+ATOM     16  O   UNL     1       3.820  47.376  65.472  0.00  0.00    +0.000 OA
+ATOM     17  H   UNL     1       3.875  48.345  65.180  0.00  0.00    +0.000 HD
+ENDBRANCH  15  16
+ENDBRANCH  11  15
+ENDBRANCH   1  13
+TORSDOF 4

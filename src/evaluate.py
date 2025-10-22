@@ -489,7 +489,7 @@ python {prepare_receptor4.__file__} -r {rec_path} -o rec.pdbqt
         return None
 
 
-def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False):
+def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False, cpu: int|None = None):
     """
     Pocket2Molの実装から変更
     """
@@ -550,6 +550,8 @@ def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=Non
         path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/bin/qvina02")
         commands = f"""cd {out_dir} && {path_to_qvina} --receptor rec.pdbqt --ligand lig.pdbqt --center_x {center[0]:.4f} --center_y {center[1]:.4f} --center_z {center[2]:.4f} --size_x 20 --size_y 20 --size_z 20 --exhaustiveness {exhaustiveness}
         """
+        if cpu is not None:
+            commands += f" --cpu {cpu}"
         proc.stdin.write(commands.encode('utf-8'))
         proc.stdin.close()
         start = time()
