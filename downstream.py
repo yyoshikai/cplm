@@ -100,6 +100,7 @@ MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 from copy import copy
 from optuna.trial import Trial
 from src.train import *
+from torch.utils.data.distributed import DistributedSampler
 def objective(trial: Trial):
     trial_dir = f"{result_dir}/trials/{trial.number}"
     trargs = copy(args)
@@ -108,4 +109,8 @@ def objective(trial: Trial):
     model = get_model(args, voc_encoder, init_state_path, device)
     model = DistributedDataParallel(model)
 
-    # 
+    # Environment
+    ddp_set_random_seed(args.seed)
+
+    # Data
+    sampler = DistributedSampler(datas[split])

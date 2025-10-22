@@ -61,14 +61,29 @@ def get_early_stop_opt(result_dir: str, patience_val: int) -> int:
         if losses[val] <= np.min(losses[val:val+patience_val+1]):
             return df['opt'].values[val]
 
-def make_check_result_dir(result_dir, subdirs):
-    exist_max_step = max([int(path.split('/')[-1].split('.')[0]) 
-            for path in glob(f"{result_dir}/models/*.pth")]+[0])
-    if exist_max_step >= 50:
-        raise ValueError(f"{result_dir} already exists(step={exist_max_step})")
-    cleardir(result_dir)
-    for subdir in subdirs:
-        os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
+def _sync_result_dir(result_dir, subdirs):
+    main_rank = get_process_ranks()[0]
+    if dist.get_rank() == main_rank:
+        try:
+            # Check if trained model already exists
+            exist_max_step = max([int(path.split('/')[-1].split('.')[0]) 
+                    for path in glob(f"{result_dir}/models/*.pth")]+[0])
+            if exist_max_step >= 50:
+                raise ValueError(f"{result_dir} already exists(step={exist_max_step})")
+
+            cleardir(result_dir)
+            for subdir in subdirs:
+                os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
+            result_dirs = [result_dir]
+        except Exception as e:
+            print("Exception at _sync_result_dir", e, file=sys.stderr, flush=True)
+            result_dirs = [None]
+    else:
+        result_dirs = [None]
+    dist.broadcast_object_list(result_dirs, src=main_rank)
+    result_dir = result_dirs[0]
+    if result_dir is None:
+        raise ValueError
 
 def _set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:
@@ -104,6 +119,7 @@ def _get_train_logger(result_dir):
         for handler in [stream_handler, info_handler]:
             handler.addFilter(lambda record: not getattr(record, 'no_dup', False))
     
+    # debug
     add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", fmt=fmt, mode='a')
     add_file_handler(logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
     add_file_handler(token_logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
@@ -292,14 +308,13 @@ def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch
         token_logger.debug(msg)
 
 def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
-
-    # make result dir
-    make_check_result_dir(result_dir, subdirs)
-
     # init DDP
     rank, size, device = init_ddp()
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
     is_main = rank == MAIN_RANK
+
+    # make result dir
+    _sync_result_dir(result_dir, subdirs)
 
     # logging
     logger, token_logger = _get_train_logger(result_dir)
