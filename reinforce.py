@@ -190,6 +190,7 @@ def get_gpuuse(batch_size: int, length: int):
         return model.module.get_gpuuse(batch_size, length, True, sdp_kernel)
     else:
         return model.module.get_gpuuse(batch_size, length, True)
+logger.info(f"Estimated GPU use={get_gpuuse(args.batch_size, args.max_len+args.max_prompt_len)/2**30:.03f}")
 
 # DataLoader
 class ReinforceIter:
@@ -253,9 +254,11 @@ match args.loss_scale:
 
 ## records
 opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", 
-        ['batch_size', 'max_len', 'reward_loss', 'kl_loss'], 1000)
-errorss = []
-scoress = []
+        ['batch_size', 'max_len', 'reward_loss', 'kl_loss'], args.record_opt)
+error_recorder = IterateRecorder(f"{result_dir}/errors/{rank}.csv", 
+        [str(i) for i in range(args.batch_size)], args.record_opt)
+score_recorder = IterateRecorder(f"{result_dir}/scores/{rank}.csv", 
+        [str(i) for i in range(args.batch_size)], args.record_opt)
 nan_grad_step_saved = False
 step = 0
 
@@ -267,6 +270,7 @@ if rank == SAVE_RANK:
 
 logger.info("Training started.")
 for step in range(args.max_opt): 
+    is_starting = step < 5
 
     # get batch
     all_idxs, prompt_tokens, centers, rotations, protein_paths, lfnames= train_iter.__next__()
@@ -275,8 +279,7 @@ for step in range(args.max_opt):
     prompt_batch = prompt_batch.to(device)
     L, B = prompt_batch.shape
 
-    # forward
-    ## generate sample
+    # generate sample
     model.eval()
     with torch.inference_mode():
         outputs = net_model.generate2(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
@@ -298,7 +301,7 @@ for step in range(args.max_opt):
             logger.debug(f"step[{step}]{lfnames=}")
             logger.debug(f"step[{step}]{centers=}")
             
-    ## Get score
+    # Get score
     do_save = step in do_save_steps
     errors = []
     with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
@@ -359,19 +362,19 @@ for step in range(args.max_opt):
     scores[errors == ""] = valid_scores
     errors[errors == ""][np.isnan(valid_scores)] = 'VINA'
 
-    errorss.append(errors)
+    error_recorder.record(**{str(i): errors[i] for i in range(args.batch_size)})
     scores = torch.tensor(scores, device=device, dtype=torch.float)
     if not args.ignore_error:
         scores[torch.isnan(scores)] = error_score
     torch.clamp_(scores, min=args.min_score)
-    scoress.append(scores.cpu().tolist())
+    score_recorder.record(**{str(i): score for i, score in enumerate(scores.tolist())})
 
     ## gather & normalize score
     all_scores = [torch.zeros(args.batch_size, dtype=torch.float, device=device)
             for _ in range(ddp_size)]
     dist.all_gather(all_scores, scores)
     all_scores = torch.cat(all_scores)
-    
+
     match args.reward_scale:
         case 'none': 
             pass
@@ -395,10 +398,10 @@ for step in range(args.max_opt):
     if args.ignore_error:
         scores[torch.isnan(scores)] = 0.0
 
-    if step < 5:
+    if is_starting:
         logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
-    ## Get prob & reward loss
+    # Forward Get prob & reward loss
     model.train()
     with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDP_KERNEL):
         with torch.inference_mode():
@@ -422,6 +425,7 @@ for step in range(args.max_opt):
         
         loss = (reward_loss + kl_loss * args.alpha) * loss_scale
 
+    # Backward
     loss.backward()
 
     # check nan
@@ -446,6 +450,7 @@ for step in range(args.max_opt):
             ## reset grad
             optimizer.zero_grad()
 
+    # Optimizer's step
     if args.clip_grad_value is not None:
         torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
     torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
@@ -458,8 +463,6 @@ for step in range(args.max_opt):
     scheduler.step()
     
     if step % args.record_opt == 0:
-        pd.DataFrame(scoress).to_csv(f"{result_dir}/scores/{rank}.csv")
-        pd.DataFrame(errorss).to_csv(f"{result_dir}/errors/{rank}.csv")
         if rank == SAVE_RANK:
             torch.save(model.state_dict(), f"{result_dir}/models/{step}.pth")
             cleardir(f"{result_dir}/optimizers")
@@ -469,9 +472,17 @@ for step in range(args.max_opt):
 
     logger.info(f"{step=} finished.")
 
+    if is_starting:
+        logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
+        torch.cuda.reset_max_memory_allocated()
+
     if step == log_sample_step:
+        logger.info("RDKit logger will be disabled from now on.")
         getLogger('rdkit').propagate = False
-    
+
+opt_recorder.flush()
+error_recorder.flush()
+
 logger.info("Training finished!")
 
 dist.destroy_process_group()
