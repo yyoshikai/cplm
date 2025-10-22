@@ -71,6 +71,7 @@ parser.add_argument('--num-workers', type=int, default=0)
 parser.add_argument('--pin-memory', action='store_true')
 parser.add_argument('--prefetch-factor', type=int)
 parser.add_argument('--num-score-workers', type=int, default=1)
+parser.add_argument('--cpu', type=int)
 parser.add_argument('--reset-nan-grad', action='store_true')
 parser.add_argument('--gc', action='store_true')
 ## verbosity
@@ -151,7 +152,7 @@ match args.target:
         error_score = 0
     case 'qvina':
         def get_score(lig_path: str, rec_path: str, out_dir: str):
-            score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60)
+            score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, cpu=args.cpu)
             return -score if score is not None else np.nan
         error_score = -50
     case 'dummy':
