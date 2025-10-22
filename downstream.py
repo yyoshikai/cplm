@@ -81,8 +81,11 @@ def get_downstream_data(args: Namespace, split: str, data_name: str, task: str, 
     weight = RemoveLastDataset(TokenWeightDataset(sentence, separates, weights, by_n_separate=True))
     return voc_encoder, token, weight
 
-voc_encoder, train_token, train_weight = get_downstream_data(args, 
-        'train', args.data, args.task, args.seed)
+for split in ['train', 'valid', 'test']:
+    voc_encoder, train_token, train_weight = get_downstream_data(args, 
+            'train', args.data, args.task, args.seed)
+
+
 train_datas = [StackDataset(train_token, train_weight)]
 _, valid_token, valid_weight = get_downstream_data(args, 'valid', args.data, args.task, args.seed)
 valid_datas = [StackDataset(valid_token, valid_weight)]

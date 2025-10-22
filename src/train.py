@@ -479,6 +479,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     valid2train_r = torch.tensor([len(train_data)/len(valid_data) 
             for train_data, valid_data in zip(train_datas, valid_datas)], 
             device=device, dtype=torch.float)
+    val_recorder = IterateRecorder(f"{result_dir}/vals/{rank}.csv", [], 1)
     val2opt_step = []
     val2mean_loss = []
     val2process_weights = []
@@ -573,20 +574,11 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             logger.info(f"    {mean_loss=}", **NO_DUP)
 
             ## add & record results
-            val2process_losses.append(process_losses)
-            val2process_weights.append(process_weights)
-            val2opt_step.append(opt)
-            val2mean_loss.append(mean_loss)
-            dfval = pd.DataFrame({
-                'opt': val2opt_step,
-                'mean_loss': val2mean_loss
-            })
-            dfval[[f'process_weight {data_name}' for data_name in data_names]] \
-                = np.array(val2process_weights)
-            dfval[[f'process_loss {data_name}' for data_name in data_names]] \
-                = np.array(val2process_losses)
-            dfval.to_csv(f"{result_dir}/vals/{rank}.csv", index_label='val')
-            
+            val_recorder.record(opt=opt, mean_loss=mean_loss,  
+                    **{f'process_weight {data_name}': process_weight 
+                        for data_name, process_weight in zip(data_names, process_weights)}, 
+                    **{f'process_loss {data_name}': process_loss
+                        for data_name, process_loss in zip(data_names, process_losses)})
             if rank == MAIN_RANK:
                 torch.save(model.module.state_dict(), f"{result_dir}/models/{opt}.pth")
                 cleardir(f"{result_dir}/optimizers")
@@ -728,6 +720,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
 
     opt_recorder.flush()
     step_recorder.flush()
+    val_recorder.flush()
     logger.info("Training finished!")
 
     dist.destroy_process_group()
