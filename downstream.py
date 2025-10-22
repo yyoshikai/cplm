@@ -93,7 +93,8 @@ init_state_path = f"{pretrain_dir}/models/{args.pretrain_opt}.pth"
 
 # Environment
 result_dir = f"downstream/{args.studyname}/{args.data}_{args.task}"
-os.makedirs(result_dir)
+logger, token_logger, rank, device = set_env(f"downstream/{args.studyname}/{args.data}_{args.task}", args, logs, [])
+MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 
 # train
 from copy import copy
@@ -101,13 +102,7 @@ from optuna.trial import Trial
 from src.train import *
 def objective(trial: Trial):
     trial_dir = f"{result_dir}/trials/{trial.number}"
-
     trargs = copy(args)
-    trlogs = []
-
-    # Init DDP
-    logger, token_logger, rank, device = set_env(trial_dir, trargs, logs+trlogs, [])
-    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 
     # Model
     model = get_model(args, voc_encoder, init_state_path, device)
