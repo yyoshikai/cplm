@@ -190,6 +190,7 @@ def objective(trial: Trial):
     loader = DataLoader(datas['train'], batch_size=trargs.batch_size, 
             sampler=sampler, num_workers=args.num_workers, pin_memory=True, drop_last=True, 
             collate_fn=train_collate, prefetch_factor=prefetch_factor)
+    logger.debug(f"Step per epoch={len(loader)}")
 
     # Model
     model = get_model(targs, voc_encoder, init_state_path, device)

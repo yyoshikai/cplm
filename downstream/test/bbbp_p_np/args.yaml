@@ -1,8 +1,6 @@
 batch_sizes:
 - 32
 - 64
-- 128
-- 256
 data: bbbp
 ddp_size: 1
 deterministic: false
