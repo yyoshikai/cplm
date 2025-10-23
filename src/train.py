@@ -234,7 +234,7 @@ def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int,
     match scheduler:
         case 'warmup':
             def schedule(step: int):
-                if step <= warmup_step:
+                if step < warmup_step:
                     return step / warmup_step
                 elif step <= epoch_step:
                     return math.cos(math.pi*((step-warmup_step)/(epoch_step-warmup_step)))*0.49+0.51
