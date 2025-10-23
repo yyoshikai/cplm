@@ -21,6 +21,7 @@ from src.utils import IterateRecorder
 from src.utils.ddp import dist_broadcast_object, dist_send_tensor, dist_recv_tensor
 from src.utils.logger import add_file_handler
 from src.utils.random import ddp_set_random_seed
+from src.utils.rdkit import ignore_warning
 from src.data import KeyDataset, CacheDataset, StackDataset
 from src.data.molecule import MolProcessDataset
 from src.data.coord import CoordTransformDataset, RescaleDataset
@@ -161,6 +162,7 @@ init_state_path = f"{pretrain_dir}/models/{args.pretrain_opt}.pth"
 result_dir = f"downstream/{args.studyname}/{args.data}_{args.task}"
 logger, token_logger, rank, device = set_env(f"downstream/{args.studyname}/{args.data}_{args.task}", args, logs, [])
 MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
+ignore_warning()
 ddp_size = dist.get_world_size()
 
 # train
@@ -208,6 +210,7 @@ def objective(trial: Trial):
     # Training
     for epoch in range(trargs.n_epoch):
         ## train epoch
+        trial_logger.debug(f"Epoch[{epoch}] train started.")
         sampler.set_epoch(epoch)
         model.train()
         for token_batch, weight_batch in loader:
@@ -221,10 +224,12 @@ def objective(trial: Trial):
         scheduler.step()
 
         ## validation epoch
+        trial_logger.debug(f"Epoch[{epoch}] validation started.")
         model.eval()
         with torch.inference_mode():
             scores = {}
             for split in ['valid', 'test']:
+                trial_logger.debug(f"Epoch[{epoch}] validating {split} set...")
                 valid_loader = DataLoader(datas[split], batch_size=None, shuffle=False, num_workers=args.num_workers, pin_memory=True, prefetch_factor=prefetch_factor)
                 valid_loader = DDPStringCollateLoader(valid_loader, valid_collate, gpuuse_getter, args.gpu_size, device, 100000, DATA_RANK['valid'])
                 worker_preds = []
