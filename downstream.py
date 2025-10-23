@@ -40,6 +40,7 @@ parser.add_argument('--studyname', required=True)
 parser.add_argument('--weight-decay', type=float, default=0.01)
 parser.add_argument('--patience', type=int, default=5)
 parser.add_argument('--seed', type=int)
+parser.add_argument('--n-trials', type=int, default=100)
 ### param range
 parser.add_argument('--batch-sizes', type=int, nargs='+', default=[32, 64, 128, 256])
 parser.add_argument('--lrs', type=float, nargs='+', default=[5e-5, 8e-5, 1e-4, 4e-4, 5e-4])
