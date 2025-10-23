@@ -253,7 +253,7 @@ def objective(trial: Trial):
                         next_input_batch = torch.cat([input_batch, torch.full((1, B), 
                                 fill_value=voc_encoder.pad_token, 
                                 dtype=input_batch.dtype, device=input_batch.device)])
-                        for b in range(trargs.batch_size):
+                        for b in range(B):
                             log_prob = output_batch[prompt_sizes[b]-1+i_gen, b] # [N]
                             gen = choice_idxs[torch.argmax(log_prob[choice_idxs])].item()
                             next_input_batch[prompt_sizes[b]+i_gen, b] = gen
