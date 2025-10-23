@@ -18,6 +18,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.nn.parallel import DistributedDataParallel
 
 from src.utils import IterateRecorder, should_show
+from src.utils.time import TimerTqdm
 from src.utils.ddp import dist_broadcast_object, dist_send_tensor, dist_recv_tensor
 from src.utils.random import ddp_set_random_seed
 from src.utils.rdkit import ignore_warning
@@ -86,7 +87,7 @@ datas = {}
 vocs = None
 for split in ['train', 'valid', 'test']:
     is_valid = split != 'train'
-    unimol_raw = UniMolMoleculeNetDataset(args.data, split)
+    unimol_raw = UniMolMoleculeNetDataset(args.data, split, 1)
     mol, target = unimol_raw.untuple()
     smi, coord = MolProcessDataset(mol, args.seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize).untuple()
     coord = CoordTransformDataset(coord, base_seed=args.seed, normalize_coord=True, random_rotate=False if is_valid else True).untuple()[0]

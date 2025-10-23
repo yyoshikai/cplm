@@ -49,10 +49,10 @@ class MoleculeNetDataset(PickleLMDBDataset):
 from rdkit import Chem
 from ..data import TupleDataset
 class UniMolMoleculeNetDataset(TupleDataset[tuple[Chem.Mol, tuple[int|float,...]]]):
-    def __init__(self, data_name: str, split: Literal['train', 'valid', 'test']):
+    def __init__(self, data_name: str, split: Literal['train', 'valid', 'test'], n_conformer: int=10):
         super().__init__(2)
         self.dataset = MoleculeNetDataset(data_name, split)
-        self.n_conformer = 10
+        self.n_conformer = n_conformer
 
     def __getitem__(self, idx) -> Chem.Mol:
         mol_idx, conformer_idx = divmod(idx, self.n_conformer)
