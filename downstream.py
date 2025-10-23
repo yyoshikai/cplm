@@ -211,8 +211,8 @@ def objective(trial: Trial):
         sampler.set_epoch(epoch)
         model.train()
         for token_batch, weight_batch in loader:
-            token_batch.to(device)
-            weight_batch.to(device)
+            token_batch = token_batch.to(device)
+            weight_batch = weight_batch.to(device)
             optimizer.zero_grad()
             with torch.autocast('cuda', torch.bfloat16):
                 loss = (criterion(model(token_batch[:-1]), token_batch[1:])*weight_batch).sum()
