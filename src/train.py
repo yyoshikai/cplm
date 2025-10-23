@@ -280,15 +280,15 @@ def get_model(args: Namespace, voc_encoder: VocEncoder, init_state_path: str, de
         model.load_state_dict(remove_module(state)) # temp
     return model
 
-def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch: Tensor, weight_batch: Tensor, voc_encoder: VocEncoder, step: int, check_data_dist: bool, gpuuse_getter: Callable[[int, int], float]):
+def log_batch(prefix: str, logger: Logger, token_logger: Logger, target_batch: Tensor, weight_batch: Tensor, voc_encoder: VocEncoder, step: int, check_data_dist: bool, gpuuse_getter: Callable[[int, int], float]):
 
     # weight
     weight_items = weight_batch.sum(dim=0).tolist()
     length, batch_size = target_batch.shape
     gpuuse_gb = gpuuse_getter(batch_size, length) / (2**30)
-    logger.debug(f"{data_name}[{step}] batch shape={tuple(target_batch.shape)} GPU use={gpuuse_gb}")
+    logger.debug(f"{prefix}[{step}] batch shape={tuple(target_batch.shape)} GPU use={gpuuse_gb}")
     if check_data_dist:
-        logger.debug(f"{data_name}[{step}] weights={weight_items}")
+        logger.debug(f"{prefix}[{step}] weights={weight_items}")
 
     # tokens
     if batch_size > 10: 
@@ -297,7 +297,7 @@ def log_batch(data_name: str, logger: Logger, token_logger: Logger, target_batch
     else:
         idxs = np.arange(batch_size)
     for idx in idxs:
-        msg = f"{data_name}[{step}] batch[{idx:3}]="
+        msg = f"{prefix}[{step}] batch[{idx:3}]="
         tokens = voc_encoder.decode(target_batch[:,idx].cpu().tolist())
         for t, w in zip(tokens, weight_batch[:,idx]):
             msg += f"{t}[{w}],"
@@ -503,15 +503,15 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             process_weights = []
             process_losses = []
             if args.schedule_free: optimizer.eval()
-            for i_data, data_name in enumerate(data_names):
-                logger.info(f"    Validating [{data_name}]", **NO_DUP)
+            for i_data, prefix in enumerate(data_names):
+                logger.info(f"    Validating [{prefix}]", **NO_DUP)
                 ## Make Loader
                 if rank == DATA_RANK['valid']:
                     os.environ['EPOCH'] = '0'
                     valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_datas[i_data], batch_size=None, shuffle=True if check_data_dist else False, num_workers=args.num_workers, pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
                     if valid_is_starting:
                         if check_data_dist:
-                            valid_loader = RevealIterator(valid_loader, f'valid[{data_name}]', logger)
+                            valid_loader = RevealIterator(valid_loader, f'valid[{prefix}]', logger)
                             valid_reveal_loader = valid_loader
                 else:
                     valid_loader = None
@@ -537,7 +537,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                         
                         ### Log result
                         if valid_is_starting and val_step_is_starting:
-                            log_batch(f"valid[{opt}][{data_name}]", logger, token_logger, target, 
+                            log_batch(f"valid[{opt}][{prefix}]", logger, token_logger, target, 
                                     weight_batch, voc_encoder, val_step, check_data_dist, get_gpuuse)
 
                         ### Add
@@ -565,10 +565,10 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
 
             ## add & record results
             val_recorder.record(opt=opt, mean_loss=mean_loss,  
-                    **{f'process_weight {data_name}': process_weight 
-                        for data_name, process_weight in zip(data_names, process_weights)}, 
-                    **{f'process_loss {data_name}': process_loss
-                        for data_name, process_loss in zip(data_names, process_losses)})
+                    **{f'process_weight {prefix}': process_weight 
+                        for prefix, process_weight in zip(data_names, process_weights)}, 
+                    **{f'process_loss {prefix}': process_loss
+                        for prefix, process_loss in zip(data_names, process_losses)})
             val2opt.append(opt)
             val2mean_loss.append(mean_loss)
 

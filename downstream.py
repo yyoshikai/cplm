@@ -28,7 +28,7 @@ from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
 from src.data.collator import DDPStringCollateLoader
-from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler
+from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch
 
 
 # Environment
@@ -183,8 +183,6 @@ def objective(trial: Trial):
     # Environment
     trial_dir = f"{result_dir}/trials/{trial.number}"
     os.makedirs(trial_dir, exist_ok=True)
-    trial_logger = getLogger(f'trial.{trial.number}')
-    add_file_handler(trial_logger, f"{trial_dir}/debug.log")
 
     # Data
     sampler = DistributedSampler(datas['train'], drop_last=True)
@@ -209,32 +207,36 @@ def objective(trial: Trial):
 
     # Training
     for epoch in range(trargs.n_epoch):
+        prefix = f"Trial[{trial.number}] Epoch[{epoch}]"
         ## train epoch
-        trial_logger.debug(f"Epoch[{epoch}] train started.")
+        logger.debug(f"{prefix} train started.")
         sampler.set_epoch(epoch)
         model.train()
-        for token_batch, weight_batch in loader:
+        for step, (token_batch, weight_batch) in enumerate(loader):
             token_batch = token_batch.to(device)
+            input_batch, target_batch = token_batch[:-1], token_batch[1:]
+            if epoch <= 1 and step <= 1:
+                log_batch(prefix, logger, token_logger, target_batch, weight_batch, voc_encoder, step, False, gpuuse_getter)
             weight_batch = weight_batch.to(device)
             optimizer.zero_grad()
             with torch.autocast('cuda', torch.bfloat16):
-                loss = (criterion(model(token_batch[:-1]), token_batch[1:])*weight_batch).sum()
+                loss = (criterion(model(input_batch), target_batch)*weight_batch).sum()
             loss.backward()
             optimizer.step()
         scheduler.step()
 
         ## validation epoch
-        trial_logger.debug(f"Epoch[{epoch}] validation started.")
+        logger.debug(f"{prefix} validation started.")
         model.eval()
         with torch.inference_mode():
             scores = {}
             for split in ['valid', 'test']:
-                trial_logger.debug(f"Epoch[{epoch}] validating {split} set...")
+                logger.debug(f"Epoch[{epoch}] validating {split} set...")
                 valid_loader = DataLoader(datas[split], batch_size=None, shuffle=False, num_workers=args.num_workers, pin_memory=True, prefetch_factor=prefetch_factor)
                 valid_loader = DDPStringCollateLoader(valid_loader, valid_collate, gpuuse_getter, args.gpu_size, device, 100000, DATA_RANK['valid'])
                 worker_preds = []
                 worker_targets = []
-                for batch in valid_loader:
+                for step, batch in enumerate(valid_loader):
                     if batch is None: continue
                     token_batch, target_batch = batch
                     L, B = token_batch.shape
@@ -284,7 +286,7 @@ def objective(trial: Trial):
                     dist_send_tensor(worker_preds, MAIN_RANK)
                     dist_send_tensor(worker_targets, MAIN_RANK)
             if rank == MAIN_RANK:
-                trial_logger.info(f"Epoch[{epoch}] {scores=}")
+                logger.info(f"{prefix} {scores=}")
                 epoch_recorder.record(**scores)
         
         # Early stopping
@@ -298,7 +300,7 @@ def objective(trial: Trial):
                 best_main_score_epoch = epoch
             else:
                 if epoch >= best_main_score_epoch + args.patience:
-                    trial_logger.info(f"Early stopping.")
+                    logger.info(f"Early stopping.")
             is_early_stop = True
         is_early_stop = dist_broadcast_object(is_early_stop, MAIN_RANK)
         if is_early_stop:
