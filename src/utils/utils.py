@@ -1,4 +1,4 @@
-import sys, struct, traceback, warnings, subprocess
+import sys, os, struct, traceback, warnings, subprocess
 from functools import partial
 from bisect import bisect_right
 from logging import getLogger
@@ -155,7 +155,7 @@ def should_show(n: int, max_interval: int):
     
 class IterateRecorder:
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, path: str, cols: list[str], max_out_interval: int):
+    def __init__(self, path: str, max_out_interval: int, cols: list[str]=[]):
         self.path = path
         self.flushed = False
         self.data = {col: [] for col in cols}
@@ -193,6 +193,8 @@ class IterateRecorder:
         
 
     def flush(self):
+        pdir = os.path.dirname(self.path)
+        if not os.path.exists(pdir): os.makedirs(pdir,  exist_ok=True)
         pd.DataFrame(self.data).to_csv(self.path, mode='a' if self.flushed else 'w', 
                 header=False if self.flushed else True, index=False)
         self.data = {key: [] for key in self.data.keys()}

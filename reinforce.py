@@ -23,6 +23,7 @@ from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder
 from src.utils.path import cleardir
+from src.utils.time import TimerTqdm
 from src.evaluate import parse_mol_tokens, parse_mol
 from src.evaluate import eval_vina, eval_qvina3
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks, log_batch
@@ -165,7 +166,7 @@ if args.error_score is not None:
 # Environment
 result_dir = f"reinforce/results/{args.studyname}"
 logger, token_logger, rank, device = set_env(result_dir, args, logs, 
-        subdirs=['models', 'opts', 'errors', 'scores'])
+        subdirs=['models'])
 MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
 for i in range(args.batch_size):
@@ -245,7 +246,7 @@ train_iter = ReinforceIter(train_data, args.num_workers,
     voc_encoder.pad_token, args.generate_per_sample, args.fix_pocket)
 
 # optimizer
-optimizer, scheduler = get_optimizer_scheduler(args, model, 55000)
+optimizer, scheduler = get_optimizer_scheduler(model, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, False)
 optimizer.zero_grad()
 match args.loss_scale:
     case None:
@@ -254,26 +255,25 @@ match args.loss_scale:
         loss_scale = float(args.loss_scale)
 
 ## records
-opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", 
-        ['batch_size', 'max_len', 'reward_loss', 'kl_loss'], args.record_opt)
-error_recorder = IterateRecorder(f"{result_dir}/errors/{rank}.csv", 
-        [str(i) for i in range(args.batch_size)], args.record_opt)
-score_recorder = IterateRecorder(f"{result_dir}/scores/{rank}.csv", 
-        [str(i) for i in range(args.batch_size)], args.record_opt)
+opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", args.record_opt)
+error_recorder = IterateRecorder(f"{result_dir}/errors/{rank}.csv", args.record_opt)
+score_recorder = IterateRecorder(f"{result_dir}/scores/{rank}.csv", args.record_opt)
+size_recorder = IterateRecorder(f"{result_dir}/size/{rank}.csv",  args.record_opt)
+step_timer = TimerTqdm(range(args.max_opt), time_path=f"{result_dir}/steps/times/{rank}.csv", file_interval=100, log_interval=100, disable_bar=True)
 nan_grad_step_saved = False
-step = 0
 
 # save at step 0
 if rank == SAVE_RANK:
-    torch.save(model.state_dict(), f"{result_dir}/models/{step}.pth")
+    torch.save(model.state_dict(), f"{result_dir}/models/0.pth")
     cleardir(f"{result_dir}/optimizers")
-    torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
+    torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/0.pth")
 
 logger.info("Training started.")
-for step in range(args.max_opt): 
+for step in step_timer: 
     is_starting = step < 5
 
     # get batch
+    step_timer.start('get_batch')
     all_idxs, prompt_tokens, centers, rotations, protein_paths, lfnames= train_iter.__next__()
     prompt_sizes = [len(token) for token in prompt_tokens]
     prompt_batch = pad_sequence(prompt_tokens, False, voc_encoder.pad_token)
@@ -281,6 +281,7 @@ for step in range(args.max_opt):
     L, B = prompt_batch.shape
 
     # generate sample
+    step_timer.start('generate')
     model.eval()
     with torch.inference_mode():
         outputs = net_model.generate2(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
@@ -291,8 +292,11 @@ for step in range(args.max_opt):
     weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
     for b, (prompt_size, output) in enumerate(zip(prompt_sizes, outputs)):
         weight[prompt_size-1:prompt_size+len(output)-1, b] = 1.0
+    size_recorder.record(**{f'prompt {b}': len(prompt) for b, prompt in enumerate(prompt_tokens)}, 
+            **{f'output {b}': len(output) for b, output in enumerate(outputs)})
 
     ## Log output
+    step_timer.start('log_output')
     if step < log_sample_step:
         log_batch('train', logger, token_logger, out_batch[1:], weight, voc_encoder, step, 'data_dist' in args.check, get_gpuuse)
         ## check distribution
@@ -303,6 +307,7 @@ for step in range(args.max_opt):
             logger.debug(f"step[{step}]{centers=}")
             
     # Get score
+    step_timer.start('get_score')
     do_save = step in do_save_steps
     errors = []
     with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
@@ -403,6 +408,7 @@ for step in range(args.max_opt):
         logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
     # Forward Get prob & reward loss
+    step_timer.start('forward')
     model.train()
     with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDP_KERNEL):
         with torch.inference_mode():
@@ -427,9 +433,11 @@ for step in range(args.max_opt):
         loss = (reward_loss + kl_loss * args.alpha) * loss_scale
 
     # Backward
+    step_timer.start('backward')
     loss.backward()
 
     # check nan
+    step_timer.start('check_nan')
     if args.reset_nan_grad:
         grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
         if not grad_is_finite:
@@ -452,6 +460,7 @@ for step in range(args.max_opt):
             optimizer.zero_grad()
 
     # Optimizer's step
+    step_timer.start('optim')
     if args.clip_grad_value is not None:
         torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
     torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)

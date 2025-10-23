@@ -142,7 +142,7 @@ class TimerTqdm(tqdm):
 
         if time_path is not None:
             assert file_interval is not None
-            self.recorder = IterateRecorder(time_path, [], file_interval)
+            self.recorder = IterateRecorder(time_path, file_interval)
         else:
             self.recorder = None
         self.log_interval = log_interval

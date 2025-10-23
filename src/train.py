@@ -356,7 +356,7 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
 
 def get_optimizer_scheduler(model: nn.Module, max_opt: int, 
         weight_decay_all: bool, weight_decay: float, schedule_free: bool, 
-        lr: float, warmup_ratio: float, log_optimizer: bool):
+        scheduler: str, lr: float, warmup_ratio: float, log_optimizer: bool):
     logger = getLogger('optimizer_scheduler')
     
     ## param groups
@@ -385,16 +385,16 @@ def get_optimizer_scheduler(model: nn.Module, max_opt: int,
     ## optimizer & scheduler
     if schedule_free:
         optimizer = RAdamScheduleFree(params, lr=lr)
-        scheduler = None
+        scheduler_ = None
         optimizer.train()
     else:
         optimizer = torch.optim.AdamW(params, lr=lr)
         optimizer.zero_grad()
-        scheduler = get_scheduler(optimizer, scheduler, max_opt, warmup_ratio)
+        scheduler_ = get_scheduler(optimizer, scheduler, max_opt, warmup_ratio)
     if log_optimizer:
         logger.debug(f"{optimizer=}")
         logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")
-    return optimizer, scheduler
+    return optimizer, scheduler_
 
 def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
 
@@ -458,7 +458,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
 
     # optimizer & scheduler 
     optimizer, scheduler = get_optimizer_scheduler(model, args.max_opt, args.weight_decay_all, 
-            args.weight_decay, args.schedule_free, args.lr, args.warmup_ratio, 
+            args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, 
             'optimizer' in args.check)
     ## loss scale
     match args.loss_scale:
