@@ -179,7 +179,7 @@ def objective(trial: Trial):
     else:
         trargs = None
     trargs = dist_broadcast_object(trargs, src=MAIN_RANK)
-    logger.info(f"Trial[{trial.number}] {trargs=}", **NO_DUP)
+    logger.info(f"Trial[{trial.number}] trargs={vars(trargs)}", **NO_DUP)
 
     # Environment
     trial_dir = f"{result_dir}/trials/{trial.number}"
@@ -209,7 +209,7 @@ def objective(trial: Trial):
 
     # Training
     for epoch in range(trargs.n_epoch):
-        prefix = f"Trial[{trial.number}] Epoch[{epoch}]"
+        prefix = f"Trial[{trial.number}]Epoch[{epoch}]"
         ## train epoch
         logger.debug(f"{prefix} train started.")
         sampler.set_epoch(epoch)
