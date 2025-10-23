@@ -28,7 +28,7 @@ from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
 from src.data.collator import DDPStringCollateLoader
-from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch
+from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch, NO_DUP
 
 
 # Environment
@@ -179,6 +179,7 @@ def objective(trial: Trial):
     else:
         trargs = None
     trargs = dist_broadcast_object(trargs, src=MAIN_RANK)
+    logger.info(f"Trial[{trial.number}] {trargs=}", **NO_DUP)
 
     # Environment
     trial_dir = f"{result_dir}/trials/{trial.number}"
