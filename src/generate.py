@@ -18,8 +18,6 @@ from src.finetune import get_finetune_data
 from src.data import index_dataset
 from src.train import get_model
 from src.evaluate import parse_mol_tokens, parse_mol
-PROJ_DIR = "/workspace/cplm"
-WORKDIR = "/workspace"
 
 def add_generate_args(parser: ArgumentParser):
     parser.add_argument('--n-trial', type=int, default=1)
@@ -59,7 +57,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
         logger.info(f"    {name}: {eval(name)}")
 
     # Data
-    added_vocs = StringTokenizer(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines()).vocs()
+    added_vocs = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()).vocs()
     voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation_data, \
         _protein_filename_data, _ligand_filename_data \
         = get_finetune_data(model_args, 'test', False, True, added_vocs, prompt_score='none' if no_score else 'low')

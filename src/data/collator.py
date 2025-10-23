@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 import torch.distributed as dist
 from ..utils.ddp import dist_send_tensor, dist_recv_tensor
 from ..utils.time import TimerTqdm
+from ..utils import should_show
 
 T = TypeVar('T')
 T1 = TypeVar('T')
@@ -67,10 +68,10 @@ class StringCollateIterator(Iterable[list[T_in]]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, loader: Iterable[T_in], n_batch: int, gpu_size: float, 
             gpuuse_getter: Callable[[int, int], float], 
-            length_getter: Callable[[T_in], int],
             log_large_freq: int|float, 
             large_item_file: str|None=None, 
-            timer: TimerTqdm|None=None):
+            timer: TimerTqdm|None=None, 
+            length_getter: Callable[[T_in], int]=lambda item: len(item[0])):
 
         self.loader = loader
         self.n_batch = n_batch
@@ -107,7 +108,6 @@ class StringCollateIterator(Iterable[list[T_in]]):
         loader_iter = self.loader.__iter__()
         next_item = None
         n_large_item = n_item = 0
-        n_item_last_log = 0
         while True:
             # get next item
             self.start('get_next_item')
@@ -129,14 +129,13 @@ class StringCollateIterator(Iterable[list[T_in]]):
                     with open(self.large_item_file, 'a') as f:
                         f.write(f"{n_item-1},{next_length}")
                 
-                # Log n_large_item
-                if n_item - n_item_last_log >= self.log_large_freq:
-                    self.logger.info(f"{n_large_item}/{n_item} was too large.")
-                    n_item_last_log = n_item
                 n_large_item += 1
                 next_item = None
                 continue
             
+            # Log n_large_item
+            if should_show(n_item, self.log_large_freq):
+                self.logger.info(f"{n_large_item}/{n_item} was too large.")
             
             # insert size
             self.start('insert_size')
@@ -164,8 +163,8 @@ class StringCollateIterator(Iterable[list[T_in]]):
 
 class DDPStringCollateLoader(Iterable[T_out]):
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, loader: Optional[Iterable[T_in]], collator: Callable[[T_in], T_out], gpuuse_getter: Callable[[int, int], float], length_getter: Callable[[T_in], int], gpu_size: float, device: torch.device, log_large_freq: int|float, main_rank: int=0, 
-    large_item_file: str|None=None, timer: TimerTqdm|None=None):
+    def __init__(self, loader: Optional[Iterable[T_in]], collator: Callable[[T_in], T_out], gpuuse_getter: Callable[[int, int], float], gpu_size: float, device: torch.device, log_large_freq: int|float, main_rank: int=0, 
+    large_item_file: str|None=None, timer: TimerTqdm|None=None, length_getter: Callable[[T_in], int]|None=None):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
@@ -176,7 +175,7 @@ class DDPStringCollateLoader(Iterable[T_out]):
 
         if self.is_main:
             self.batch_iterator = StringCollateIterator(loader, self.size, 
-                    gpu_size, gpuuse_getter, length_getter, log_large_freq, large_item_file, timer)
+                    gpu_size, gpuuse_getter, log_large_freq, large_item_file, timer, length_getter)
         else:
             self.batch_iterator = itr.repeat(None)
 

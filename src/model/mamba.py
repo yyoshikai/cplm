@@ -251,7 +251,7 @@ class MambaModel(nn.Module):
         mname = 'mamba_bf16' if bf16 else 'mamba'
         return capture_rates[mname]
         
-    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, capture_rate: bool=True):
+    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str=None, capture_rate: bool=True):
         t2dim2coefs = self.gpuuse_coef(bf16)
         max_gpuuse = 0
         for dim2coefs in t2dim2coefs.values():

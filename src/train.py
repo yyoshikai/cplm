@@ -171,7 +171,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--gpu-size-gb", type=float, required=True)
     ## log interval
     parser.add_argument("--tokenizer-log-interval", type=int)
-    parser.add_argument("--log-large-freq", type=int)
     parser.add_argument("--log-step", type=int)
     parser.add_argument("--log-opt", type=int)
     ## compatibility
@@ -219,8 +218,6 @@ def set_default_args(args: Namespace):
     # log interval
     if args.tokenizer_log_interval is None:
         args.tokenizer_log_interval = int(1e6) if args.test else int(1e8)
-    if args.log_large_freq is None:
-        args.log_large_freq = 1 if args.test else 100000
     if args.log_step is None:
         args.log_step = 1 if args.test else 10000
     if args.log_opt is None:
@@ -357,13 +354,15 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
 
     return logger, token_logger, rank, device
 
-def get_optimizer_scheduler(args, model, max_opt: int):
+def get_optimizer_scheduler(model: nn.Module, max_opt: int, 
+        weight_decay_all: bool, weight_decay: float, schedule_free: bool, 
+        lr: float, warmup_ratio: float, log_optimizer: bool):
     logger = getLogger('optimizer_scheduler')
     
     ## param groups
-    if args.weight_decay_all:
+    if weight_decay_all:
         params = [{
-            "weight_decay": args.weight_decay, 
+            "weight_decay": weight_decay, 
             "params": list(model.parameters())
         }]
     else:
@@ -372,7 +371,7 @@ def get_optimizer_scheduler(args, model, max_opt: int):
                 forbidden_layer_types=ALL_LAYERNORM_LAYERS, 
                 forbidden_layer_names=["bias", "layernorm", "rmsnorm"])
         params = [{   
-            "weight_decay": args.weight_decay,
+            "weight_decay": weight_decay,
             "params": [param for name, param in model.named_parameters() 
                 if name in params_to_decay and param.requires_grad], 
         }, {
@@ -380,20 +379,19 @@ def get_optimizer_scheduler(args, model, max_opt: int):
             "params": [param for name, param in model.named_parameters()
                 if name not in params_to_decay and param.requires_grad]
         }]
-        if 'optimizer' in args.check:
+        if log_optimizer:
             logger.debug(f"weight_decay: {[name for name, param in model.named_parameters() if name in params_to_decay and param.requires_grad]}")
             logger.debug(f"non weight_decay: {[name for name, param in model.named_parameters() if name not in params_to_decay and param.requires_grad]}")
     ## optimizer & scheduler
-    if args.schedule_free:
-        optimizer = RAdamScheduleFree(params, lr=args.lr)
+    if schedule_free:
+        optimizer = RAdamScheduleFree(params, lr=lr)
         scheduler = None
         optimizer.train()
     else:
-        optimizer = torch.optim.AdamW(params, lr=args.lr)
+        optimizer = torch.optim.AdamW(params, lr=lr)
         optimizer.zero_grad()
-        scheduler = get_scheduler(optimizer, args.scheduler, max_opt, 
-                args.warmup_ratio)
-    if 'optimizer' in args.check:
+        scheduler = get_scheduler(optimizer, scheduler, max_opt, warmup_ratio)
+    if log_optimizer:
         logger.debug(f"{optimizer=}")
         logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")
     return optimizer, scheduler
@@ -448,12 +446,10 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             return model.module.get_gpuuse(batch_size, length, True, args.sdp_kernel)
         else:
             return model.module.get_gpuuse(batch_size, length, True)
-    def get_length(item: tuple[Tensor, Tensor]):
-        return len(item[0])
     
     ## collated data loader
-    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, get_length, 
-            args.gpu_size, device, args.log_large_freq, DATA_RANK['train'], 
+    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, 
+            args.gpu_size, device, 100000, DATA_RANK['train'], 
             f"{result_dir}/data/train_large_items.csv", step_timer if 'data_loading' in args.check else None)
     train_iter = train_loader.__iter__()
 
@@ -461,7 +457,9 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
 
     # optimizer & scheduler 
-    optimizer, scheduler = get_optimizer_scheduler(args, model, args.max_opt)
+    optimizer, scheduler = get_optimizer_scheduler(model, args.max_opt, args.weight_decay_all, 
+            args.weight_decay, args.schedule_free, args.lr, args.warmup_ratio, 
+            'optimizer' in args.check)
     ## loss scale
     match args.loss_scale:
         case None:
@@ -510,16 +508,14 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 ## Make Loader
                 if rank == DATA_RANK['valid']:
                     os.environ['EPOCH'] = '0'
-                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_datas[i_data], batch_size=None, 
-                            shuffle=True if check_data_dist else False, num_workers=args.num_workers, 
-                            pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
+                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_datas[i_data], batch_size=None, shuffle=True if check_data_dist else False, num_workers=args.num_workers, pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
                     if valid_is_starting:
                         if check_data_dist:
                             valid_loader = RevealIterator(valid_loader, f'valid[{data_name}]', logger)
                             valid_reveal_loader = valid_loader
                 else:
                     valid_loader = None
-                valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, get_length, args.gpu_size, device, args.log_large_freq if valid_is_starting else math.inf, DATA_RANK['valid'])
+                valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, args.gpu_size, device, args.log_large_freq if valid_is_starting else math.inf, DATA_RANK['valid'])
 
                 ## Accumulate losses
                 process_weight = torch.tensor(0.0, device=device, dtype=torch.float)
