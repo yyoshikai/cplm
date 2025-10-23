@@ -164,7 +164,7 @@ class StringCollateIterator(Iterable[list[T_in]]):
 class DDPStringCollateLoader(Iterable[T_out]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, loader: Optional[Iterable[T_in]], collator: Callable[[T_in], T_out], gpuuse_getter: Callable[[int, int], float], gpu_size: float, device: torch.device, log_large_freq: int|float, main_rank: int=0, 
-    large_item_file: str|None=None, timer: TimerTqdm|None=None, length_getter: Callable[[T_in], int]|None=None):
+    large_item_file: str|None=None, timer: TimerTqdm|None=None, length_getter: Callable[[T_in], int]|None=lambda item: len(item[0])):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
