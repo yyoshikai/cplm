@@ -199,13 +199,18 @@ class FloatTokenizer(Tokenizer):
     def tokenize_array(self, x: Iterable[float]):
         return list(itertools.chain.from_iterable(self.tokenize(x) for x in x))
     
-    def vocs(self):
+    def int_vocs(self):
         ivmin = int(self.float_format.format(self.vmin).split('.')[0])
         ivmax = int(self.float_format.format(self.vmax).split('.')[0])
         vocs = {str(i) for i in range(ivmin, ivmax+1)}
         if self.vmin < 0: vocs.add('-0')
-        vocs |= {'.'+str(i).zfill(self.decimal) for i in range(10**self.decimal)}
         return vocs
+
+    def frac_vocs(self):
+        return {'.'+str(i).zfill(self.decimal) for i in range(10**self.decimal)}
+
+    def vocs(self):
+        return self.int_vocs() | self.frac_vocs()
     
 class BinaryClassTokenizer(Tokenizer):
     def __init__(self):

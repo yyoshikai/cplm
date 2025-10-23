@@ -46,7 +46,6 @@ class MoleculeNetDataset(PickleLMDBDataset):
             self._lazy_target = np.load(f"{MOLNET_DIR}/versions/unimol/target/{self.data_name}/{self.split}.npy")
         return self._lazy_target[self.tasks.index(task)]
 
-from torch.utils.data import Dataset
 from rdkit import Chem
 from ..data import TupleDataset
 class UniMolMoleculeNetDataset(TupleDataset[tuple[Chem.Mol, tuple[int|float,...]]]):

@@ -1,8 +1,9 @@
 import os
 from logging import getLogger
 import numpy as np
+import torch
 from torch.utils.data import Dataset
-from .data import WrapDataset, WrapTupleDataset, get_rng, WorkerAggregator
+from .data import WrapDataset, WrapTupleDataset, get_rng
 
 class Scaler:
     def __init__(self, from_a: float, from_b: float, to_a: float, to_b: float):
@@ -12,11 +13,11 @@ class Scaler:
         self.to_b = to_b
         assert self.from_b - self.from_a > 0
         assert self.to_b > self.to_a
-    def scale(self, from_v: float):
+    def scale(self, from_v: float|np.ndarray|torch.Tensor):
         return (from_v-self.from_a) / (self.from_b-self.from_a) \
             * (self.to_b - self.to_a) + self.to_a
     
-    def rescale(self, to_v: float):
+    def rescale(self, to_v: float|np.ndarray|torch.Tensor):
         return (to_v-self.to_a) / (self.to_b-self.to_a) \
             * (self.from_b - self.from_a) + self.from_a
     def __str__(self):
