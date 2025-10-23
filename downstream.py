@@ -191,7 +191,7 @@ def objective(trial: Trial):
             collate_fn=train_collate, prefetch_factor=prefetch_factor)
 
     # Model
-    model = get_model(args, voc_encoder, init_state_path, device)
+    model = get_model(targs, voc_encoder, init_state_path, device)
     gpuuse_getter = partial(model.get_gpuuse, bf16=True, kernel=args.sdp_kernel)
     model = DistributedDataParallel(model)
     criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
