@@ -17,9 +17,8 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn.parallel import DistributedDataParallel
 
-from src.utils import IterateRecorder
+from src.utils import IterateRecorder, should_show
 from src.utils.ddp import dist_broadcast_object, dist_send_tensor, dist_recv_tensor
-from src.utils.logger import add_file_handler
 from src.utils.random import ddp_set_random_seed
 from src.utils.rdkit import ignore_warning
 from src.data import KeyDataset, CacheDataset, StackDataset
@@ -225,6 +224,8 @@ def objective(trial: Trial):
                 loss = (criterion(model(input_batch), target_batch)*weight_batch).sum()
             loss.backward()
             optimizer.step()
+            if should_show(step, len(loader)):
+                logger.debug(f"{prefix}Step[{step}] finished.")
         scheduler.step()
 
         ## validation epoch
