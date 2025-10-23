@@ -305,7 +305,7 @@ def objective(trial: Trial):
             else:
                 if epoch >= best_main_score_epoch + args.patience:
                     logger.info(f"Early stopping.")
-            is_early_stop = True
+                    is_early_stop = True
         is_early_stop = dist_broadcast_object(is_early_stop, MAIN_RANK)
         if is_early_stop:
             break
