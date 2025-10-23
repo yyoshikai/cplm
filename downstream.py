@@ -58,6 +58,7 @@ parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLA
 parser.add_argument("--gpu-size-gb", type=float, required=True)
 ## debug
 parser.add_argument("--test")
+parser.add_argument('--deterministic', action='store_true')
 parser.add_argument('--no-commit', action='store_true')
 args = parser.parse_args()
 ## pretrain args

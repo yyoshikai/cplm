@@ -5,6 +5,7 @@ batch_sizes:
 - 256
 data: bbbp
 ddp_size: 1
+deterministic: false
 gpu_size: 42949672960.0
 gpu_size_gb: 40.0
 lrs:
