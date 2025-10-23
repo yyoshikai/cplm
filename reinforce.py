@@ -255,7 +255,7 @@ match args.loss_scale:
         loss_scale = float(args.loss_scale)
 
 ## records
-opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", args.record_opt)
+step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", args.record_opt)
 error_recorder = IterateRecorder(f"{result_dir}/errors/{rank}.csv", args.record_opt)
 score_recorder = IterateRecorder(f"{result_dir}/scores/{rank}.csv", args.record_opt)
 size_recorder = IterateRecorder(f"{result_dir}/size/{rank}.csv",  args.record_opt)
@@ -408,6 +408,7 @@ for step in step_timer:
         logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
     # Forward Get prob & reward loss
+    logger.debug(f"step[{step}] forward started.")
     step_timer.start('forward')
     model.train()
     with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDP_KERNEL):
@@ -431,8 +432,10 @@ for step in step_timer:
         kl_loss = torch.sum(kl_loss*weight)
         
         loss = (reward_loss + kl_loss * args.alpha) * loss_scale
+    torch.cuda.synchronize()
 
     # Backward
+    logger.debug(f"step[{step}] backward started.")
     step_timer.start('backward')
     loss.backward()
 
@@ -460,6 +463,7 @@ for step in step_timer:
             optimizer.zero_grad()
 
     # Optimizer's step
+    logger.debug(f"step[{step}] optim started")
     step_timer.start('optim')
     if args.clip_grad_value is not None:
         torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
@@ -467,7 +471,7 @@ for step in step_timer:
     optimizer.step()
     optimizer.zero_grad()
     step += 1
-    opt_recorder.record(batch_size=B, max_len=L, lr=scheduler.get_last_lr()[0], 
+    step_recorder.record(batch_size=B, max_len=L, lr=scheduler.get_last_lr()[0], 
             memory=psutil.virtual_memory().used/(2**30), 
             reward_loss=reward_loss.item(), kl_loss=kl_loss.item())
     scheduler.step()
@@ -490,7 +494,7 @@ for step in step_timer:
         logger.info("RDKit logger will be disabled from now on.")
         getLogger('rdkit').propagate = False
 
-opt_recorder.flush()
+step_recorder.flush()
 error_recorder.flush()
 
 logger.info("Training finished!")

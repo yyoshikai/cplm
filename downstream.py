@@ -56,7 +56,7 @@ args.gpu_size = args.gpu_size_gb * (2**30)
 prefetch_factor = 1 if args.num_workers == 0 else 10
 
 # Data
-def get_downstream_data(targs: Namespace, split: str, data_name: str, task: str, seed: int, ):
+for split in ['train', 'valid', 'test']:
     is_valid = split != 'train'
     raw = UniMolMoleculeNetDataset(data_name, split)
     mol, target = raw.untuple()
