@@ -271,7 +271,6 @@ def objective(trial: Trial):
                     L, B = token_batch.shape
                     prompt_sizes = [torch.sum(token_batch[:,b]==voc_encoder.pad_token).item()
                             for b in range(B)]
-                    logger.info(f"promt_sizes={prompt_sizes}")
                     
                     input_batch = token_batch
                     generateds = [[] for _ in range(B)]
@@ -288,8 +287,7 @@ def objective(trial: Trial):
                             gen = choice_idxs[torch.argmax(log_prob[choice_idxs])].item()
                             gen_free = torch.argmax(log_prob).item()
                             
-                            logger.info(f"prompt[{b}]={voc_encoder.decode(input_batch[:,b].tolist())}")
-                            logger.info(f"gen_free={voc_encoder.i2voc[gen_free]}, gen={voc_encoder.i2voc[gen]}")
+                            token_logger.info(f"prompt[{b}]={voc_encoder.decode(input_batch[:,b].tolist())}, prompt_size[{b}]={prompt_sizes[b]}")
                             n_free_match += int(gen_free == gen)
                             n_gen += 1
                             
