@@ -186,11 +186,16 @@ def objective(trial: Trial):
     os.makedirs(trial_dir, exist_ok=True)
 
     # Data
+    
     sampler = DistributedSampler(datas['train'], drop_last=True)
     loader = DataLoader(datas['train'], batch_size=trargs.batch_size, 
             sampler=sampler, num_workers=args.num_workers, pin_memory=True, drop_last=True, 
             collate_fn=train_collate, prefetch_factor=prefetch_factor)
     logger.debug(f"Step per epoch={len(loader)}")
+    loaders = {}
+    for split in ['valid', 'test']:
+        item_loader = DataLoader(datas[split], batch_size=None, shuffle=False, num_workers=args.num_workers, pin_memory=True, prefetch_factor=prefetch_factor)
+        loaders[split] = DDPStringCollateLoader(item_loader, valid_collate, gpuuse_getter, args.gpu_size, device, 100000, DATA_RANK['valid'])
 
     # Model
     model = get_model(targs, voc_encoder, init_state_path, device)
@@ -209,11 +214,12 @@ def objective(trial: Trial):
     ddp_set_random_seed(args.seed)
 
     # Training
+    sampler.set_epoch(0)
     for epoch in range(trargs.n_epoch):
         prefix = f"Trial[{trial.number}]Epoch[{epoch}]"
         ## train epoch
         logger.debug(f"{prefix} train started.")
-        sampler.set_epoch(epoch)
+        # sampler.set_epoch(epoch) TODO: temp!
         os.environ['EPOCH'] = str(epoch)
 
         model.train()
@@ -248,11 +254,9 @@ def objective(trial: Trial):
             scores = {}
             for split in ['valid', 'test']:
                 logger.debug(f"Epoch[{epoch}] validating {split} set...")
-                valid_loader = DataLoader(datas[split], batch_size=None, shuffle=False, num_workers=args.num_workers, pin_memory=True, prefetch_factor=prefetch_factor)
-                valid_loader = DDPStringCollateLoader(valid_loader, valid_collate, gpuuse_getter, args.gpu_size, device, 100000, DATA_RANK['valid'])
                 worker_preds = []
                 worker_targets = []
-                for step, batch in enumerate(valid_loader):
+                for step, batch in enumerate(loaders[split]):
                     if batch is None: continue
                     token_batch, target_batch = batch
                     L, B = token_batch.shape
@@ -328,5 +332,6 @@ def objective(trial: Trial):
 
 study = optuna.create_study(direction='maximize' if metrics[raw.main_metric].maximize else 'minimize')
 study.optimize(objective, n_trials=args.n_trials)
+study.trials_dataframe().to_csv(f"{result_dir}/study.csv")
 
 dist.destroy_process_group()
