@@ -87,7 +87,7 @@ datas = {}
 vocs = None
 for split in ['train', 'valid', 'test']:
     is_valid = split != 'train'
-    unimol_raw = UniMolMoleculeNetDataset(args.data, split, 1, True)
+    unimol_raw = UniMolMoleculeNetDataset(args.data, split, 1, True, args.seed)
     mol, target = unimol_raw.untuple()
     smi, coord = MolProcessDataset(mol, args.seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize).untuple()
     coord = CoordTransformDataset(coord, base_seed=args.seed, normalize_coord=True, random_rotate=False if is_valid else True).untuple()[0]
