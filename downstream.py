@@ -81,12 +81,9 @@ if args.pretrain_opt is None:
     logs.append(f"args.pretrain_opt was set to {args.pretrain_opt}")
 args.gpu_size = args.gpu_size_gb * (2**30)
 prefetch_factor = 1 if args.num_workers == 0 else 10
-# Data
 
-datas = {}
-vocs = None
-for split in ['train', 'valid', 'test']:
-    is_valid = split != 'train'
+# Data
+def get_downstream_data(split, is_valid, voc_encoder=None):
     unimol_raw = UniMolMoleculeNetDataset(args.data, split, 1, True, args.seed)
     mol, target = unimol_raw.untuple()
     smi, coord = MolProcessDataset(mol, args.seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize).untuple()
@@ -101,9 +98,16 @@ for split in ['train', 'valid', 'test']:
     coord_tokenizer = FloatTokenizer('coord', -targs.coord_range, targs.coord_range)
     coord = ArrayTokenizeDataset(coord, coord_tokenizer)
     sentence += ['[XYZ]', coord, '[END]']
-    if split == 'train':
+    if is_valid:
+        sentence += ['[SCORE]']
+        sentence = SentenceDataset(*sentence)
+        token = TokenEncodeDataset(sentence, voc_encoder)
+        data = StackDataset(token, target)
+        return data
+    else:
         if raw.is_cls:
             target_tokenizer = BinaryClassTokenizer()
+            scaler = None
         else:
             ys = MoleculeNetDataset(args.data, 'train').get_y(args.task)
             ymin, ymax = np.min(ys), np.max(ys)
@@ -116,7 +120,8 @@ for split in ['train', 'valid', 'test']:
         sentence = SentenceDataset(*sentence)
         vocs = sentence.vocs()
         sentence = CacheDataset(sentence)
-        voc_encoder = VocEncoder(vocs)
+        if voc_encoder is None:
+            voc_encoder = VocEncoder(vocs)
         token = TokenEncodeDataset(sentence, voc_encoder)
 
         ## weight
@@ -124,12 +129,13 @@ for split in ['train', 'valid', 'test']:
         weights = [None, 0.0, 0.0, 1.0, 0.0]
         weight = RemoveLastDataset(TokenWeightDataset(sentence, separates, weights, by_n_separate=True))
         data = StackDataset(token, weight)
-    else:
-        sentence += ['[SCORE]']
-        sentence = SentenceDataset(*sentence)
-        token = TokenEncodeDataset(sentence, voc_encoder)
-        data = StackDataset(token, target)
-    datas[split] = data
+        return data, voc_encoder, target_tokenizer, scaler
+
+
+train_data, voc_encoder, target_tokenizer, scaler = get_downstream_data('train', False) 
+valid_datas = {split: get_downstream_data(split, True, voc_encoder) for split in ['train', 'valid', 'test']}
+vocs = None
+
 def train_collate(batch: list[tuple[Tensor, Tensor]]):
     tokens, weights = zip(*batch)
     token_batch = pad_sequence(tokens, padding_value=voc_encoder.pad_token)
@@ -193,15 +199,15 @@ def objective(trial: Trial):
     optimizer, scheduler = get_optimizer_scheduler(model, trargs.n_epoch, False, args.weight_decay, False, 'warmup', trargs.lr, trargs.warmup_ratio, False)
     
     # Data
-    sampler = DistributedSampler(datas['train'], drop_last=True)
-    loader = DataLoader(datas['train'], batch_size=trargs.batch_size, 
+    sampler = DistributedSampler(train_data, drop_last=True)
+    loader = DataLoader(train_data, batch_size=trargs.batch_size, 
             sampler=sampler, num_workers=args.num_workers, pin_memory=True, drop_last=True, 
             collate_fn=train_collate, prefetch_factor=prefetch_factor)
     logger.debug(f"Step per epoch={len(loader)}")
-    loaders = {}
-    for split in ['valid', 'test']:
-        item_loader = DataLoader(datas[split], batch_size=None, shuffle=False, num_workers=args.num_workers, pin_memory=True, prefetch_factor=prefetch_factor)
-        loaders[split] = DDPStringCollateLoader(item_loader, valid_collate, gpuuse_getter, args.gpu_size, device, 100000, DATA_RANK['valid'])
+    valid_loaders = {}
+    for split in ['train', 'valid', 'test']:
+        item_loader = DataLoader(valid_datas[split], batch_size=None, shuffle=False, num_workers=args.num_workers, pin_memory=True, prefetch_factor=prefetch_factor)
+        valid_loaders[split] = DDPStringCollateLoader(item_loader, valid_collate, gpuuse_getter, args.gpu_size, device, 100000, DATA_RANK['valid'])
 
 
     if rank == MAIN_RANK:
@@ -252,11 +258,11 @@ def objective(trial: Trial):
         model.eval()
         with torch.inference_mode():
             scores = {}
-            for split in ['valid', 'test']:
+            for split in ['train', 'valid', 'test']:
                 logger.debug(f"Epoch[{epoch}] validating {split} set...")
                 worker_preds = []
                 worker_targets = []
-                for step, batch in enumerate(loaders[split]):
+                for step, batch in enumerate(valid_loaders[split]):
                     if batch is None: continue
                     token_batch, target_batch = batch
                     L, B = token_batch.shape

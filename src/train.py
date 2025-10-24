@@ -360,7 +360,7 @@ def get_optimizer_scheduler(model: nn.Module, max_opt: int,
     logger = getLogger('optimizer_scheduler')
     
     ## param groups
-    if weight_decay_all:
+    if weight_decay_all or weight_decay == 0:
         params = [{
             "weight_decay": weight_decay, 
             "params": list(model.parameters())
@@ -388,7 +388,10 @@ def get_optimizer_scheduler(model: nn.Module, max_opt: int,
         scheduler_ = None
         optimizer.train()
     else:
-        optimizer = torch.optim.AdamW(params, lr=lr)
+        if weight_decay == 0:
+            optimizer = torch.optim.Adam(params, lr=lr)
+        else:
+            optimizer = torch.optim.AdamW(params, lr=lr)
         optimizer.zero_grad()
         scheduler_ = get_scheduler(optimizer, scheduler, max_opt, warmup_ratio)
     if log_optimizer:

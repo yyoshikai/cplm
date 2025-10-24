@@ -1,7 +1,7 @@
 import sys, os, yaml, shutil, psutil, gc, math, random, re
 import itertools as itr
 import concurrent.futures as cf
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from logging import getLogger
 import numpy as np, pandas as pd
 from addict import Dict
@@ -99,11 +99,10 @@ logs = []
 
 # get finetune info
 finetune_dir = f"finetune/results/{args.finetune_name}"
-fargs = Dict(yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
+fargs = Namespace(**yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
 pname = fargs.pretrain_name
 pretrain_dir = f"training/results/{pname}"
-pargs = Dict(yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
-coord_follow_atom = pargs.get('coord_follow_atom', False)
+pargs = Namespace(**yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
 
 ## check finetuning
 assert fargs.no_score
