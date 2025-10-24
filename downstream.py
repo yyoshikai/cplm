@@ -269,8 +269,10 @@ def objective(trial: Trial):
                     if batch is None: continue
                     token_batch, target_batch = batch
                     L, B = token_batch.shape
-                    prompt_sizes = [torch.sum(token_batch[:,b]==voc_encoder.pad_token)
+                    prompt_sizes = [torch.sum(token_batch[:,b]==voc_encoder.pad_token).item()
                             for b in range(B)]
+                    logger.info(f"promt_sizes={prompt_sizes}")
+                    
                     input_batch = token_batch
                     generateds = [[] for _ in range(B)]
                     n_free_match = 0
@@ -280,12 +282,12 @@ def objective(trial: Trial):
                         next_input_batch = torch.cat([input_batch, torch.full((1, B), 
                                 fill_value=voc_encoder.pad_token, 
                                 dtype=input_batch.dtype, device=input_batch.device)])
+                    
                         for b in range(B):
                             log_prob = output_batch[prompt_sizes[b]-1+i_gen, b] # [N]
                             gen = choice_idxs[torch.argmax(log_prob[choice_idxs])].item()
                             gen_free = torch.argmax(log_prob).item()
                             
-                            logger.info(f"promt_sizes={prompt_sizes}")
                             logger.info(f"prompt[{b}]={voc_encoder.decode(input_batch[:,b].tolist())}")
                             logger.info(f"gen_free={voc_encoder.i2voc[gen_free]}, gen={voc_encoder.i2voc[gen]}")
                             n_free_match += int(gen_free == gen)
@@ -293,6 +295,7 @@ def objective(trial: Trial):
                             
                             next_input_batch[prompt_sizes[b]+i_gen, b] = gen
                             generateds[b].append(voc_encoder.i2voc[gen])
+                        input_batch = next_input_batch
                     
                     if raw.is_cls:
                         worker_preds += [int(generated[0] == 'True') for generated in generateds]
