@@ -185,8 +185,14 @@ def objective(trial: Trial):
     trial_dir = f"{result_dir}/trials/{trial.number}"
     os.makedirs(trial_dir, exist_ok=True)
 
-    # Data
+    # Model
+    model = get_model(targs, voc_encoder, init_state_path, device)
+    gpuuse_getter = partial(model.get_gpuuse, bf16=True, kernel=args.sdp_kernel)
+    model = DistributedDataParallel(model)
+    criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
+    optimizer, scheduler = get_optimizer_scheduler(model, trargs.n_epoch, False, args.weight_decay, False, 'warmup', trargs.lr, trargs.warmup_ratio, False)
     
+    # Data
     sampler = DistributedSampler(datas['train'], drop_last=True)
     loader = DataLoader(datas['train'], batch_size=trargs.batch_size, 
             sampler=sampler, num_workers=args.num_workers, pin_memory=True, drop_last=True, 
@@ -197,12 +203,6 @@ def objective(trial: Trial):
         item_loader = DataLoader(datas[split], batch_size=None, shuffle=False, num_workers=args.num_workers, pin_memory=True, prefetch_factor=prefetch_factor)
         loaders[split] = DDPStringCollateLoader(item_loader, valid_collate, gpuuse_getter, args.gpu_size, device, 100000, DATA_RANK['valid'])
 
-    # Model
-    model = get_model(targs, voc_encoder, init_state_path, device)
-    gpuuse_getter = partial(model.get_gpuuse, bf16=True, kernel=args.sdp_kernel)
-    model = DistributedDataParallel(model)
-    criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
-    optimizer, scheduler = get_optimizer_scheduler(model, trargs.n_epoch, False, args.weight_decay, False, 'warmup', trargs.lr, trargs.warmup_ratio, False)
 
     if rank == MAIN_RANK:
         epoch_recorder = IterateRecorder(f"{trial_dir}/epochs/{rank}.csv", 1)
