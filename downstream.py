@@ -264,6 +264,8 @@ def objective(trial: Trial):
                 logger.debug(f"{prefix} validating {split} set...")
                 worker_preds = []
                 worker_targets = []
+                n_free_match = 0
+                n_gen = 0
                 for step, batch in enumerate(valid_loaders[split]):
                     logger.info(f"Valid step[{step}]")
                     if batch is None: continue
@@ -274,8 +276,6 @@ def objective(trial: Trial):
                     
                     input_batch = token_batch
                     generateds = [[] for _ in range(B)]
-                    n_free_match = 0
-                    n_gen = 0
                     for i_gen, choice_idxs in enumerate(choice_idxss):
                         output_batch = model(input_batch) # [L, B, N]
                         next_input_batch = torch.cat([input_batch, torch.full((1, B), 
@@ -300,7 +300,7 @@ def objective(trial: Trial):
                     else:
                         worker_preds += [float(generated[0]+generated[1]) for generated in generateds]
                     worker_targets.append(target_batch)
-                    logger.info(f"{prefix}validation[{split}] free_match={n_free_match/n_gen:.04f}")
+                logger.info(f"{prefix}validation[{split}] free_match={n_free_match/n_gen:.04f}")
                 worker_preds = torch.tensor(worker_preds, device=device)
                 worker_targets = torch.cat(worker_targets)
                 if rank == MAIN_RANK:
