@@ -273,6 +273,7 @@ for step in step_timer:
 
     # get batch
     step_timer.start('get_batch')
+    logger.debug(f"step[{step}] get_batch started.")
     all_idxs, prompt_tokens, centers, rotations, protein_paths, lfnames= train_iter.__next__()
     prompt_sizes = [len(token) for token in prompt_tokens]
     prompt_batch = pad_sequence(prompt_tokens, False, voc_encoder.pad_token)
@@ -281,6 +282,7 @@ for step in step_timer:
 
     # generate sample
     step_timer.start('generate')
+    logger.debug(f"step[{step}] generate started.")
     model.eval()
     with torch.inference_mode():
         outputs = net_model.generate2(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
@@ -307,6 +309,7 @@ for step in step_timer:
             
     # Get score
     step_timer.start('get_score')
+    logger.debug(f"step[{step}] get_score started.")
     do_save = step in do_save_steps
     errors = []
     with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
@@ -367,6 +370,7 @@ for step in step_timer:
     scores[errors == ""] = valid_scores
     errors[errors == ""][np.isnan(valid_scores)] = 'VINA'
 
+    logger.debug(f"step[{step}] sync_score started.")
     error_recorder.record(**{str(i): errors[i] for i in range(args.batch_size)})
     scores = torch.tensor(scores, device=device, dtype=torch.float)
     if not args.ignore_error:
