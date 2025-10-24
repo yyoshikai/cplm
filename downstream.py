@@ -267,7 +267,7 @@ def objective(trial: Trial):
                 n_free_match = 0
                 n_gen = 0
                 for step, batch in enumerate(valid_loaders[split]):
-                    logger.info(f"Valid step[{step}]")
+                    logger.info(f"{prefix} Valid step[{step}]")
                     if batch is None: continue
                     token_batch, target_batch = batch
                     L, B = token_batch.shape
@@ -287,7 +287,7 @@ def objective(trial: Trial):
                             gen = choice_idxs[torch.argmax(log_prob[choice_idxs])].item()
                             gen_free = torch.argmax(log_prob).item()
                             
-                            token_logger.info(f"prompt[{b}]={voc_encoder.decode(input_batch[:,b].tolist())}, prompt_size[{b}]={prompt_sizes[b]}")
+                            # token_logger.info(f"prompt[{b}]={voc_encoder.decode(input_batch[:,b].tolist())}, prompt_size[{b}]={prompt_sizes[b]}")
                             n_free_match += int(gen_free == gen)
                             n_gen += 1
                             
