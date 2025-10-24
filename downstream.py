@@ -286,7 +286,7 @@ def objective(trial: Trial):
                             gen_free = torch.argmax(log_prob).item()
                             
                             if b == 0:
-                                logger.info(f"prompt={voc_encoder.decode(input_batch[:prompt_sizes[b]-1+i_gen, b].tolist())}")
+                                logger.info(f"prompt[{b}]={voc_encoder.decode(input_batch[:,b].tolist())}")
                                 logger.info(f"gen_free={voc_encoder.i2voc[gen_free]}, gen={voc_encoder.i2voc[gen]}")
                                 n_free_match += int(gen_free == gen)
                                 n_gen += 1
