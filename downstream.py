@@ -58,6 +58,8 @@ parser.add_argument('--task')
 parser.add_argument('--num-workers', type=int, default=4)
 parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
 parser.add_argument("--gpu-size-gb", type=float, required=True)
+### verbosity
+parser.add_argument
 ## debug
 parser.add_argument("--test")
 parser.add_argument('--deterministic', action='store_true')
@@ -263,6 +265,7 @@ def objective(trial: Trial):
                 worker_preds = []
                 worker_targets = []
                 for step, batch in enumerate(valid_loaders[split]):
+                    logger.info(f"Valid step[{step}]")
                     if batch is None: continue
                     token_batch, target_batch = batch
                     L, B = token_batch.shape
@@ -281,9 +284,13 @@ def objective(trial: Trial):
                             log_prob = output_batch[prompt_sizes[b]-1+i_gen, b] # [N]
                             gen = choice_idxs[torch.argmax(log_prob[choice_idxs])].item()
                             gen_free = torch.argmax(log_prob).item()
-                            logger.info(f"gen_free={voc_encoder.i2voc[gen_free]}, gen={voc_encoder.i2voc[gen]}")
-                            n_free_match += int(gen_free == gen)
-                            n_gen += 1
+                            
+                            if b == 0:
+                                logger.info(f"prompt={voc_encoder.decode(output_batch[:prompt_sizes[b]-1+i_gen, b].tolist())}")
+                                logger.info(f"gen_free={voc_encoder.i2voc[gen_free]}, gen={voc_encoder.i2voc[gen]}")
+                                n_free_match += int(gen_free == gen)
+                                n_gen += 1
+                            
                             next_input_batch[prompt_sizes[b]+i_gen, b] = gen
                             generateds[b].append(voc_encoder.i2voc[gen])
                     
