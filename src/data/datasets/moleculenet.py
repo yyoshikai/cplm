@@ -5,6 +5,7 @@ import pandas as pd
 
 from ..lmdb import PickleLMDBDataset
 from ...utils.path import WORKDIR
+from ..data import get_rng
 from .unimol import mol_from_unimol_data
 MOLNET_DIR = f"{WORKDIR}/cheminfodata/molnet"
 
@@ -36,7 +37,7 @@ class MoleculeNetDataset(PickleLMDBDataset):
     def is_cls(self) -> bool:
         return bool(infos.loc[self.data_name, 'is_cls'])
 
-    @property    
+    @property
     def main_metric(self) -> Literal['AUROC', 'AUPR', 'RMSE', 'MAE']:
         return infos.loc[self.data_name, 'metric']
     
@@ -49,13 +50,19 @@ class MoleculeNetDataset(PickleLMDBDataset):
 from rdkit import Chem
 from ..data import TupleDataset
 class UniMolMoleculeNetDataset(TupleDataset[tuple[Chem.Mol, tuple[int|float,...]]]):
-    def __init__(self, data_name: str, split: Literal['train', 'valid', 'test'], n_conformer: int=10):
+    def __init__(self, data_name: str, split: Literal['train', 'valid', 'test'], 
+                n_conformer: int=10, choice_coord: bool=True, base_seed: int=None):
         super().__init__(2)
         self.dataset = MoleculeNetDataset(data_name, split)
         self.n_conformer = n_conformer
+        self.choice_coord = choice_coord
+        self.base_seed = base_seed
 
     def __getitem__(self, idx) -> Chem.Mol:
         mol_idx, conformer_idx = divmod(idx, self.n_conformer)
+        if self.choice_coord:
+            rng = get_rng(self.base_seed, mol_idx)
+            conformer_idx = rng.choice(10, self.n_conformer, replace=False)[conformer_idx]
         data = self.dataset[mol_idx]
         mol = mol_from_unimol_data(data['smi'], data['coordinates'][conformer_idx])
         return mol, data['target']

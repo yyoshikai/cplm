@@ -232,6 +232,6 @@ class RevealIterator(Iterable[T]):
                     shapes = []
             yield item
 
-def get_rng(base_seed, idx):
+def get_rng(base_seed, idx) -> np.random.Generator:
     epoch = int(os.environ.get('EPOCH', 0))
     return np.random.default_rng(base_seed+epoch+idx)

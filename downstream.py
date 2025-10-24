@@ -87,7 +87,7 @@ datas = {}
 vocs = None
 for split in ['train', 'valid', 'test']:
     is_valid = split != 'train'
-    unimol_raw = UniMolMoleculeNetDataset(args.data, split, 1)
+    unimol_raw = UniMolMoleculeNetDataset(args.data, split, 1, True)
     mol, target = unimol_raw.untuple()
     smi, coord = MolProcessDataset(mol, args.seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize).untuple()
     coord = CoordTransformDataset(coord, base_seed=args.seed, normalize_coord=True, random_rotate=False if is_valid else True).untuple()[0]
@@ -200,9 +200,10 @@ def objective(trial: Trial):
     optimizer, scheduler = get_optimizer_scheduler(model, trargs.n_epoch, False, args.weight_decay, False, 'warmup', trargs.lr, trargs.warmup_ratio, False)
 
     if rank == MAIN_RANK:
-        epoch_recorder = IterateRecorder(f"{trial_dir}/scores.csv", 1)
+        epoch_recorder = IterateRecorder(f"{trial_dir}/epochs/{rank}.csv", 1)
     best_main_score = -np.inf
     best_main_score_epoch = -1
+    step_recorder = IterateRecorder(f"{trial_dir}/steps/{rank}.csv", len(loader))
 
     # Environment
     ddp_set_random_seed(args.seed)
@@ -213,20 +214,31 @@ def objective(trial: Trial):
         ## train epoch
         logger.debug(f"{prefix} train started.")
         sampler.set_epoch(epoch)
+        os.environ['EPOCH'] = str(epoch)
+
         model.train()
         for step, (token_batch, weight_batch) in enumerate(loader):
+            optimizer.zero_grad()
             token_batch = token_batch.to(device)
+            weight_batch = weight_batch.to(device)
+            max_len, batch_size = token_batch.shape
+
+            ### log batch
             input_batch, target_batch = token_batch[:-1], token_batch[1:]
             if epoch <= 1 and step <= 1:
                 log_batch(prefix, logger, token_logger, target_batch, weight_batch, voc_encoder, step, False, gpuuse_getter)
-            weight_batch = weight_batch.to(device)
-            optimizer.zero_grad()
+
+            ### forward & backward
             with torch.autocast('cuda', torch.bfloat16):
                 loss = (criterion(model(input_batch), target_batch)*weight_batch).sum()
             loss.backward()
             optimizer.step()
+
+            ### log
             if should_show(step, len(loader)):
                 logger.debug(f"{prefix}Step[{step}] finished.")
+            step_recorder.record(epoch=epoch, batch_size=batch_size, max_len=max_len, 
+                    loss_per_item=loss.item()/batch_size)
         scheduler.step()
 
         ## validation epoch
