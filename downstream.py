@@ -281,7 +281,7 @@ def objective(trial: Trial):
                             log_prob = output_batch[prompt_sizes[b]-1+i_gen, b] # [N]
                             gen = choice_idxs[torch.argmax(log_prob[choice_idxs])].item()
                             gen_free = torch.argmax(log_prob).item()
-                            logger.info(f"{gen_free=}, {gen=}")
+                            logger.info(f"gen_free={voc_encoder.i2voc[gen_free]}, gen={voc_encoder.i2voc[gen]}")
                             n_free_match += int(gen_free == gen)
                             n_gen += 1
                             next_input_batch[prompt_sizes[b]+i_gen, b] = gen
