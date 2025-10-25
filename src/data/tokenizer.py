@@ -10,6 +10,7 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from .data import WorkerAggregator, is_main_worker, WrapDataset
+from ..utils.utils import should_show
 
 T_co = TypeVar('T_co', covariant=True)
 

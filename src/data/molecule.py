@@ -77,3 +77,11 @@ class RandomScoreDataset(Dataset[float]):
     def __len__(self):
         return self.size
 
+class RandomClassDataset(Dataset[bool]):
+    def __init__(self, size: int, seed: int):
+        self.seed = seed
+        self.size = size
+    def __getitem__(self, idx: int):
+        return get_rng(self.seed, idx).uniform() < 0.5
+    def __len__(self):
+        return self.size
