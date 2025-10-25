@@ -476,7 +476,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     valid2train_r = torch.tensor([len(train_data)/len(valid_data) 
             for train_data, valid_data in zip(train_datas, valid_datas)], 
             device=device, dtype=torch.float)
-    val_recorder = IterateRecorder(f"{result_dir}/vals/{rank}.csv", [], 1)
+    val_recorder = IterateRecorder(f"{result_dir}/vals/{rank}.csv", 1)
     val2opt = []
     val2mean_loss = []
     next_eval_opt = 0
@@ -488,8 +488,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     worker_opt_accum_weight = 0.0
     nan_grad_step_saved = False
     ## recorder
-    step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", 
-            ["batch_size", "max_len", "worker_weight" , "worker_loss"], 1000)
+    step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", 1000)
 
     train_start = time()
     logger.info("Training started.", **NO_DUP)
