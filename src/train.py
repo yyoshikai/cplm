@@ -470,7 +470,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         case _:
             loss_scale = float(args.loss_scale)
     # opt recorder
-    opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", ['loss', 'weight', 'lr', 'memory'], args.eval_opt)
+    opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", args.eval_opt)
 
     # val
     valid2train_r = torch.tensor([len(train_data)/len(valid_data) 
