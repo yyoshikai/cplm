@@ -9,7 +9,7 @@ from time import time
 import pandas as pd
 from prody import parsePDB, confProDy, addMissingAtoms
 from ..lmdb import PickleLMDBDataset, IntLMDBDataset
-from ..data import WrapDataset, WrapTupleDataset, Subset
+from ..data import WrapDataset, TupleDataset, Subset
 from rdkit import Chem
 confProDy(verbosity='none')
 from ...utils.utils import CompressedArray
@@ -20,13 +20,13 @@ SAVE_DIR = f"{WORKDIR}/cplm/ssd/preprocess/results/finetune/r4_all"
 CDDIR = f"{WORKDIR}/cheminfodata/crossdocked"
 
 finetune_data_type = tuple[Protein, Chem.Mol, float, str, str]
-class CDWholeDataset(WrapTupleDataset[finetune_data_type]):
+class CDWholeDataset(TupleDataset[finetune_data_type]):
     def __init__(self):
-        raw_data = PickleLMDBDataset(f"{CDDIR}/pockets/main.lmdb")
-        super().__init__(raw_data, 5)
+        self.raw_data = PickleLMDBDataset(f"{CDDIR}/pockets/main.lmdb")
+        super().__init__(5)
 
     def __getitem__(self, idx):
-        data = self.dataset[idx]
+        data = self.raw_data[idx]
 
         # pocket
         pocket_atoms, pocket_coord = data['pocket_atoms'], data['pocket_coordinate']
