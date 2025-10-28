@@ -12,7 +12,7 @@ DEFAULT_CD1_1_TYPES_DIR = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020_v
 DEFAULT_TARGETDIFF_DIR = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff"
 
 # 処理を確認 @ /workspace/cplm/experiments/250824_modify_data_code/source.ipynb
-class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float]]):
+class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, str]]):
     def __init__(self, split: str, targetdiff_dir: str=DEFAULT_TARGETDIFF_DIR, 
             crossdocked_dir: str=DEFAULT_CD1_1_TYPES_DIR):
         """

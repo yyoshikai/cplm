@@ -7,6 +7,7 @@ from .data.tokenizer import StringTokenizer, FloatTokenizer, \
     SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
+from .data.datasets.crossdocked import CDDataset, CDProteinDataset
 from .data.datasets.pdb import PDBUniMolRandomDataset
 from .data.protein import ProteinProcessDataset
 from .data.molecule import MolProcessDataset, RandomScoreDataset, RandomClassDataset
@@ -132,10 +133,16 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 
     # raw data
-    if args.protein:
-        raw_data = TargetDiffScafCDProteinDataset(split)
-    else:
-        raw_data = TargetDiffScafCDDataset(split)
+    if getattr(args, 'small', False):
+        if args.protein:
+            raise NotImplementedError # 実装する？
+        else:
+            raw_data = CDDataset2
+    else:    
+        if args.protein:
+            raw_data = TargetDiffScafCDProteinDataset(split)
+        else:
+            raw_data = TargetDiffScafCDDataset(split)
     protein, lig, score, protein_filename, ligand_filename = raw_data.untuple()
 
     lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize).untuple()
