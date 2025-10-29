@@ -135,14 +135,14 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     # raw data
     if getattr(args, 'targetdiff', True):
         if args.protein:
-            raise NotImplementedError # 実装する
-        else:
-            raw_data = CDDataset(split)
-    else:    
-        if args.protein:
             raw_data = TargetDiffScafCDProteinDataset(split)
         else:
             raw_data = TargetDiffScafCDDataset(split)
+    else:
+        if args.protein:
+            raise NotImplementedError # 実装する
+        else:
+            raw_data = CDDataset(split)
     protein, lig, score, protein_filename, ligand_filename = untuple(raw_data, 5)
 
     lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize).untuple()

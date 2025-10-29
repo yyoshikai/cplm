@@ -8,7 +8,7 @@ from time import time
 
 import pandas as pd
 from prody import parsePDB, confProDy, addMissingAtoms
-from ..lmdb import PickleLMDBDataset, IntLMDBDataset
+from ..lmdb import PickleLMDBDataset, IntLMDBDataset, data_len_to_blen
 from ..data import WrapDataset, TupleDataset, Subset
 from rdkit import Chem
 confProDy(verbosity='none')
@@ -22,7 +22,7 @@ CDDIR = f"{WORKDIR}/cheminfodata/crossdocked"
 finetune_data_type = tuple[Protein, Chem.Mol, float, str, str]
 class CDWholeDataset(TupleDataset[finetune_data_type]):
     def __init__(self):
-        self.raw_data = PickleLMDBDataset(f"{CDDIR}/pockets/main.lmdb")
+        self.raw_data = PickleLMDBDataset(f"{CDDIR}/pockets/main.lmdb", blen=data_len_to_blen(45_000_000))
         super().__init__(5)
 
     def __getitem__(self, idx):
@@ -37,13 +37,17 @@ class CDWholeDataset(TupleDataset[finetune_data_type]):
         pocket_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}"
 
         score = float(data['score'])
-        return pocket, data['mol'], score, pocket_path, ligand_path
+        return pocket, data['lig_mol'], score, pocket_path, ligand_path
 
-class CDDataset(Subset[finetune_data_type]):
+class CDDataset(TupleDataset[finetune_data_type]):
     def __init__(self, split: Literal['train', 'valid', 'test']):
-        dataset = CDWholeDataset()
-        indices = IntLMDBDataset(f"{CDDIR}/pockets/mask/{split}_idxs.lmdb")
-        super().__init__(dataset, indices)
+        self.indices = IntLMDBDataset(f"{CDDIR}/pockets/mask/{split}_idxs.lmdb")
+        self.dataset = CDWholeDataset()
+    def __getitem__(self, idx: int):
+        idx0 = self.indices[idx]
+        return self.dataset[idx0]
+    def __len__(self):
+        return len(self.indices)
 
 class CDProteinDataset(WrapDataset[tuple[Protein, Chem.Mol, float]]):
     logger = getLogger(f"{__module__}.{__qualname__}")
