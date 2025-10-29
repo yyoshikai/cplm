@@ -21,15 +21,16 @@ parser.add_argument('--lig-smiles-weight', type=float, default=1.0)
 parser.add_argument('--lig-coord-weight', type=float, default=5.0)
 parser.add_argument("--no-score", action='store_true')
 parser.add_argument('--protein', action='store_true')
+parser.add_argument('--targetdiff', action='store_true')
 args = parser.parse_args()
 pretrain_dir = f"training/results/{args.pretrain_name}"
 targs = yaml.safe_load(open(f"{pretrain_dir}/args.yaml"))
 update_pretrain_args(args, targs)
 set_default_args(args)
 if args.pretrain_opt is None:
-    args.pretrain_opt = args['max_opt']
+    args.pretrain_opt = targs['max_opt']
 if args.seed is None:
-    args.seed = targs.seed
+    args.seed = targs['seed']
 
 # data
 split2datas = {}

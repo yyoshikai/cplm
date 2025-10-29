@@ -1,7 +1,7 @@
 from argparse import Namespace
 from typing import Literal
 import numpy as np
-from .data import CacheDataset, RepeatDataset, Subset, StackDataset
+from .data import CacheDataset, RepeatDataset, Subset, StackDataset, untuple
 from .data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
     SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
@@ -133,17 +133,17 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 
     # raw data
-    if getattr(args, 'small', False):
+    if getattr(args, 'targetdiff', True):
         if args.protein:
-            raise NotImplementedError # 実装する？
+            raise NotImplementedError # 実装する
         else:
-            raw_data = CDDataset2
+            raw_data = CDDataset(split)
     else:    
         if args.protein:
             raw_data = TargetDiffScafCDProteinDataset(split)
         else:
             raw_data = TargetDiffScafCDDataset(split)
-    protein, lig, score, protein_filename, ligand_filename = raw_data.untuple()
+    protein, lig, score, protein_filename, ligand_filename = untuple(raw_data, 5)
 
     lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize).untuple()
     pocket_atom, pocket_coord, pocket_coord_position = ProteinProcessDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
