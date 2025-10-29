@@ -17,6 +17,3 @@ split_by_name = torch.load("/workspace/cheminfodata/crossdocked/targetdiff/split
 test_dnames0 = {item[0].split('/')[0] for item in split_by_name['test']}
 logger.info(f"{len(test_dnames)=}, {len(test_dnames0)=}, {len(test_dnames0&test_dnames)=}")
 
-# (scaffoldの調査は面倒なので省略)
-
-
