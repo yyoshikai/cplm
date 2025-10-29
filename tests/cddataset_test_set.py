@@ -14,7 +14,7 @@ dlargs = dict(batch_size=None, shuffle=False, num_workers=16)
 # test setのdnameがsplit_by_nameと一致しているか？
 loader = DataLoader(CDDataset('test'), **dlargs)
 test_dnames = {item[3].split('/')[-2] for item in tqdm(itr.islice(loader, 100000))}
-split_by_name = torch.load("/workspace/cheminfodata/crossdocked/targetdiff/split_by_name.pt", weights_only=True)
+split_by_name = torch.load(f"{WORKDIR}/cheminfodata/crossdocked/targetdiff/split_by_name.pt", weights_only=True)
 test_dnames0 = {item[0].split('/')[0] for item in split_by_name['test']}
 logger.info(f"{len(test_dnames)=}, {len(test_dnames0)=}, {len(test_dnames0&test_dnames)=}")
 
