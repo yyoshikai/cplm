@@ -115,18 +115,13 @@ if args.finetune_opt is None:
         dfval = pd.read_csv(f"{finetune_dir}/vals/0.csv")
         losses = dfval['mean_loss'].values
         for val in range(len(losses)-args.finetune_patience_val):
-            if losses[val] >= losses[val:val+args.finetune_patience_val+1].max():
+            if losses[val] <= losses[val:val+args.finetune_patience_val+1].min():
                 break
         else:
             raise ValueError(f"Early stopping not finished.")
-        args.finetune_patience_val = dfval['opt'].values[val]
+        args.finetune_opt = int(dfval['opt'].values[val])
     else: # set from max_opt
-        args.finetune_patience_val = fargs.max_opt
-    steps = [os.path.splitext(os.path.basename(step))[0] for step in glob(f"{finetune_dir}/models/*")]
-    steps = [int(step) for step in steps if step.isdigit()]
-    if len(steps) == 0:
-        raise ValueError("No checkpoint was found to get args.finetune_opt")
-    args.finetune_opt = max(steps)
+        args.finetune_opt = fargs.max_opt
     logs.append(f"finetune_opt was set to {args.finetune_opt}")
 else:
     assert args.finetune_patience_val == 0
@@ -182,7 +177,6 @@ result_dir = f"reinforce/results/{args.studyname}"
 logger, token_logger, rank, device = set_env(result_dir, args, logs, 
         subdirs=['models'])
 MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
-os.makedirs(f"{result_dir}/generated/{rank}", exist_ok=True)
 for i in range(args.batch_size):
     os.makedirs(f"{result_dir}/eval_vina_tmp/{rank}/{i}", exist_ok=True)
 RDLogger.DisableLog("rdApp.*")
@@ -321,6 +315,8 @@ for step in step_timer:
             logger.debug(f"step[{step}]{protein_paths=}")
             logger.debug(f"step[{step}]{lfnames=}")
             logger.debug(f"step[{step}]{centers=}")
+            for b, output in enumerate(outputs):
+                token_logger.debug(f"step[{step}]output[{b}]={voc_encoder.decode(output.tolist())}")
             
     # Get score
     step_timer.start('get_score')
