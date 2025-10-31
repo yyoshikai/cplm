@@ -25,6 +25,7 @@ logs = []
 vocs = set()
 split2datas = {}
 for split in ['valid', 'train']:
-    data, voc_encoder, dnames, logs = get_train_data(args, split)
+    split2datas[split], voc_encoder, dnames, logs = get_train_data(args, split, 'none')
+
 
 train('training', args, split2datas['train'], split2datas['valid'], voc_encoder, logs, dnames, args.init_state)

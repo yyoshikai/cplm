@@ -17,7 +17,7 @@ from .data.tokenizer import TokenEncodeDataset, VocEncoder, \
 from .data.protein import CoordFollowDataset
 from .utils.path import WORKDIR
 
-def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weight: float|None):
+def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weight: float|None=None):
     logs = []
     logs.append(f"{split} data actual_size/total_size=")
 
@@ -63,10 +63,11 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weig
             smi = TokenizeDataset(smi, smiles_tokenizer)
             coord = ArrayTokenizeDataset(coord, mol_coord_tokenizer)
             sentence = ['[LIGAND]', smi, '[XYZ]', coord, '[END]']
-            weights = [1.0, 0.0]
+            weights = [None, 1.0, 0.0]
             if score == 'none':
-                pass
+                assert score_weight is None
             else:
+                assert score_weight is not None
                 if score == 'cls':
                     score = RandomClassDataset(len(smi), args.seed+d_seed)
                     score = TokenizeDataset(score, BinaryClassTokenizer())
@@ -76,15 +77,16 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weig
                             log_interval=args.tokenizer_log_interval))
                 else:
                     raise ValueError
+                sentence += ['[SCORE]', score, '[END]']
+                weights += [score_weight, 0.0]
                 
             mol_data = SentenceDataset(*sentence)
             vocs |= mol_data.vocs()
             
             ### weight
             data = CacheDataset(mol_data)
-            separates = {'[LIGAND]', '[END]'}
-            separates2weight = {('[LIGAND]',): 1.0, ('[LIGAND]', '[END]'): 0.0}
-            weight_data = RemoveLastDataset(TokenWeightDataset(mol_data, separates, separates2weight))
+            separates = {'[LIGAND]', '[SCORE]', '[END]'}
+            weight_data = RemoveLastDataset(TokenWeightDataset(mol_data, separates, weights, by_n_separate=True))
         ### Pockets
         else:
             pocket = data

@@ -517,7 +517,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                             valid_reveal_loader = valid_loader
                 else:
                     valid_loader = None
-                valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, args.gpu_size, device, args.log_large_freq if valid_is_starting else math.inf, DATA_RANK['valid'])
+                valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, args.gpu_size, device, 100000 if valid_is_starting else math.inf, DATA_RANK['valid'])
 
                 ## Accumulate losses
                 process_weight = torch.tensor(0.0, device=device, dtype=torch.float)
