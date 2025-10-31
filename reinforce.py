@@ -318,13 +318,12 @@ for step in step_timer:
         if step < log_sample_step:
             log_batch('train', logger, token_logger, out_batch[1:], weight, voc_encoder, step, 'data_dist' in args.check, get_gpuuse)
             ## check distribution
-            if rank == ddp_size-1:
-                logger.debug(f"step[{step}]{all_idxs=}")
-                logger.debug(f"step[{step}]{protein_paths=}")
-                logger.debug(f"step[{step}]{lfnames=}")
-                logger.debug(f"step[{step}]{centers=}")
-                for b, output in enumerate(outputs):
-                    token_logger.debug(f"step[{step}]output[{b}]={voc_encoder.decode(output.tolist())}")
+            logger.debug(f"step[{step}]{all_idxs=}")
+            logger.debug(f"step[{step}]{protein_paths=}")
+            logger.debug(f"step[{step}]{lfnames=}")
+            logger.debug(f"step[{step}]{centers=}")
+            for b, output in enumerate(outputs):
+                token_logger.debug(f"step[{step}]output[{b}]={voc_encoder.decode(output.tolist())}")
                 
         # Get score
         step_timer.start('get_score')
