@@ -66,7 +66,8 @@ parser.add_argument("--schedule-free", action='store_true')
 parser.add_argument("--warmup-ratio", type=float, default=0.04)
 ## finetune
 parser.add_argument('--finetune-name', required=True)
-parser.add_argument('--finetune-opt', type=int)
+parser.add_argument('--finetune-opt', type=int, default=None)
+parser.add_argument('--finetune-patience-val', type=int)
 ## environment
 parser.add_argument('--num-workers', type=int, default=0)
 parser.add_argument('--pin-memory', action='store_true')
@@ -107,14 +108,28 @@ pargs = Namespace(**yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
 ## check finetuning
 assert fargs.no_score
 
-## get last finetune step
+## set finetune opt
 if args.finetune_opt is None:
+    if args.finetune_patience_val is not None: # set from early stopping
+        logs.append(f"finetune_opt was set from patience_val={args.finetune_patience_val}")
+        dfval = pd.read_csv(f"{finetune_dir}/vals/0.csv")
+        losses = dfval['mean_loss'].values
+        for val in range(len(losses)-args.finetune_patience_val):
+            if losses[val] >= losses[val:val+args.finetune_patience_val+1].max():
+                break
+        else:
+            raise ValueError(f"Early stopping not finished.")
+        args.finetune_patience_val = dfval['opt'].values[val]
+    else: # set from max_opt
+        args.finetune_patience_val = fargs.max_opt
     steps = [os.path.splitext(os.path.basename(step))[0] for step in glob(f"{finetune_dir}/models/*")]
     steps = [int(step) for step in steps if step.isdigit()]
     if len(steps) == 0:
         raise ValueError("No checkpoint was found to get args.finetune_opt")
     args.finetune_opt = max(steps)
     logs.append(f"finetune_opt was set to {args.finetune_opt}")
+else:
+    assert args.finetune_patience_val == 0
 
 batch_first = False
 log_sample_step = 3
