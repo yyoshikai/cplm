@@ -500,6 +500,8 @@ def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=Non
             print(f"---{name}---", flush=True)
     logger = getLogger('eval_qvina')
     log('qvina_prep_mol1')
+    proc = None
+    docked_sdf_path = None
     try:
         out_dir = os.path.realpath(out_dir)
         os.makedirs(out_dir, exist_ok=True)
@@ -569,8 +571,9 @@ def eval_qvina3(lig_path, rec_path, out_dir, lig_idx=0, use_uff=True, center=Non
     except:
         log('qvina_error')
         logger.info('[Error] Vina error: %s' % docked_sdf_path)
-        logger.info(f"output: ")
-        logger.info(proc.stdout.read().decode())
-        logger.info(f"stderr:")
-        logger.info(proc.stderr.read().decode())
+        if proc is not None:
+            logger.info(f"output: ")
+            logger.info(proc.stdout.read().decode())
+            logger.info(f"stderr:")
+            logger.info(proc.stderr.read().decode())
         return None

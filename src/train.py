@@ -331,7 +331,7 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
         else:
             committed = git_commit()
         logger.debug('git committed.' if committed else 'git not committed.')
-        logger.debug(f"git hash={git_get_hash()}")
+        logger.info(f"git hash={git_get_hash()}")
     
     # Fix seed
     ddp_set_random_seed(args.seed)

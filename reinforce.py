@@ -21,7 +21,7 @@ from torch.distributions import Categorical
 
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
-from src.utils import IterateRecorder
+from src.utils import IterateRecorder, git_get_hash
 from src.utils.path import cleardir
 from src.utils.time import TimerTqdm
 from src.evaluate import parse_mol_tokens, parse_mol
@@ -182,6 +182,9 @@ for i in range(args.batch_size):
 RDLogger.DisableLog("rdApp.*")
 ## check generate_per_sample
 ddp_size = dist.get_world_size()
+
+if rank == MAIN_RANK:
+    logger.info(f"git hash={git_get_hash()}")
 
 ## SDP kernel
 SDP_KERNEL = {'FLASH': SDPBackend.FLASH_ATTENTION, 'EFFICIENT': SDPBackend.EFFICIENT_ATTENTION}[sdp_kernel]
