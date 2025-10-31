@@ -159,7 +159,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument('--pos-buffer-len', type=int, default=1600)
     # environments
     parser.add_argument("--eval-opt", type=int, required=True) # temp
-    parser.add_argument("--patience-opt", type=int, required=True)
+    parser.add_argument("--patience-opt", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--pin-memory", action='store_true')
     parser.add_argument("--prefetch-factor", type=int)
@@ -581,7 +581,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
 
             # Judge early stopping
             best_opt = val2opt[np.argmin(val2mean_loss)]
-            if opt - best_opt >= args.patience_opt:
+            if args.patience_opt is not None and opt - best_opt >= args.patience_opt:
                 logger.info(f"Early stop.", **NO_DUP)
                 break
             next_eval_opt += args.eval_opt
