@@ -90,7 +90,7 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weig
             pocket = data
             atoms, coord, coord_position = ProteinProcessDataset(pocket, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
 
-            coords = CoordTransformDataset(coord, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
+            coord = CoordTransformDataset(coord, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
 
             ### setntence
             atoms = TokenizeDataset(atoms, pocket_atom_tokenizer)
