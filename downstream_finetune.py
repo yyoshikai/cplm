@@ -31,8 +31,10 @@ for cls in data_clss:
     attr_name = f"{cls.__name__.removesuffix('Dataset')}_val_sample"
     if getattr(args, attr_name) is None:
         setattr(args, attr_name, targs[attr_name])
+print(f"{args.UniMolLigand_val_sample=}")
 update_pretrain_args(args, targs)
 set_default_args(args)
+print(f"{args.UniMolLigand_val_sample=}")
 if args.pretrain_opt is None:
     args.pretrain_opt = args['max_opt']
 if args.seed is None:
