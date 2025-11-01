@@ -168,11 +168,8 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--gpu-size-gb", type=float, required=True)
     ## log interval
     parser.add_argument("--tokenizer-log-interval", type=int)
-    parser.add_argument("--log-step", type=int)
-    parser.add_argument("--log-opt", type=int)
-    ## compatibility
-    parser.add_argument("--weight-decay-all", action='store_true')
     ## test
+    parser.add_argument("--weight-decay-all", action='store_true')
     parser.add_argument('--deterministic', action='store_true')
     parser.add_argument("--sync-every-step", action='store_true')
     parser.add_argument("--test", action='store_true')
@@ -212,10 +209,6 @@ def set_default_args(args: Namespace):
     # log interval
     if args.tokenizer_log_interval is None:
         args.tokenizer_log_interval = int(1e6) if args.test else int(1e8)
-    if args.log_step is None:
-        args.log_step = 1 if args.test else 10000
-    if args.log_opt is None:
-        args.log_opt = 1 if args.test else max(1, args.eval_opt//5)
     if args.test: args.studyname+='_test'
 
     # post_init
@@ -399,8 +392,6 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     logger, token_logger, rank, device = set_env(result_dir, args, preparation_logs, 
             subdirs=['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log'])
     logger.info(f"num_workers={args.num_workers}", **NO_DUP)
-    logger.debug(f"{args.log_opt=}")
-    logger.debug(f"{args.log_step=}")
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 
     ## checks
@@ -673,7 +664,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                     train_reveal_loader.enabled = False
         
 
-        if  should_show(step+1, args.log_step):
+        if  should_show(step+1, 10000):
             logger.info(f"[Finish]{step+1:>6} step t={time()-train_start:>9.02f}", **NO_DUP)
         
         # opt
@@ -704,7 +695,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             if not args.schedule_free:
                 scheduler.step()
 
-            if should_show(opt, args.log_opt):
+            if should_show(opt, max(1, args.eval_opt//5)):
                 logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:>9.02f}", **NO_DUP)
 
     opt_recorder.flush()
