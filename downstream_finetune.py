@@ -34,7 +34,8 @@ for cls in data_clss:
 update_pretrain_args(args, targs)
 set_default_args(args)
 if args.pretrain_opt is None:
-    args.pretrain_opt = args['max_opt']
+    args.pretrain_opt = targs['max_opt']
+    logs.append(f"pretrain_opt was set to {args.pretrain_opt}")
 if args.seed is None:
     args.seed = targs.seed
 
