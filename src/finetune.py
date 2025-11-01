@@ -72,7 +72,7 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weig
                     score = RandomClassDataset(len(smi), args.seed+d_seed)
                     score = TokenizeDataset(score, BinaryClassTokenizer())
                 elif score == 'reg':
-                    score = RandomScoreDataset(-10, 10, len(smi), args.seed+d_seed)
+                    score = RandomScoreDataset(-50, 50, len(smi), args.seed+d_seed)
                     score = TokenizeDataset(score, FloatTokenizer('score', -args.coord_range, args.coord_range, 
                             log_interval=args.tokenizer_log_interval))
                 else:
