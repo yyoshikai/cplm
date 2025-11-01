@@ -29,7 +29,7 @@ pretrain_dir = f"training/results/{args.pretrain_name}"
 targs = Dict(yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
 for cls in data_clss:
     attr_name = f"{cls.__name__.removesuffix('Dataset')}_val_sample"
-    if (attr:=getattr(args, attr_name)) is None:
+    if (attr:=getattr(args, attr_name)) is not None:
         targs[attr_name] = attr
 update_pretrain_args(args, targs)
 set_default_args(args)
