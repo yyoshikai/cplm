@@ -161,9 +161,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--eval-opt", type=int, required=True) # temp
     parser.add_argument("--patience-opt", type=int)
     parser.add_argument("--seed", type=int)
-    parser.add_argument("--pin-memory", action='store_true')
-    parser.add_argument("--prefetch-factor", type=int)
-    parser.add_argument("--duplicate", default='ask')
     parser.add_argument("--reset-nan-grad", action='store_true')
     ## hardware
     parser.add_argument("--num-workers", type=int, default=0)
@@ -212,9 +209,6 @@ def update_pretrain_args(args: Namespace, targs: dict):
             setattr(args, key, value)
 
 def set_default_args(args: Namespace):
-    if args.num_workers > 0 and args.prefetch_factor is None:
-        args.prefetch_factor = 10
-
     # log interval
     if args.tokenizer_log_interval is None:
         args.tokenizer_log_interval = int(1e6) if args.test else int(1e8)
@@ -428,7 +422,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     if rank == DATA_RANK['train']:
         train_data = ConcatDataset(train_datas)
         sampler = RandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
-        train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=args.pin_memory, persistent_workers=False, prefetch_factor=args.prefetch_factor)
+        train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=True, persistent_workers=False, prefetch_factor=10 if args.num_workers > 0 else None)
         train_loader = InfiniteLoader(train_loader)
         if check_data_dist:
             train_loader = RevealIterator(train_loader, 'train')
@@ -510,7 +504,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 ## Make Loader
                 if rank == DATA_RANK['valid']:
                     os.environ['EPOCH'] = '0'
-                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_datas[i_data], batch_size=None, shuffle=True if check_data_dist else False, num_workers=args.num_workers, pin_memory=args.pin_memory, prefetch_factor=args.prefetch_factor)
+                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_datas[i_data], batch_size=None, shuffle=True if check_data_dist else False, num_workers=args.num_workers, pin_memory=True, prefetch_factor=10 if args.num_workers > 0 else None)
                     if valid_is_starting:
                         if check_data_dist:
                             valid_loader = RevealIterator(valid_loader, f'valid[{prefix}]', logger)
