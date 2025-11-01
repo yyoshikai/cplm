@@ -33,6 +33,7 @@ for cls in data_clss:
         targs[attr_name] = attr
 update_pretrain_args(args, targs)
 set_default_args(args)
+print(targs['UniMolLigand_val_sample'])
 if args.pretrain_opt is None:
     args.pretrain_opt = args['max_opt']
 if args.seed is None:
