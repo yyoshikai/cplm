@@ -4,6 +4,8 @@ import yaml
 from addict import Dict
 from src.train import train, add_train_args, update_pretrain_args, set_default_args
 from src.finetune import get_train_data
+from src.data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
+from src.data.datasets.pdb import PDBUniMolRandomDataset
 
 logs = []
 
@@ -17,9 +19,18 @@ parser.add_argument("--pretrain-opt", type=int)
 ## dataset
 parser.add_argument('--score-weight', type=float, default=5.0)
 parser.add_argument('--reg', action='store_true')
+# test
+data_clss = [UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]
+for cls in data_clss:
+    dname = cls.__name__.removesuffix('Dataset')
+    parser.add_argument(f'--{dname}-val-sample', type=float, default=1.0)
 args = parser.parse_args()
 pretrain_dir = f"training/results/{args.pretrain_name}"
 targs = Dict(yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
+for cls in data_clss:
+    attr_name = f"{cls.__name__.removesuffix('Dataset')}_val_sample"
+    if getattr(args, attr_name) is None:
+        setattr(args, attr_name, targs[attr_name])
 update_pretrain_args(args, targs)
 set_default_args(args)
 if args.pretrain_opt is None:
