@@ -125,7 +125,6 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weig
     return datas, voc_encoder, dnames, logs
     split2datas[split] = datas
 
-
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
         added_vocs: set[str], prompt_score: Literal['data', 'low', 'none']):
     
@@ -142,7 +141,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
             raw_data = TargetDiffScafCDDataset(split)
     else:
         if args.protein:
-            raise NotImplementedError # 実装する
+            raw_data = CDProteinDataset(split)
         else:
             raw_data = CDDataset(split)
     protein, lig, score, protein_filename, ligand_filename = untuple(raw_data, 5)

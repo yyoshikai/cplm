@@ -277,7 +277,6 @@ def eval_vina(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]
     return score, min_score
 
 
-
 def parse_qvina_outputs(docked_sdf_path, ref_mol):
 
     suppl = Chem.SDMolSupplier(docked_sdf_path)
@@ -300,6 +299,7 @@ def parse_qvina_outputs(docked_sdf_path, ref_mol):
         })
 
     return results
+
 
 def eval_qvina(lig_path, rec_path, out_dir, lig_idx=0, conda_env='adt', use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None):
     """

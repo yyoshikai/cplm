@@ -16,11 +16,11 @@ def data_len_to_blen(l: int|Sized):
     return data_len_to_blen(len(l))
 
 class LMDBDataset(Dataset[bytes]):
-    def __init__(self, lmdb_path: str, idx_to_key: Literal['byte', 'str']='byte', blen: int|None=None):
+    def __init__(self, lmdb_path: str, idx_to_key: Literal['byte', 'str']='byte'):
         self.path = lmdb_path
         match idx_to_key:
             case 'byte':
-                if blen is None: blen = data_len_to_blen(self)
+                blen = data_len_to_blen(self)
                 self.idx_to_key = lambda idx: int(idx).to_bytes(blen, byteorder='big')
             case 'str':
                 self.idx_to_key = lambda idx: str(idx).encode('ascii')

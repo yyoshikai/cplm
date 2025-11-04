@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 from time import time
 from prody import parsePDB, parsePDBStream, confProDy, Contacts
 from ..utils.lmdb import new_lmdb
-from .coord_transform import get_random_rotation_matrix
+from .coord import get_random_rotation_matrix
 from .lmdb import PickleLMDBDataset
 from ..utils import slice_str
 from rdkit import Chem
