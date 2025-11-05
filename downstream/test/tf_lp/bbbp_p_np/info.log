@@ -1,2 +1,34 @@
 [251105 18:17:03][0/1][root][INFO]rdkit.__version__='2022.09.3'
 [251105 18:17:03][0/1][root][INFO]transformers.__version__='4.52.4'
+[251105 18:17:03][0/1][root][INFO]git hash=72aece1
+[251105 18:17:03][0/1][root][INFO][Logs in preparation]
+[251105 18:17:03][0/1][root][INFO]args.pretrain_opt was set to 900
+[251105 18:17:03][0/1][root][INFO]
+[251105 18:17:03][0/1][root][INFO]Trial[0] trargs={'batch_size': 64, 'lr': 5e-05, 'n_epoch': 100, 'warmup_ratio': 0.0}
+[251105 18:17:03][0/1][src.model.transformer.Model][WARNING]vocs in state_dict does not match current vocs. Some weights will be permuted.
+[251105 18:17:03][0/1][src.model.transformer.Model][INFO]Removed from state_dict: ['BR', 'CA', 'MG', 'ZN', '[POCKET]']
+[251105 18:17:03][0/1][src.model.transformer.Model][INFO]New in model: []
+[251105 18:17:04][0/1][root][INFO]start=0
+[251105 18:17:04][0/1][root][INFO]start=16
+[251105 18:17:04][0/1][root][INFO]start=32
+[251105 18:17:04][0/1][root][INFO]start=48
+[251105 18:17:05][0/1][root][INFO]start=0
+[251105 18:17:05][0/1][root][INFO]start=16
+[251105 18:17:05][0/1][root][INFO]start=32
+[251105 18:17:05][0/1][root][INFO]start=48
+[251105 18:17:06][0/1][root][INFO]start=0
+[251105 18:17:06][0/1][root][INFO]start=16
+[251105 18:17:06][0/1][root][INFO]start=32
+[251105 18:17:06][0/1][root][INFO]start=48
+[251105 18:17:06][0/1][root][INFO]start=0
+[251105 18:17:06][0/1][root][INFO]start=16
+[251105 18:17:07][0/1][root][INFO]start=32
+[251105 18:17:07][0/1][root][INFO]start=48
+[251105 18:17:07][0/1][root][INFO]start=0
+[251105 18:17:07][0/1][root][INFO]start=16
+[251105 18:17:07][0/1][root][INFO]start=32
+[251105 18:17:08][0/1][root][INFO]start=48
+[251105 18:17:08][0/1][root][INFO]start=0
+[251105 18:17:08][0/1][root][INFO]start=16
+[251105 18:17:08][0/1][root][INFO]start=32
+[251105 18:17:08][0/1][root][INFO]start=48
