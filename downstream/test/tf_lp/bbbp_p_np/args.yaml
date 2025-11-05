@@ -6,7 +6,7 @@ ddp_size: 1
 deterministic: false
 gpu_size: 42949672960.0
 gpu_size_gb: 40.0
-local_batch_size: 128
+local_batch_size: 16
 lrs:
 - 5.0e-05
 - 8.0e-05
