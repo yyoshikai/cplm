@@ -277,7 +277,8 @@ def objective(trial: Trial):
                     input_batch = token_batch
                     generateds = [[] for _ in range(B)]
                     for i_gen, choice_idxs in enumerate(choice_idxss):
-                        output_batch = model(input_batch) # [L, B, N]
+                        with torch.autocast('cuda', torch.bfloat16):
+                            output_batch = model(input_batch) # [L, B, N]
                         next_input_batch = torch.cat([input_batch, torch.full((1, B), 
                                 fill_value=voc_encoder.pad_token, 
                                 dtype=input_batch.dtype, device=input_batch.device)])
