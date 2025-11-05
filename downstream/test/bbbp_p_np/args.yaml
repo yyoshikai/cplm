@@ -21,8 +21,8 @@ n_trials: 100
 no_commit: false
 num_workers: 4
 patience: 5
-pretrain_name: 251001_20000/mamba_lp
-pretrain_opt: 22000
+pretrain_dir: downstream/finetune/results/251001_20000/cls/mamba_lp
+pretrain_opt: 60000
 pretrain_patience_val: null
 sdp_kernel: FLASH
 seed: 0

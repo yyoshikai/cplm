@@ -48,7 +48,7 @@ parser.add_argument('--lrs', type=float, nargs='+', default=[5e-5, 8e-5, 1e-4, 4
 parser.add_argument('--n-epochs', type=int, nargs='+', default=[40, 60, 80, 100])
 parser.add_argument('--warmup-ratios', type=float, nargs='+', default=[0.0, 0.06, 0.1])
 ## pretrain
-parser.add_argument('--pretrain-name', required=True)
+parser.add_argument('--pretrain-dir', required=True)
 parser.add_argument('--pretrain-opt', type=int)
 parser.add_argument('--pretrain-patience-val', type=int)
 ## task
@@ -66,7 +66,7 @@ parser.add_argument('--deterministic', action='store_true')
 parser.add_argument('--no-commit', action='store_true')
 args = parser.parse_args()
 ## pretrain args
-pretrain_dir = f"training/results/{args.pretrain_name}"
+pretrain_dir = args.pretrain_dir
 targs = Namespace(**yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
 raw = MoleculeNetDataset(args.data, 'train')
 if args.seed is None: 
