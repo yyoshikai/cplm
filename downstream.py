@@ -168,7 +168,7 @@ root_mean_squared_error.maximize = mean_absolute_error.maximize = False
 init_state_path = f"{pretrain_dir}/models/{args.pretrain_opt}.pth"
 
 # Environment
-result_dir = f"downstream/{args.studyname}/{args.data}_{args.task}"
+result_dir = f"downstream/results/{args.studyname}/{args.data}_{args.task}"
 logger, token_logger, rank, device = set_env(f"downstream/{args.studyname}/{args.data}_{args.task}", args, logs, [])
 MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 ignore_warning()
