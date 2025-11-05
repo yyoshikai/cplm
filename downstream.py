@@ -367,6 +367,9 @@ if rank == MAIN_RANK:
     df = pd.read_csv(f"{result_dir}/trials/{best_trial}/epochs/{rank}.csv")
     best_epoch = np.argmin(df[f"valid {raw.main_metric}"].values
             *(-1 if maximize else 1))
-    
+    metric_names = ['AUROC', 'AUPR'] if raw.is_cls else ['RMSE', 'MAE', 'R^2']
+    df = pd.DataFrame({'value': {mname: df.loc[best_epoch, f'test {mname}']
+            for mname in metric_names}})
+    df.to_csv(f"{result_dir}/scores.tsv", sep='\t', header=False)
 
 dist.destroy_process_group()
