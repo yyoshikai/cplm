@@ -62,7 +62,7 @@ class CDProteinWholeDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, st
         # path
         ligand_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['lig_name']}"
         protein_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}"
-        tmp_path = f"./tmp/{idx}.pdb"
+        tmp_path = f"./tmp/{idx}_{time()}.pdb"
         
         addMissingAtoms(protein_path, outfile=tmp_path)
         protein = parsePDB(tmp_path)

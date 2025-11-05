@@ -1,10 +1,10 @@
 import os
 from argparse import ArgumentParser, Namespace
 from functools import partial
-from logging import getLogger
 
 import yaml
 import numpy as np
+import pandas as pd
 import optuna
 import torch
 import torch.distributed as dist
@@ -173,6 +173,7 @@ logger, token_logger, rank, device = set_env(f"downstream/{args.studyname}/{args
 MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 ignore_warning()
 ddp_size = dist.get_world_size()
+maximize = metrics[raw.main_metric].maximize
 
 # train
 def objective(trial: Trial):
@@ -215,7 +216,7 @@ def objective(trial: Trial):
 
     if rank == MAIN_RANK:
         epoch_recorder = IterateRecorder(f"{trial_dir}/epochs/{rank}.csv", 1)
-    best_main_score = -np.inf
+    best_main_score = np.inf
     best_main_score_epoch = -1
     step_recorder = IterateRecorder(f"{trial_dir}/steps/{rank}.csv", len(loader))
 
@@ -245,7 +246,6 @@ def objective(trial: Trial):
 
             ### forward & backward
             for start in range(0, trargs.batch_size, args.local_batch_size):
-                logger.info(f"{start=}")
                 with torch.autocast('cuda', torch.bfloat16):
                     loss = (criterion(model(input_batch[:,start:start+args.local_batch_size]), 
                         target_batch[:,start:start+args.local_batch_size])
@@ -341,9 +341,9 @@ def objective(trial: Trial):
         is_early_stop = False
         if rank == MAIN_RANK:
             main_score = scores[f"valid {raw.main_metric}"]
-            if not metrics[raw.main_metric].maximize: 
+            if maximize: 
                 main_score = -main_score
-            if main_score > best_main_score:
+            if main_score < best_main_score:
                 best_main_score = main_score
                 best_main_score_epoch = epoch
             else:
@@ -358,8 +358,15 @@ def objective(trial: Trial):
     else:
         return 0.0
 
-study = optuna.create_study(direction='maximize' if metrics[raw.main_metric].maximize else 'minimize')
+study = optuna.create_study(direction='minimize')
 study.optimize(objective, n_trials=args.n_trials)
 study.trials_dataframe().to_csv(f"{result_dir}/study.csv")
+
+if rank == MAIN_RANK:
+    best_trial = study.best_trial.number
+    df = pd.read_csv(f"{result_dir}/trials/{best_trial}/epochs/{rank}.csv")
+    best_epoch = np.argmin(df[f"valid {raw.main_metric}"].values
+            *(-1 if maximize else 1))
+    
 
 dist.destroy_process_group()
