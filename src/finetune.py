@@ -17,7 +17,7 @@ from .data.tokenizer import TokenEncodeDataset, VocEncoder, \
 from .data.protein import CoordFollowDataset
 from .utils.path import WORKDIR
 
-def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weight: float|None=None):
+def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
     logs = []
     logs.append(f"{split} data actual_size/total_size=")
 
@@ -63,11 +63,8 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weig
             smi = TokenizeDataset(smi, smiles_tokenizer)
             coord = ArrayTokenizeDataset(coord, mol_coord_tokenizer)
             sentence = ['[LIGAND]', smi, '[XYZ]', coord, '[END]']
-            weights = [None, 1.0, 0.0]
-            if score == 'none':
-                assert score_weight is None
-            else:
-                assert score_weight is not None
+            weights = [None, lig_weight, 0.0]
+            if score != 'none':
                 if score == 'cls':
                     score = RandomClassDataset(len(smi), args.seed+d_seed)
                     score = TokenizeDataset(score, BinaryClassTokenizer())
@@ -79,7 +76,7 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weig
                     raise ValueError
                 sentence += ['[SCORE]', score, '[END]']
                 weights += [score_weight, 0.0]
-                
+
             mol_data = SentenceDataset(*sentence)
             vocs |= mol_data.vocs()
             
@@ -107,7 +104,7 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], score_weig
 
             #### weight
             separates = {'[POCKET]', '[END]'}
-            separates2weight = { ('[POCKET]',): 1.0, ('[POCKET]', '[END]'): 0.0 }
+            separates2weight = { ('[POCKET]',): pocket_weight, ('[POCKET]', '[END]'): 0.0 }
             weight_data = RemoveLastDataset(TokenWeightDataset(pocket_data, separates, separates2weight))
 
         datas.append(data)

@@ -42,7 +42,7 @@ if args.seed is None:
 # data
 split2datas = {}
 for split in ['valid', 'train']:
-    datas, voc_encoder, data_names, data_logs = get_train_data(targs, split, 'reg' if args.reg else 'cls', args.score_weight)
+    datas, voc_encoder, data_names, data_logs = get_train_data(targs, split, 'reg' if args.reg else 'cls', score_weight=args.score_weight)
     logs += data_logs
     split2datas[split] = datas
 

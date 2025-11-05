@@ -250,7 +250,7 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
-def get_model(args: Namespace, voc_encoder: VocEncoder, init_state_path: str, device: torch.device):
+def get_model(args: Namespace, voc_encoder: VocEncoder, init_state_path: str|None, device: torch.device):
     
     if args.mamba:
         kwargs = {}
@@ -386,6 +386,85 @@ def get_optimizer_scheduler(model: nn.Module, max_opt: int,
         logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")
     return optimizer, scheduler_
 
+def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncoder, 
+        model: DistributedDataParallel, criterion: nn.Module, 
+        num_workers: int, is_starting: bool, sdp_kernel: str, gpu_size: float, prefix: str, check_data_dist: bool
+    ) -> tuple[list[float], list[float], Tensor, Tensor]:
+    
+    def collate(data_list: list[tuple[Tensor, Tensor]]):
+        batch = pad_sequence([data[0] for data in data_list],
+            batch_first=False, padding_value=voc_encoder.pad_token)
+        weight_batch = pad_sequence([data[1] for data in data_list],
+            batch_first=False, padding_value=0.0)
+        return batch, weight_batch
+    def get_gpuuse(batch_size: int, length: int):
+        if isinstance(model.module, Model):
+            return model.module.get_gpuuse(batch_size, length, True, sdp_kernel)
+        else:
+            return model.module.get_gpuuse(batch_size, length, True)
+
+    logger = getLogger('validate')
+    token_logger = getLogger('dexs.validate')
+    rank = dist.get_rank()
+    data_rank = get_process_ranks()[2]['valid']
+    device = next(model.parameters()).device
+
+    process_weights = []
+    process_losses = []
+    for i_data, data_name in enumerate(data_names):
+        logger.info(f"    Validating [{data_name}]", **NO_DUP)
+        ## Make Loader
+        if rank == data_rank:
+            os.environ['EPOCH'] = '0'
+            valid_loader = DataLoader[tuple[Tensor, Tensor]](datas[i_data], batch_size=None, shuffle=True if check_data_dist else False, num_workers=num_workers, pin_memory=True, prefetch_factor=10 if num_workers > 0 else None)
+            if is_starting and check_data_dist:
+                valid_loader = RevealIterator(valid_loader, f'valid[{data_name}]', logger)
+                valid_reveal_loader = valid_loader
+        else:
+            valid_loader = None
+        valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, gpu_size, device, math.inf, data_rank)
+
+        ## Accumulate losses
+        process_weight = torch.tensor(0.0, device=device, dtype=torch.float)
+        process_loss = torch.tensor(0.0, device=device, dtype=torch.float)
+        with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
+            for val_step, batch in enumerate(valid_loader):
+                if batch is None: continue
+
+                ### Verbosity
+                val_step_is_starting = val_step < 3
+                if check_data_dist:
+                    if val_step == 3 and rank == data_rank:
+                        valid_reveal_loader.enabled = False
+
+                ### Forward
+                token_batch, weight_batch = batch
+                input, target = token_batch[:-1], token_batch[1:]
+                loss = criterion(model(input), target)
+                
+                ### Log result
+                if is_starting and val_step_is_starting:
+                    log_batch(f"valid{prefix}[{data_name}]", logger, token_logger, target, 
+                            weight_batch, voc_encoder, val_step, check_data_dist, get_gpuuse)
+
+                ### Add
+                process_loss += (loss*weight_batch).sum()
+                process_weight += weight_batch.sum()
+
+        process_weight = process_weight.item()
+        process_loss = process_loss.item()
+        process_weights.append(process_weight)
+        process_losses.append(process_loss)
+        logger.debug(f"        loss={process_loss:3.03f} weight={process_weight:3.03f}")
+
+    ## reduce all weights & losses
+    total_weights = torch.tensor(process_weights, device=device)
+    total_losses = torch.tensor(process_losses, device=device)
+    dist.all_reduce(total_weights)
+    dist.all_reduce(total_losses)
+    return process_weights, process_losses, total_weights, total_losses
+
+
 def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
 
     result_dir = os.path.join(tname, 'results', args.studyname)
@@ -483,72 +562,21 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         # evaluate & save
         if opt == next_eval_opt:
             step_timer.start('evaluation')
-            valid_is_starting = len(val2mean_loss) <= 1
             
             # validation 
             logger.info(f"Validation at {opt=}...", **NO_DUP)
-            process_weights = []
-            process_losses = []
             if args.schedule_free: optimizer.eval()
-            for i_data, prefix in enumerate(data_names):
-                logger.info(f"    Validating [{prefix}]", **NO_DUP)
-                ## Make Loader
-                if rank == DATA_RANK['valid']:
-                    os.environ['EPOCH'] = '0'
-                    valid_loader = DataLoader[tuple[Tensor, Tensor]](valid_datas[i_data], batch_size=None, shuffle=True if check_data_dist else False, num_workers=args.num_workers, pin_memory=True, prefetch_factor=10 if args.num_workers > 0 else None)
-                    if valid_is_starting:
-                        if check_data_dist:
-                            valid_loader = RevealIterator(valid_loader, f'valid[{prefix}]', logger)
-                            valid_reveal_loader = valid_loader
-                else:
-                    valid_loader = None
-                valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, args.gpu_size, device, 100000 if valid_is_starting else math.inf, DATA_RANK['valid'])
-
-                ## Accumulate losses
-                process_weight = torch.tensor(0.0, device=device, dtype=torch.float)
-                process_loss = torch.tensor(0.0, device=device, dtype=torch.float)
-                with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
-                    for val_step, batch in enumerate(valid_loader):
-                        if batch is None: continue
-
-                        ### Verbosity
-                        val_step_is_starting = val_step < 3
-                        if check_data_dist:
-                            if val_step == 3 and rank == DATA_RANK['valid']:
-                                valid_reveal_loader.enabled = False
-
-                        ### Forward
-                        token_batch, weight_batch = batch
-                        input, target = token_batch[:-1], token_batch[1:]
-                        loss = criterion(model(input), target)
-                        
-                        ### Log result
-                        if valid_is_starting and val_step_is_starting:
-                            log_batch(f"valid[{opt}][{prefix}]", logger, token_logger, target, 
-                                    weight_batch, voc_encoder, val_step, check_data_dist, get_gpuuse)
-
-                        ### Add
-                        process_loss += (loss*weight_batch).sum()
-                        process_weight += weight_batch.sum()
-
-                process_weight = process_weight.item()
-                process_loss = process_loss.item()
-                process_weights.append(process_weight)
-                process_losses.append(process_loss)
-                logger.debug(f"        loss={process_loss:3.03f} weight={process_weight:3.03f}")
-            if args.schedule_free: optimizer.train()
-
-            ## reduce all weights & losses
-            total_weights = torch.tensor(process_weights, device=device)
-            total_losses = torch.tensor(process_losses, device=device)
-            dist.all_reduce(total_weights)
-            dist.all_reduce(total_losses)
+            process_weights, process_losses, total_weights, total_losses = validate(valid_datas, data_names, voc_encoder,
+                model, criterion, 
+                args.num_workers, len(val2mean_loss) <= 1, args.sdp_kernel, args.gpu_size, f"[{opt}]", check_data_dist, )
             mean_losses = total_losses / total_weights
             estimated_train_weights = total_weights * valid2train_r
             mean_loss = ((mean_losses*estimated_train_weights).sum() / estimated_train_weights.sum()).item()
+
             if 'early_stop' in args.check:
                 mean_loss = [0.7, 0.1, 0.5, 0.8, 0.2, 0.6][len(val2mean_loss) % 6]
             logger.info(f"    {mean_loss=}", **NO_DUP)
+            if args.schedule_free: optimizer.train()
 
             ## add & record results
             val_recorder.record(opt=opt, mean_loss=mean_loss,  
@@ -638,7 +666,6 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 if rank == SAVE_RANK and not nan_grad_step_saved:
                     nan_dir = f"{result_dir}/nan_steps/{step}/{rank}"
                     os.makedirs(nan_dir, exist_ok=True)
-                    torch.save(batch.detach().cpu(), f"{nan_dir}/batch.pt")
                     torch.save(model.state_dict(), f"{nan_dir}/model.pth")
                     nan_grad_step_saved = True
                 

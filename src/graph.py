@@ -11,7 +11,8 @@ logger = get_logger(stream=True)
 import matplotlib.pyplot as plt
 from tools.graph import get_scatter_style, COLORS2, tightargs, get_grid
 
-def compare_loss(fname, snames, slabels, script):
+def compare_loss(fname, snames, slabels=None, script='training'):
+    if slabels is None: slabels = snames
     fig, ax = plt.subplots(1,1,figsize=(6,4))
     for si, sname in enumerate(snames):
         path = f"/workspace/cplm/{script}/results/{sname}/opts/0.csv"
