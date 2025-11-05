@@ -59,7 +59,7 @@ def get_early_stop_opt(result_dir: str, patience_val: int) -> int:
     losses = df['mean_loss'].values
     for val in range(len(losses)):
         if losses[val] <= np.min(losses[val:val+patience_val+1]):
-            return df['opt'].values[val]
+            return int(df['opt'].values[val])
 
 def _sync_result_dir(result_dir, subdirs):
     main_rank = get_process_ranks()[0]
