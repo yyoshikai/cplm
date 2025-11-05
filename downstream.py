@@ -44,6 +44,7 @@ parser.add_argument('--seed', type=int)
 parser.add_argument('--n-trials', type=int, default=100)
 ### param range
 parser.add_argument('--batch-sizes', type=int, nargs='+', default=[32, 64, 128, 256])
+parser.add_argument('--local-batch-size', type=int, default=128)
 parser.add_argument('--lrs', type=float, nargs='+', default=[5e-5, 8e-5, 1e-4, 4e-4, 5e-4])
 parser.add_argument('--n-epochs', type=int, nargs='+', default=[40, 60, 80, 100])
 parser.add_argument('--warmup-ratios', type=float, nargs='+', default=[0.0, 0.06, 0.1])
@@ -243,9 +244,13 @@ def objective(trial: Trial):
                 log_batch(prefix, logger, token_logger, target_batch, weight_batch, voc_encoder, step, False, gpuuse_getter)
 
             ### forward & backward
-            with torch.autocast('cuda', torch.bfloat16):
-                loss = (criterion(model(input_batch), target_batch)*weight_batch).sum()
-            loss.backward()
+            for start in range(0, trargs.batch_size, args.local_batch_size):
+                logger.info(f"{start=}")
+                with torch.autocast('cuda', torch.bfloat16):
+                    loss = (criterion(model(input_batch[:,start:start+args.local_batch_size]), 
+                        target_batch[:,start:start+args.local_batch_size])
+                        *weight_batch[:,start:start+args.local_batch_size]).sum()
+                loss.backward()
             optimizer.step()
 
             ### log
@@ -258,6 +263,7 @@ def objective(trial: Trial):
         ## validation epoch
         logger.debug(f"{prefix} validation started.")
         model.eval()
+        os.environ['EPOCH'] = '0'
         with torch.inference_mode():
             scores = {}
             for split in ['train', 'valid', 'test']:
