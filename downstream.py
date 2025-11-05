@@ -273,7 +273,6 @@ def objective(trial: Trial):
                 n_free_match = 0
                 n_gen = 0
                 for step, batch in enumerate(valid_loaders[split]):
-                    logger.info(f"{prefix} Valid step[{step}]")
                     if batch is None: continue
                     token_batch, target_batch = batch
                     L, B = token_batch.shape
