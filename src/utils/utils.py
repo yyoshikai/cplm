@@ -9,7 +9,6 @@ try:
     import torch
 except ImportError:
     torch = None
-from .logger import get_logger
 
 # others
 def load_gninatypes(path, struct_fmt='fffi'):
@@ -32,7 +31,7 @@ def remove_module(state: dict):
     return new_state
 
 class CompressedArray:
-    logger = get_logger(f'{__module__}.{__qualname__}')
+    logger = getLogger(f'{__module__}.{__qualname__}')
     def __init__(self, array: np.ndarray):
         self.logger.info("Compressing array...")
         self.points = np.where(array[1:] != array[:-1])[0]+1

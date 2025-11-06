@@ -2,6 +2,7 @@ import sys, os, logging
 from logging import Logger, Formatter, Handler, StreamHandler, FileHandler, Filter, LogRecord, getLogger
 from collections.abc import Callable
 from tqdm import tqdm as _tqdm
+from .utils import get_git_hash
 
 DEFAULT_FMT = "[{asctime}][{name}][{levelname}]{message}"
 DEFAULT_DATEFMT = "%y%m%d %H:%M:%S"
@@ -75,6 +76,5 @@ def add_stream_handler(logger: Logger, level=logging.INFO, tqdm: bool=True,
 
     return handler
 
-from .utils import get_git_hash
 def log_git_hash(logger):
     logger.info(f"git hash={get_git_hash()}")
