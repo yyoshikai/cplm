@@ -1,16 +1,17 @@
 import os
 import queue
+import itertools as itr
 import multiprocessing as mp
 from functools import lru_cache
 from typing import TypeVar, Generic, Optional
 from collections.abc import Callable, Iterable
-from logging import getLogger, Logger
+from logging import getLogger
 
 import numpy as np
 import torch
 import torch.utils.data as torch_data
 from torch import Tensor
-from torch.utils.data import Dataset, get_worker_info
+from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -54,7 +55,6 @@ class StackDataset(torch_data.StackDataset[T_co]):
             return f"StackDataset({', '.join([str(dataset) for dataset in self.datasets])})"
         else:
             return f"StackDataset({', '.join([f'{key}={value}' for key, value in self.datasets.items()])})"
-
 
 # Indexing
 class RepeatDataset(Dataset):
@@ -235,3 +235,14 @@ class RevealIterator(Iterable[T]):
 def get_rng(base_seed, idx) -> np.random.Generator:
     epoch = int(os.environ.get('EPOCH', 0))
     return np.random.default_rng(base_seed+epoch+idx)
+
+class ReadDataset(IterableDataset[str]):
+    def __init__(self, path: str):
+        self.path = path
+    def __iter__(self):
+        worker_info = get_worker_info()
+        with open(self.path) as f:
+            if worker_info is not None:
+                f = itr.islice(f, worker_info.id, None, worker_info.num_workers)
+            for line in f:
+                yield line.rstrip()

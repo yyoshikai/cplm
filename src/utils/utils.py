@@ -143,7 +143,7 @@ def git_commit() -> bool:
     p = subprocess.run('git add . && git commit -m checkpoint_for_training', shell=True, capture_output=True)
     return p.returncode == 0 # 1=nothing to commit, working tree clean
 
-def git_get_hash() -> str:
+def get_git_hash() -> str:
     p = subprocess.run('git rev-parse --short HEAD', shell=True, capture_output=True)
     return p.stdout.decode().strip()
 

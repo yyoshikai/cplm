@@ -27,7 +27,7 @@ from .data import RevealIterator
 from .data.tokenizer import VocEncoder
 from .data.collator import DDPStringCollateLoader, InfiniteLoader
 from .model import Model, MambaModel
-from .utils import git_commit, git_get_hash, reveal_data, should_show
+from .utils import git_commit, get_git_hash, reveal_data, should_show
 from .utils.logger import add_stream_handler, add_file_handler
 from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
@@ -318,7 +318,7 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
         else:
             committed = git_commit()
         logger.debug('git committed.' if committed else 'git not committed.')
-        logger.info(f"git hash={git_get_hash()}")
+        logger.info(f"git hash={get_git_hash()}")
     
     # Fix seed
     ddp_set_random_seed(args.seed)
