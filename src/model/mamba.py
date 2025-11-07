@@ -18,6 +18,7 @@ from transformers.generation.streamers import BaseStreamer
 from .transformer import save_vocs, align_embedding
 from ..utils.memory import get_mems
 
+
 class MambaModel(nn.Module):
     """
     Contents in ./gpuuse are from /workspace/resource_test/240921_transformer_size
@@ -67,6 +68,123 @@ class MambaModel(nn.Module):
         else:
             return x
 
+    @torch.no_grad()
+    def generate1(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm: bool=True, do_sample: bool=True):
+        """
+        Parameters
+        ----------
+        context: torch.Tensor[L, B](long)
+        
+        
+        """
+        
+        assert self.model.config.eos_token_id == self.vocs.index(end_voc)
+        assert self.model.config.pad_token_id == pad_token
+
+        max_new_tokens = max_len
+        
+        generation_config = copy.deepcopy(self.model.generation_config)
+        generation_config.update(**{'max_new_tokens': max_new_tokens, 'do_sample': do_sample})
+
+        pad_token_id = generation_config.pad_token_id
+        context = context.T # [B, L]
+        batch_size, context_len = context.shape
+        if pad_token_id in context:
+            start_len = torch.where(torch.any(context == pad_token_id, dim=0))[0][0].item()
+        else:
+            start_len = context_len
+        input_ids = context[:, :start_len]
+
+        # Convert special tokens to tensors
+        device = input_ids.device
+        def _tensor_or_none(token, device=None):
+            return token if token is None else torch.tensor(token, device=device, dtype=torch.long)
+        generation_config._bos_token_tensor = _tensor_or_none(generation_config.bos_token_id, device=device)
+        generation_config._eos_token_tensor = _tensor_or_none(generation_config.eos_token_id, device=device).unsqueeze(0)
+        generation_config._pad_token_tensor = _tensor_or_none(generation_config.pad_token_id, device=device)
+        generation_config._decoder_start_token_tensor = _tensor_or_none(generation_config.decoder_start_token_id, device=device)
+
+        attention_mask = torch.ones(input_ids.shape[:2], dtype=torch.long, device=input_ids.device)
+        generation_config.max_length = generation_config.max_new_tokens + context.shape[1]
+        streamer=ProgressStreamer("", generation_config.max_length-1, self) if tqdm else None
+        if streamer is not None:
+            streamer.put(input_ids.cpu())
+        
+        # ---- sample ------
+
+        # init values
+        pad_token_id = generation_config._pad_token_tensor
+        do_sample = generation_config.do_sample
+
+        # keep track of which sequences are already finished
+        batch_size, cur_len = input_ids.shape[:2]
+        this_peer_finished = False
+        unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
+
+        cache_position = torch.ones(cur_len, dtype=torch.int64, device=device).cumsum(0) - 1
+        cache_params = None
+
+        while not this_peer_finished:
+            # prepare model inputs
+            model_inputs = self.prepare_inputs_for_generation(input_ids, 
+                cache_params, cache_position, attention_mask)
+            outputs = self.model(**model_inputs, use_cache=generation_config.use_cache, return_dict=True)
+            
+            cache_params = outputs.get("cache_params", None)
+            cache_position = cache_position[-1:] + 1
+            
+            attention_mask = torch.cat([attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1)
+            
+            next_token_logits = outputs.logits[:, -1, :].to(copy=True, dtype=torch.float32, device=input_ids.device)
+            top_k = min(generation_config.top_k, next_token_logits.size(-1))  # Safety check
+            indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
+            next_token_scores = next_token_logits.masked_fill(indices_to_remove, -float("Inf"))
+
+            # token selection
+            if do_sample:
+                probs = nn.functional.softmax(next_token_scores, dim=-1)
+                next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+            else:
+                next_tokens = torch.argmax(next_token_scores, dim=-1)
+            if cur_len < context_len:
+                next_prompt = context[:, cur_len]
+                next_tokens[next_prompt != pad_token_id] = next_prompt[next_prompt != pad_token_id]
+
+            next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
+            input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+            if streamer is not None:
+                streamer.put(next_tokens.cpu())
+
+            is_done = input_ids.shape[1] >= generation_config.max_length # 251018 多分合ってる
+            if cur_len < context_len:
+                end_token_generated = torch.isin(input_ids[:, -1], generation_config._eos_token_tensor) & (next_prompt == pad_token_id)
+            else:
+                end_token_generated = torch.isin(input_ids[:, -1], generation_config._eos_token_tensor)
+            
+            unfinished_sequences = unfinished_sequences & ~(
+                end_token_generated | torch.full((input_ids.shape[0],), is_done, device=input_ids.device, dtype=torch.bool)
+            )
+
+            this_peer_finished = unfinished_sequences.max() == 0
+            cur_len += 1
+
+            del outputs
+        if streamer is not None:
+            streamer.end()
+
+        # truncate
+        context_sizes = (context != pad_token_id).sum(dim=1)
+        outputs = []
+        eos_token_id = generation_config.eos_token_id
+        for i in range(batch_size):
+            output = input_ids[i]
+            output = output[context_sizes[i]:]
+            output = output[:max_len]
+            if eos_token_id in output:
+                output = output[:torch.where(output == eos_token_id)[0][0]+1]
+            outputs.append(output)
+        return outputs
+
     @torch.no_grad()    
     def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm: bool=True, do_sample: bool=True):
         """
@@ -75,17 +193,24 @@ class MambaModel(nn.Module):
         assert self.model.config.eos_token_id == self.vocs.index(end_voc)
         assert self.model.config.pad_token_id == pad_token
         Lc, B = context.shape
+        context = context.T # [B, L]
+
+        device = next(self.parameters()).device
+        self.logger.info(f"GPU[pred]={self.get_gpuuse(B, Lc, False)/2**30:.03f}GB")
+        self.logger.info(f"{Lc=}")
+        torch.cuda.reset_peak_memory_stats(device)
 
         # Left to right padding
         is_pad = (context != pad_token).to(torch.int)
         if torch.any(is_pad[:-1] > is_pad[1:]):
             self.logger.warning(f"context is modified to left-padding.")
-            c_revs = list(context.flip(0).T) # [B][L]
+            c_revs = list(context.flip(1)) # [B][L]
             c_revs = [c[c != pad_token] for c in c_revs]
             context_rev = pad_sequence(c_revs, padding_value=pad_token, batch_first=True) # [B, L]
             context = context_rev.flip(1)
         
-        outputs = self.model.generate(context, do_sample=do_sample, max_new_tokens=max_len) # [B, L]
+        streamer = ProgressStreamer('tqdm', max_len, self) if tqdm else None
+        outputs = self.model.generate(context, do_sample=do_sample, max_new_tokens=max_len, streamer=streamer) # [B, L]
         generateds = outputs[:, Lc:]
         
         # truncate
@@ -188,16 +313,20 @@ class MambaModel(nn.Module):
         return max_gpuuse
 
 class ProgressStreamer(BaseStreamer):
-    def __init__(self, name, max_len, model):
+    def __init__(self, name, max_len, model: MambaModel):
         self.pbar = tqdm(total=max_len, desc=name, miniters=1)
         self.model = model
+        self.device = next(self.model.parameters()).device
 
     def put(self, value: torch.Tensor):
-        l = value.shape[1] if value.dim() == 2 else 1
-        mem = psutil.virtual_memory()
-        GB = 2**30
-        self.pbar.set_postfix_str(f"mem={mem.used/GB:.03f}/{mem.total/GB:.03f}GB", refresh=False)
-        self.pbar.update(l)
+        if value.dim() == 1:
+            mem = psutil.virtual_memory()
+
+            used = torch.cuda.memory_allocated(self.device)
+            used_max = torch.cuda.max_memory_allocated(self.device)
+            GB = 2**30
+            self.pbar.set_postfix_str(f"CPU mem:{mem.used/GB:.02f}/{mem.total/GB:.02f}GB, GPU mem: used={used/GB:.02f}, max={used_max/GB:.02f}", refresh=False)
+            self.pbar.update(1)
         
     def end(self):
         pass

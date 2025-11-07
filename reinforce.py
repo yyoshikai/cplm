@@ -29,6 +29,7 @@ from src.evaluate import eval_vina, eval_qvina3
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks, log_batch
 from src.model import Model
 from src.finetune import get_finetune_data
+from src.data.collator import solve_increasing_fn_left
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 # arguments
@@ -76,6 +77,7 @@ parser.add_argument('--num-score-workers', type=int, default=1)
 parser.add_argument('--cpu', type=int)
 parser.add_argument('--reset-nan-grad', action='store_true')
 parser.add_argument('--gc', action='store_true')
+parser.add_argument('--gpu-size-gb', type=float, required=True)
 ## verbosity
 parser.add_argument('--tqdm-generate', action='store_true')
 parser.add_argument('--record-opt', type=int)
@@ -96,6 +98,7 @@ if args.record_opt is None:
     args.record_opt = 1 if args.test else 500
 if args.tokenizer_log_interval is None:
     args.tokenizer_log_interval = 10000 if args.test else int(1e7)
+args.gpu_size = args.gpu_size_gb * (2**30)
 
 logs = []
 
@@ -307,8 +310,7 @@ for step in step_timer:
 
         out_batch = pad_sequence([torch.cat([prompt.to(device), output]) for prompt, output in zip(prompt_tokens, outputs)], batch_first, padding_value=voc_encoder.pad_token) # [L, B]
         Lo, B = out_batch.shape
-        dtype = torch.float
-        weight = torch.zeros((Lo-1, B), device=device, dtype=dtype) # [Lo-1, B]
+        weight = torch.zeros((Lo-1, B), device=device, dtype=torch.float) # [Lo-1, B]
         for b, (prompt_size, output) in enumerate(zip(prompt_sizes, outputs)):
             weight[prompt_size-1:prompt_size+len(output)-1, b] = 1.0
         size_recorder.record(**{f'prompt {b}': len(prompt) for b, prompt in enumerate(prompt_tokens)}, 
@@ -430,37 +432,47 @@ for step in step_timer:
             logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
         # Forward Get prob & reward loss
-        logger.debug(f"step[{step}] forward started.")
-        step_timer.start('forward')
+        logger.debug(f"step[{step}] forward & backward started.")
+        step_timer.start('forward_backward')
         model.train()
-        with (nullcontext() if args.all_autocast else torch.autocast('cuda', torch.bfloat16)), \
-                sdpa_kernel(SDP_KERNEL):
-            with torch.inference_mode():
-                init_logits = init_model(out_batch[:-1]) # [L, B, N]
-                init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
-            logits = model(out_batch[:-1]) # [Lo-1, B, T]
-            if args.use_categorical:
-                cat = Categorical(logits=logits) # ~[Lo-1, B]
-                log_probs = cat.log_prob(out_batch[1:]) # [Lo-1, B]
-            else:
-                log_probs_all = F.log_softmax(logits, dim=-1) # [Lo-1, B, N]
-                log_probs = torch.gather(log_probs_all, dim=-1, index=out_batch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
-            reward_loss = torch.sum(-scores*(log_probs*weight).sum(dim=0)/weight.sum(dim=0))
+        La, B = out_batch.shape
+        mbatch_size = solve_increasing_fn_left(lambda bsz: get_gpuuse(bsz, La)-args.gpu_size, 16)
+        if mbatch_size == 0:
+            raise ValueError(f"Input was too large and {mbatch_size=}")
+        if is_starting:
+            logger.info(f"{mbatch_size=}")
+        reward_loss = 0
+        kl_loss = 0
+        with model.join():
+            for mbatch_start in range(0, B, mbatch_size):
+                mslice = slice(mbatch_start, mbatch_start+mbatch_size)
+                out_mbatch = out_batch[:, mslice]
+                weight_mbatch = weight[:, mslice]
+                scores_mbatch = scores[mslice]
+                with (nullcontext() if args.all_autocast else torch.autocast('cuda', torch.bfloat16)), sdpa_kernel(SDP_KERNEL):
+                    with torch.inference_mode():
+                        init_logits = init_model(out_mbatch[:-1]) # [L, B, N]
+                        init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
+                    logits = model(out_mbatch[:-1]) # [Lo-1, B, T]
+                    if args.use_categorical:
+                        cat = Categorical(logits=logits) # ~[Lo-1, B]
+                        log_probs = cat.log_prob(out_mbatch[1:]) # [Lo-1, B]
+                    else:
+                        log_probs_all = F.log_softmax(logits, dim=-1) # [Lo-1, B, N]
+                        log_probs = torch.gather(log_probs_all, dim=-1, index=out_mbatch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
+                    reward_loss_mbatch = torch.sum(-scores_mbatch*(log_probs*weight_mbatch).sum(dim=0)/weight_mbatch.sum(dim=0))
 
-            ## KL loss
-            log_probs_all = F.log_softmax(logits, dim=-1)
-            kl_loss = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
-                log_target=True) # [Lo-1, B, N]
-            kl_loss = kl_loss.sum(dim=-1) # [Lo-1, B]
-            kl_loss = torch.sum(kl_loss*weight)
-            
-            loss = (reward_loss + kl_loss * args.alpha) * loss_scale
-        torch.cuda.synchronize()
-
-        # Backward
-        logger.debug(f"step[{step}] backward started.")
-        step_timer.start('backward')
-        loss.backward()
+                    ## KL loss
+                    log_probs_all = F.log_softmax(logits, dim=-1)
+                    kl_loss_mbatch = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
+                        log_target=True) # [Lo-1, B, N]
+                    kl_loss_mbatch = kl_loss_mbatch.sum(dim=-1) # [Lo-1, B]
+                    kl_loss_mbatch = torch.sum(kl_loss_mbatch*weight_mbatch)
+                    
+                    loss = (reward_loss_mbatch + kl_loss_mbatch * args.alpha) * loss_scale
+                loss.backward()
+                reward_loss += reward_loss_mbatch.item()
+                kl_loss += kl_loss_mbatch.item()
 
     # check nan
     step_timer.start('check_nan')
@@ -496,7 +508,7 @@ for step in step_timer:
     step += 1
     step_recorder.record(batch_size=B, max_len=L, lr=scheduler.get_last_lr()[0], 
             memory=psutil.virtual_memory().used/(2**30), 
-            reward_loss=reward_loss.item(), kl_loss=kl_loss.item())
+            reward_loss=reward_loss, kl_loss=kl_loss)
     scheduler.step()
     
     if step % args.record_opt == 0:

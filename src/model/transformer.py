@@ -507,3 +507,4 @@ class Model(nn.Module):
         if capture_rate:
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16=bf16, kernel=kernel)
         return max_gpuuse
+
