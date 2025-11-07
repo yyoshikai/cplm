@@ -85,7 +85,7 @@ class MambaModel(nn.Module):
             context_rev = pad_sequence(c_revs, padding_value=pad_token, batch_first=True) # [B, L]
             context = context_rev.flip(1)
         
-        outputs = self.model.generate(context, do_sample=True, max_new_tokens=max_len) # [B, L]
+        outputs = self.model.generate(context, do_sample=do_sample, max_new_tokens=max_len) # [B, L]
         generateds = outputs[:, Lc:]
         
         # truncate
