@@ -21,7 +21,7 @@ from torch.distributions import Categorical
 
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
-from src.utils import IterateRecorder, git_get_hash
+from src.utils import IterateRecorder, get_git_hash
 from src.utils.path import cleardir
 from src.utils.time import TimerTqdm
 from src.evaluate import parse_mol_tokens, parse_mol
@@ -125,7 +125,7 @@ if args.finetune_opt is None:
         args.finetune_opt = fargs.max_opt
     logs.append(f"finetune_opt was set to {args.finetune_opt}")
 else:
-    assert args.finetune_patience_val == 0
+    assert args.finetune_patience_val is None
 
 batch_first = False
 log_sample_step = 3
@@ -185,7 +185,7 @@ RDLogger.DisableLog("rdApp.*")
 ddp_size = dist.get_world_size()
 
 if rank == MAIN_RANK:
-    logger.info(f"git hash={git_get_hash()}")
+    logger.info(f"git hash={get_git_hash()}")
 
 ## SDP kernel
 SDP_KERNEL = {'FLASH': SDPBackend.FLASH_ATTENTION, 'EFFICIENT': SDPBackend.EFFICIENT_ATTENTION}[sdp_kernel]
@@ -207,7 +207,8 @@ def get_gpuuse(batch_size: int, length: int):
         return model.module.get_gpuuse(batch_size, length, True, sdp_kernel)
     else:
         return model.module.get_gpuuse(batch_size, length, True)
-logger.info(f"Estimated GPU use={get_gpuuse(args.batch_size, args.max_len+args.max_prompt_len)/2**30:.03f}")
+if args.max_prompt_len is not None:
+    logger.info(f"Estimated GPU use={get_gpuuse(args.batch_size, args.max_len+args.max_prompt_len)/2**30:.03f}")
 
 # DataLoader
 class ReinforceIter:

@@ -36,6 +36,11 @@ class VocEncoder:
     @property
     def voc_size(self) -> int:
         return len(self.i2voc)
+    
+    @classmethod
+    def from_i2voc(cls, vocs: list[str]) -> 'VocEncoder':
+        assert vocs[0] == '[PAD]'
+        return VocEncoder(vocs[1:])
 
 class TokenEncodeDataset(Dataset[Tensor]):
     logger = getLogger(f"{__module__}.{__qualname__}")
@@ -220,8 +225,6 @@ class BinaryClassTokenizer(Tokenizer):
         return ['True'] if bool(x) else ['False']
     def vocs(self):
         return {'True', 'False'}
-
-
 
 class TokenizeDataset(WrapDataset[list[str]]):
     def __init__(self, dataset: Dataset, tokenizer: Tokenizer):

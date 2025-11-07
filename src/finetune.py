@@ -21,7 +21,7 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_wei
     logs = []
     logs.append(f"{split} data actual_size/total_size=")
 
-    smiles_tokenizer = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines())
+    smiles_tokenizer = StringTokenizer(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines())
     mol_coord_tokenizer = FloatTokenizer('ligand', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
     pocket_coord_tokenizer = FloatTokenizer('pocket', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
     pocket_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)

@@ -68,6 +68,13 @@ class MambaModel(nn.Module):
     
     @torch.no_grad()
     def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm: bool=True, do_sample: bool=True):
+        """
+        Parameters
+        ----------
+        context: torch.Tensor[L, B](long)
+        
+        
+        """
         
         assert self.model.config.eos_token_id == self.vocs.index(end_voc)
         assert self.model.config.pad_token_id == pad_token

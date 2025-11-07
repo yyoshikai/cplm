@@ -415,6 +415,7 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
         logger.info(f"    Validating [{data_name}]", **NO_DUP)
         ## Make Loader
         if rank == data_rank:
+            cur_epoch = os.environ['EPOCH']
             os.environ['EPOCH'] = '0'
             valid_loader = DataLoader[tuple[Tensor, Tensor]](datas[i_data], batch_size=None, shuffle=True if check_data_dist else False, num_workers=num_workers, pin_memory=True, prefetch_factor=10 if num_workers > 0 else None)
             if is_starting and check_data_dist:
@@ -456,7 +457,8 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
         process_weights.append(process_weight)
         process_losses.append(process_loss)
         logger.debug(f"        loss={process_loss:3.03f} weight={process_weight:3.03f}")
-
+        if rank == data_rank:
+            os.environ['EPOCH'] = cur_epoch
     ## reduce all weights & losses
     total_weights = torch.tensor(process_weights, device=device)
     total_losses = torch.tensor(process_losses, device=device)
