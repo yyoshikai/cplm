@@ -11,11 +11,10 @@ import pandas as pd
 import torch.nn as nn
 import torch
 from torch import Tensor
-from torch.nn.utils.rnn import pad_sequence
 from transformers.models.mamba.configuration_mamba import MambaConfig
 from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
 from transformers.generation.streamers import BaseStreamer
-from .transformer import save_vocs, align_embedding
+from .transformer import save_vocs, align_embedding, left_to_right_padding
 from ..utils.memory import get_mems
 
 
@@ -193,6 +192,7 @@ class MambaModel(nn.Module):
         assert self.model.config.eos_token_id == self.vocs.index(end_voc)
         assert self.model.config.pad_token_id == pad_token
         Lc, B = context.shape
+        context = left_to_right_padding(context, pad_token)
         context = context.T # [B, L]
 
         device = next(self.parameters()).device
@@ -201,13 +201,6 @@ class MambaModel(nn.Module):
         torch.cuda.reset_peak_memory_stats(device)
 
         # Left to right padding
-        is_pad = (context != pad_token).to(torch.int)
-        if torch.any(is_pad[:-1] > is_pad[1:]):
-            self.logger.warning(f"context is modified to left-padding.")
-            c_revs = list(context.flip(1)) # [B][L]
-            c_revs = [c[c != pad_token] for c in c_revs]
-            context_rev = pad_sequence(c_revs, padding_value=pad_token, batch_first=True) # [B, L]
-            context = context_rev.flip(1)
         
         streamer = ProgressStreamer('tqdm', max_len, self) if tqdm else None
         outputs = self.model.generate(context, do_sample=do_sample, max_new_tokens=max_len, streamer=streamer) # [B, L]

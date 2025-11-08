@@ -1,7 +1,6 @@
 import logging
 from typing import Optional, Union, Callable
 from collections import defaultdict
-from collections.abc import Iterable
 from functools import partial, lru_cache
 from tqdm import tqdm as _tqdm
 from pathlib import Path
@@ -13,59 +12,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torch.nn.utils.rnn import pad_sequence
 from torch.nn.modules.transformer import _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
 from torch.nn.parallel import DistributedDataParallel
-
 from ..utils.memory import get_mems
 
-def multi_head_attention_forward(
-    query: Tensor,
-    num_heads: int,
-    in_proj_weight: Optional[Tensor],
-    in_proj_bias: Optional[Tensor],
-    dropout_p: float,
-    out_proj_weight: Tensor,
-    out_proj_bias: Optional[Tensor],
-    sin: Tensor, cos: Tensor,
-    training: bool = True,
-    attn_mask: Tensor = None,
-) -> Tensor:
-    
-    # set up shape vars
-    tgt_len, bsz, embed_dim = query.shape
-    src_len, _, _ = query.shape
-    head_dim = embed_dim // num_heads
-
-    proj = F.linear(query, in_proj_weight, in_proj_bias)
-    proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
-    q, k, v = proj[0], proj[1], proj[2]
-    attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
-
-    q = q.view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
-    k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
-    v = v.view(v.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
-
-    q = q.view(bsz, num_heads, tgt_len, head_dim)
-    k = k.view(bsz, num_heads, src_len, head_dim)
-    v = v.view(bsz, num_heads, src_len, head_dim)
-
-    sin = sin[:src_len]
-    cos = cos[:src_len]
-    sin_pos = torch.stack([sin, sin], dim=-1).reshape(src_len, head_dim)
-    cos_pos = torch.stack([cos, cos], dim=-1).reshape(src_len, head_dim)
-
-    rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
-    q = q * cos_pos + rotate_half_q * sin_pos
-    rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
-    k = k * cos_pos + rotate_half_k * sin_pos
-    attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0, is_causal=True)
-    attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
-
-    attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
-    attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
-    return attn_output
+logger = logging.getLogger(__name__)
 
 class MultiheadAttention(nn.Module):
 
@@ -87,14 +41,61 @@ class MultiheadAttention(nn.Module):
         nn.init.constant_(self.in_proj_bias, 0.)
         nn.init.constant_(self.out_proj.bias, 0.)
         
-    def forward(self, query: Tensor, attn_mask: Tensor, sin, cos) -> tuple[Tensor, Optional[Tensor]]:
-        return multi_head_attention_forward(
-            query, self.num_heads,
-            self.in_proj_weight, self.in_proj_bias,
-            self.dropout, self.out_proj.weight, self.out_proj.bias,
-            sin, cos,
-            training=self.training,
-            attn_mask=attn_mask)
+        self.n_forward = 0
+
+    def forward(self, x: Tensor, sin: Tensor, cos: Tensor, is_causal: bool=True, src_mask: Tensor|None=None, cache: dict[str, Tensor]|None=None) -> tuple[Tensor, Optional[Tensor]]:
+        """
+        x: Tensor[L, B, D](float)
+        src_mask: Tensor expandable to [B, H, Lx, Lc]
+        sin: Tensor[L, Dh](float) or [B, L, Dh]
+        cos: Tensor[L, Dh](float) or [B, L, Dh]
+        cache:
+            'k': Tensor[B, H, L, Dh]
+            'v': Tensor[B, H, L, Dh] 
+
+        """
+        self.n_forward += 1
+
+        # set up shape vars
+        tgt_len, bsz, embed_dim = x.shape
+        src_len, _, _ = x.shape
+        head_dim = embed_dim // self.num_heads
+
+        proj = F.linear(x, self.in_proj_weight, self.in_proj_bias)
+        proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
+        q, k, v = proj[0], proj[1], proj[2]
+
+        q = q.view(tgt_len, bsz * self.num_heads, head_dim).transpose(0, 1)
+        k = k.view(k.shape[0], bsz * self.num_heads, head_dim).transpose(0, 1)
+        v = v.view(v.shape[0], bsz * self.num_heads, head_dim).transpose(0, 1)
+
+        q = q.view(bsz, self.num_heads, tgt_len, head_dim)
+        k = k.view(bsz, self.num_heads, src_len, head_dim)
+        v = v.view(bsz, self.num_heads, src_len, head_dim)
+            
+        sin_pos = torch.stack([sin, sin], dim=-1).reshape(-1, 1, src_len, head_dim)
+        cos_pos = torch.stack([cos, cos], dim=-1).reshape(-1, 1, src_len, head_dim)
+
+        rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
+        q = q * cos_pos + rotate_half_q * sin_pos
+        rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
+        k = k * cos_pos + rotate_half_k * sin_pos
+
+        if cache is not None:
+            k = torch.cat([cache['k'], k], dim=2)
+            v = torch.cat([cache['v'], v], dim=2)
+        
+        if self.n_forward < 0:
+            print(f"{sin=}")
+            print(f"{cos=}")
+            print(f"{src_mask=}")
+        cache = {'k': k, 'v': v}
+        attn_output = scaled_dot_product_attention(q, k, v, dropout_p = self.dropout if self.training else 0.0, attn_mask=src_mask, is_causal=is_causal)
+        attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
+
+        attn_output = F.linear(attn_output, self.out_proj.weight, self.out_proj.bias)
+        attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+        return attn_output, cache
 
 class TransformerEncoderLayer(nn.Module):
     __constants__ = ['norm_first']
@@ -123,92 +124,26 @@ class TransformerEncoderLayer(nn.Module):
             activation = _get_activation_fn(activation)
         self.activation = activation
 
-    def forward(self, src: Tensor, src_mask: Tensor, sin, cos) -> Tensor:
+    def forward(self, src: Tensor, sin: Tensor, cos: Tensor, is_causal: bool, src_mask: Tensor|None=None, cache: dict[str, Tensor]|None=None) -> Tensor:
 
         x = src
         if self.norm_first:
-            x = x + self._sa_block(self.norm1(x), src_mask, sin, cos)
+            d_x, cache = self._sa_block(self.norm1(x), sin, cos, is_causal, src_mask, cache)
+            x = x + d_x
             x = x + self._ff_block(self.norm2(x))
         else:
-            x = self.norm1(x + self._sa_block(x, src_mask, sin, cos))
+            d_x, cache = self._sa_block(x, sin, cos, is_causal, src_mask, cache)
+            x = self.norm1(x + d_x)
             x = self.norm2(x + self._ff_block(x))
-        return x
+        return x, cache
 
-    def _sa_block(self, x: Tensor, attn_mask: Tensor, sin, cos) -> Tensor:
-        x = self.self_attn(x, attn_mask=attn_mask, sin=sin, cos=cos)
-        return self.dropout1(x)
+    def _sa_block(self, x: Tensor, sin, cos, is_causal, src_mask, cache) -> Tensor:
+        x, cache = self.self_attn(x, sin, cos, is_causal, src_mask, cache)
+        return self.dropout1(x), cache
 
     def _ff_block(self, x: Tensor) -> Tensor:
         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         return self.dropout2(x)
-    
-    def generate_init_cache(self, batch_size, device: torch.device=None) -> dict[str, torch.Tensor]:
-        if device is None: device = self.linear2.weight.device
-        return {
-            'k': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
-                    device=device, dtype=self.linear2.weight.dtype),
-            'v': torch.zeros((batch_size, self.self_attn.num_heads, 0, self.self_attn.head_dim), 
-                    device=device, dtype=self.linear2.weight.dtype),
-        }
-    
-    def slice_cache(self, cache, indices) -> dict:
-        return { 'k': cache['k'][indices], 'v': cache['v'][indices] }
-
-    def forward_one(self, x, cache, sin, cos):
-        assert self.norm_first # norm_first=False is not supported
-        xr = x
-        x = self.norm1(x)
-        
-        num_heads = self.self_attn.num_heads
-        in_proj_weight = self.self_attn.in_proj_weight
-        in_proj_bias = self.self_attn.in_proj_bias
-        dropout_p = self.self_attn.dropout
-        out_proj_weight = self.self_attn.out_proj.weight
-        out_proj_bias = self.self_attn.out_proj.bias
-        training=self.self_attn.training
-        
-        # set up shape vars
-        _, bsz, embed_dim = x.shape
-        head_dim = embed_dim // num_heads
-
-        proj = F.linear(x, in_proj_weight, in_proj_bias)
-        proj = proj.unflatten(-1, (3, embed_dim)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
-        q, k, v = proj[0], proj[1], proj[2]
-
-        q = q.view(1, bsz * num_heads, head_dim).transpose(0, 1)
-        k = k.view(k.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
-        v = v.view(v.shape[0], bsz * num_heads, head_dim).transpose(0, 1)
-
-        q = q.view(bsz, num_heads, 1, head_dim)
-        k = k.view(bsz, num_heads, 1, head_dim)
-        v = v.view(bsz, num_heads, 1, head_dim)
-        v = torch.cat([cache['v'], v], dim=2)
-        cache['v'] = v
-
-        sin_pos = torch.stack([sin, sin], dim=-1).reshape(1, head_dim)
-        cos_pos = torch.stack([cos, cos], dim=-1).reshape(1, head_dim)
-
-        rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
-        q = q * cos_pos + rotate_half_q * sin_pos
-        rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
-        k = k * cos_pos + rotate_half_k * sin_pos
-
-        k = torch.cat([cache['k'], k], dim=2)
-        cache['k'] = k
-
-        attn_output = scaled_dot_product_attention(q, k, v, dropout_p = dropout_p if training else 0.0)
-        
-        attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(1*bsz, embed_dim)
-        
-        attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
-        attn_output = attn_output.view(1, bsz, attn_output.size(1))
-        x = attn_output
-
-        x = self.dropout1(x)
-        x = xr + x
-
-        x = x + self.dropout2(self.linear2(self.dropout(self.activation(self.linear1(self.norm2(x))))))
-        return x, cache
 
 def save_vocs(module, state_dict, prefix, local_metadata):
     state_dict[prefix+'vocs'] = module.vocs
@@ -281,18 +216,16 @@ class Model(nn.Module):
         self.head_dim = d_model // nhead
         self.vocs = vocs
 
-        self.pos_buffer_len = None
-        sin, cos, mask = self.make_pos_buffer(pos_buffer_len)
+        self.pos_buffer_len = 0
+        self.n_make_pos_buffer = 0
+        sin, cos = self.get_pos_buffer(pos_buffer_len)
         self.register_buffer('sin', sin, persistent=False)
         self.register_buffer('cos', cos, persistent=False)
-        self.register_buffer('mask', mask, persistent=False)
-        DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(self, ['sin', 'cos', 'mask'])        
         self.pos_buffer_len = pos_buffer_len
+        DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(self, ['sin', 'cos']) 
 
-        # Log # of make_pos_buffer
-        self.n_make_pos_buffer = 0
+        self.n_make_pos_buffer = 0 # reset here
         self.n_forward = 0
-
 
         self._register_state_dict_hook(save_vocs)
         self._register_load_state_dict_pre_hook(partial(align_embedding, 
@@ -301,32 +234,38 @@ class Model(nn.Module):
         self.gpuuse_coef = lru_cache(1)(self._gpuuse_coef)
         self.get_capture_rate = lru_cache(1)(self._get_capture_rate)
         
-
-    def make_pos_buffer(self, length):
-        position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
-                for pos in range(length)])
-        device = self.embedding.weight.device
-        dtype = self.embedding.weight.dtype
-        sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
-        cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
-        mask = nn.Transformer.generate_square_subsequent_mask(length).to(device).to(dtype)
-        return sin, cos, mask
-        
-
-    def forward(self, src: torch.Tensor, get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
+    
+    def get_pos_buffer(self, L: int, get_mask: bool=True) -> tuple[Tensor, Tensor, Tensor]:
+        """
+        Returns
+        -------
+        sin: Tensor[L, Dh](float)
+        cos: Tensor[L, Dh](float)
+        mask: Tensor[L, L](float)
+        """
+        if L > self.pos_buffer_len:
+            self.n_make_pos_buffer += 1
+            position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
+                    for pos in range(L)])
+            device = self.embedding.weight.device
+            dtype = self.embedding.weight.dtype
+            sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
+            cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
+            return sin, cos
+        else:
+            return self.sin[:L], self.cos[:L]
+            
+    def forward(self, src: Tensor, get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
         self.n_forward += 1
         x = self.embedding(src)
         L = x.shape[0]
-        if L > self.pos_buffer_len:
-            sin, cos, mask = self.make_pos_buffer(L)
-            self.n_make_pos_buffer += 1
-        else:
-            sin, cos, mask = self.sin[:L], self.cos[:L], self.mask[:L, :L]
+        sin, cos = self.get_pos_buffer(L)
+
         if (self.n_forward&(self.n_forward-1)) == 0:
             self.logger.debug(f"make_pos_buffer call={self.n_make_pos_buffer}/{self.n_forward}")
         output = x
         for layer in self.layers:
-            output = layer(output, src_mask=mask, sin=sin, cos=cos)
+            output = layer(output, sin, cos, is_causal=True)
         if self.norm is not None:
             output = self.norm(output)
         x = output
@@ -338,101 +277,86 @@ class Model(nn.Module):
         else:
             return x
 
+    @torch.inference_mode()
     def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True) -> list[torch.Tensor]:
         """
-        Use kv-cache, remove finished samples
-
         context: torch.Tensor(long)[L, B]
         """
         
-        device = self.predictor.weight.device
-        vocs = np.array(self.vocs)
-        end_token = np.where(vocs == end_voc)[0][0]
-        L, B = context.shape
-        assert L >= 1
-        Ngen = L+max_len-1
-        """
-        ex. If max_len = 5, L = 1:
-        generate [START], *, *, *, *, * -> 5 times
-        """
+        Lc, B = context.shape
+        max_input_size = Lc+max_len-1
+        device = context.device
+        assert Lc >= 1
+        end_token = self.vocs.index(end_voc)
 
-        finished_idxs = []
-        finished_outputs = []
-        finished_ns_generated = []
-        context_sizes = torch.sum(context != pad_token, dim=0)
-        indices = torch.arange(B, dtype=torch.int, device=device) # [B,]
-        is_finished = torch.full((B,), fill_value=False, device=device) # [B,]
-        ns_generated = torch.zeros(B, dtype=torch.int, device=device)
         input = context[:1] # [1, B]
-        cache = [layer.generate_init_cache(B) for layer in self.layers]
         outputs = input # [1, B]
 
-        sin_buf, cos_buf, mask_buf = (self.sin, self.cos, self.mask) \
-            if Ngen <= self.pos_buffer_len else self.make_pos_buffer(Ngen)
-        del mask_buf
+        context = left_to_right_padding(context, pad_token) # [L, B]
+        print(context.shape, context)
+        # 
+        context_sizes = torch.sum(context != pad_token, dim=0).tolist()
+        sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh],  [L, Dh],  [L, Dh], 
+        sins = []
+        coss = []
+        src_masks = []
+        for b, size in enumerate(context_sizes):
+            pad_size = Lc - size
+            sins.append(torch.cat([torch.zeros_like(sin_buf[:pad_size]), sin_buf[:max_input_size-pad_size]], dim=0))
+            coss.append(torch.cat([torch.zeros_like(cos_buf[:pad_size]), cos_buf[:max_input_size-pad_size]], dim=0))
+            src_masks.append(torch.cat([
+                torch.full((pad_size,), -torch.inf, device=device, dtype=sin_buf.dtype), 
+                torch.full((max_input_size-pad_size+1,), 0.0, device=device, dtype=sin_buf.dtype)
+            ]).reshape(1, 1, -1)) # [1(H), 1(Lk), L]
+        sins = torch.stack(sins, dim=0) # [B, L, Dh]
+        coss = torch.stack(coss, dim=0) # [B, L, Dh]
+        src_masks = torch.stack(src_masks, dim=0) # [B, 1, 1, L]
 
-        poss_pbar = _tqdm(range(Ngen)) if tqdm else range(Ngen)
-        for pos in poss_pbar:
+        # generation forward
+        is_ended = torch.full((B,), False, device=device)
+        cache = [None for layer in self.layers]
+        outputs = []
+        cache_size = 0
+        cur_input = context # [Lc, B]
+        for i_gen in (gen_pbar:=_tqdm(range(max_len)) if tqdm else range(max_len)):
+            print(cache_size)
+            cur_input_size = len(cur_input)
+            cur_sin = sins[:, cache_size:cache_size+cur_input_size]
+            cur_cos = coss[:, cache_size:cache_size+cur_input_size]
+            cur_src_mask = src_masks[...,:cache_size+cur_input_size]
 
-            x = self.embedding(input)
-
-            layer: TransformerEncoderLayer
-            for i_layer, layer in enumerate(self.layers):
-                x, cache[i_layer] = layer.forward_one(x, cache[i_layer], sin_buf[pos:pos+1], cos_buf[pos:pos+1])
-
+            x = self.embedding(cur_input)
+            for i_layer, layer in enumerate(self.layers):    
+                x, cache[i_layer] = layer(x, cur_sin, cur_cos, is_causal=False, 
+                        cache=cache[i_layer], src_mask=cur_src_mask)
             if self.norm is not None:
                 x = self.norm(x)
-
-            x = self.predictor(x)
-            prob = F.softmax(x[0], dim=1) # [B, D]
+            x = self.predictor(x[-1])
+            prob = F.softmax(x, dim=1) # [B, D]
             output = torch.multinomial(prob, num_samples=1) # [B, 1]
+            print(output.shape)
             output = output.view(-1) # [B]
-            if pos < L-1:
-                pos_context = context[pos+1]
-                is_in_context = pos_context != pad_token
-                output[is_in_context] = pos_context[is_in_context]
-            else:
-                is_in_context = torch.full_like(output, fill_value=False, dtype=torch.bool)
-                
-            end_token_generated = (~is_in_context)&(output == end_token)
-            ns_generated[(~is_in_context)&(~is_finished)] += 1
-            outputs = torch.cat([outputs, output.unsqueeze(0)], dim=0) # [L, B]
+            outputs.append(output)
+            is_ended = torch.logical_or(is_ended, output == end_token)
+            if torch.all(is_ended): break
+            cur_input = output.unsqueeze(0) # [1, B]
+            cache_size += cur_input_size
 
-            is_finished = is_finished|end_token_generated|(ns_generated >= max_len)
-            input = output.unsqueeze(0)
-            if torch.all(is_finished): break
+            if tqdm:
+                GB = 2**30
+                g = torch.cuda.memory_allocated()
+                g_max = torch.cuda.max_memory_allocated()
+                gen_pbar.set_postfix_str(f"now={g/GB:.02f}GB, max={g_max/GB:.02f}GB")
 
-            # Remove finished entries from inference
-            if (pos+1) % remove_freq == 0:
-                finished_js = torch.where(is_finished)[0]
-                remain_js = torch.where(~is_finished)[0]
-                finished_idxs += indices[finished_js].tolist()
-                finished_outputs += list(outputs[:, finished_js].T)
-                finished_ns_generated += ns_generated[finished_js].tolist()
-
-                indices = indices[remain_js]
-                is_finished = is_finished[remain_js]
-                ns_generated = ns_generated[remain_js]
-                input = input[:, remain_js]
-                cache = [layer.slice_cache(c, remain_js) for c, layer in zip(cache, self.layers)]
-                outputs = outputs[:, remain_js]
-                context = context[:, remain_js]
-
-                if tqdm:
-                    poss_pbar.set_postfix_str(f"{len(remain_js)}/{B} remains, {is_in_context.sum()} in context")
-        finished_idxs += indices.tolist()
-        finished_outputs += list(outputs.T)
-        finished_ns_generated += ns_generated.tolist()
-            
-        # Order outputs
-        finished_idxs_inv = np.argsort(finished_idxs)
-        outputs = [finished_outputs[idx] for idx in finished_idxs_inv]
-        ns_generated = [finished_ns_generated[idx] for idx in finished_idxs_inv]
+        outputs = torch.stack(outputs, dim=-1) # [B, L]
 
         # cut outputs
-        outputs = [output[context_size:context_size+n_generated] 
-                for output, context_size, n_generated in zip(outputs, context_sizes, ns_generated)]
-        return outputs
+        cut_outputs = []
+        for output in outputs:
+            if end_token in output:
+                output = output[:torch.where(output == end_token)[0][0]+1]
+            cut_outputs.append(output)
+        return cut_outputs
 
     def _get_mname(self, bf16: bool, kernel: str):        
         mname = f'tf_{kernel.lower()}'
@@ -508,3 +432,16 @@ class Model(nn.Module):
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16=bf16, kernel=kernel)
         return max_gpuuse
 
+def left_to_right_padding(inputs: Tensor, padding_idx: int) -> Tensor:
+    """
+    inputs: Tensor[L, B]
+    
+    """
+    is_context = (inputs != padding_idx).to(torch.int)
+    if torch.any(is_context[:-1] > is_context[1:]):
+        logger.warning(f"context is modified to left-padding.")
+        i_revs = list(inputs.T.flip(1)) # [B][L]
+        i_revs = [c[c != padding_idx] for c in i_revs]
+        inputs_rev = pad_sequence(i_revs, padding_value=padding_idx) # [L, B]
+        inputs = inputs_rev.flip(0)
+    return inputs
