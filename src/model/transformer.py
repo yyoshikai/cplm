@@ -85,10 +85,6 @@ class MultiheadAttention(nn.Module):
             k = torch.cat([cache['k'], k], dim=2)
             v = torch.cat([cache['v'], v], dim=2)
         
-        if self.n_forward < 0:
-            print(f"{sin=}")
-            print(f"{cos=}")
-            print(f"{src_mask=}")
         cache = {'k': k, 'v': v}
         attn_output = scaled_dot_product_attention(q, k, v, dropout_p = self.dropout if self.training else 0.0, attn_mask=src_mask, is_causal=is_causal)
         attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
@@ -293,7 +289,6 @@ class Model(nn.Module):
         outputs = input # [1, B]
 
         context = left_to_right_padding(context, pad_token) # [L, B]
-        print(context.shape, context)
         # 
         context_sizes = torch.sum(context != pad_token, dim=0).tolist()
         sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh],  [L, Dh],  [L, Dh], 
@@ -319,7 +314,6 @@ class Model(nn.Module):
         cache_size = 0
         cur_input = context # [Lc, B]
         for i_gen in (gen_pbar:=_tqdm(range(max_len)) if tqdm else range(max_len)):
-            print(cache_size)
             cur_input_size = len(cur_input)
             cur_sin = sins[:, cache_size:cache_size+cur_input_size]
             cur_cos = coss[:, cache_size:cache_size+cur_input_size]
@@ -327,14 +321,13 @@ class Model(nn.Module):
 
             x = self.embedding(cur_input)
             for i_layer, layer in enumerate(self.layers):    
-                x, cache[i_layer] = layer(x, cur_sin, cur_cos, is_causal=False, 
+                x, cache[i_layer] = layer(x, cur_sin, cur_cos, is_causal=True if i_gen == 0 else False, 
                         cache=cache[i_layer], src_mask=cur_src_mask)
             if self.norm is not None:
                 x = self.norm(x)
             x = self.predictor(x[-1])
             prob = F.softmax(x, dim=1) # [B, D]
             output = torch.multinomial(prob, num_samples=1) # [B, 1]
-            print(output.shape)
             output = output.view(-1) # [B]
             outputs.append(output)
             is_ended = torch.logical_or(is_ended, output == end_token)
