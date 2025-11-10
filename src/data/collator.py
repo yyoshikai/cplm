@@ -11,30 +11,12 @@ from torch.utils.data import DataLoader
 import torch.distributed as dist
 from ..utils.ddp import dist_send_tensor, dist_recv_tensor
 from ..utils.time import TimerTqdm
-from ..utils import should_show
+from ..utils import should_show, solve_increasing_fn_left
 
 T = TypeVar('T')
 T1 = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
 
-def solve_increasing_fn_left(func: Callable[[int], float], start_sup: int) -> int:
-
-    min = 0
-    sup = start_sup
-
-    # get max
-    while func(sup) <= 0:
-        min = sup
-        sup = sup*2
-
-    # narrow down
-    while sup - min > 1:
-        v = (sup+min) // 2
-        if func(v) <= 0:
-            min = v
-        else:
-            sup = v
-    return min
 
 def batched(iterable: Iterable[T_co], n: int) -> Generator[T_co, None, None]: # Same as itr.batched in python >= 3.12
     # batched('ABCDEFG', 3) → ABC DEF G

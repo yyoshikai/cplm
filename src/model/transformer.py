@@ -18,6 +18,7 @@ from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
 from torch.nn.parallel import DistributedDataParallel
 from ..utils.memory import get_mems
+from ..utils import solve_increasing_fn_left
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +275,7 @@ class Model(nn.Module):
             return x
 
     @torch.inference_mode()
-    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm=True) -> list[torch.Tensor]:
+    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm=True, do_sample: bool=False, gpu_size: float|None=None) -> list[torch.Tensor]:
         """
         context: torch.Tensor(long)[L, B]
         """
@@ -290,7 +291,6 @@ class Model(nn.Module):
         sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh],  [L, Dh],  [L, Dh]
         gen_pbar = _tqdm(range(max_len)) if tqdm else range(max_len)
         gen_iter = iter(gen_pbar)
-
 
         outputs = []
         is_ended = torch.full((B,), False, device=device)
@@ -315,16 +315,33 @@ class Model(nn.Module):
             return cur_input, is_ended
 
         # Initial forward
-        cache = [None for layer in self.layers]
-        cur_input = context # [Lc, B]
+        if gpu_size is not None:
+            Bm = solve_increasing_fn_left(lambda b: self.get_gpuuse(b, Lc, False, 'EFFICIENT')-gpu_size, B)
+            if Bm <= 0: raise ValueError(f'context is too large({Lc})')
+        else:
+            Bm = B
+        Bm = 1
+        cache_minis = [{'k': [], 'v': []} for layer in self.layers]
+        cur_input_minis = []
+        is_ended_minis = []
         i_gen = next(gen_iter)
-        x = self.embedding(context)
-        for i_layer, layer in enumerate(self.layers):    
-            x, cache[i_layer] = layer(x, sin_buf[:Lc], cos_buf[:Lc], is_causal=True, cache=None) # [L, B, D], {'k': [B, H, Lc, Dh]}
-        if self.norm is not None:
-            x = self.norm(x)
-        cur_input, is_ended = forward_one(x[-1], is_ended)
+        for im in _tqdm(range(0, B, Bm)) if tqdm else range(0, B, Bm):
+            x = self.embedding(context[:,im:im+Bm])
+            for i_layer, layer in enumerate(self.layers):    
+                x, cache_mini_i = layer(x, sin_buf[:Lc], cos_buf[:Lc], is_causal=True, cache=None) # [L, B, D], {'k': [B, H, Lc, Dh]}
+                for k, v in cache_mini_i.items():
+                    cache_minis[i_layer][k].append(v)
+            if self.norm is not None:
+                x = self.norm(x)
+            cur_input_mini, is_ended_mini = forward_one(x[-1], is_ended[im:im+Bm])
+            cur_input_minis.append(cur_input_mini)
+            is_ended_minis.append(is_ended_mini)
+        cache = [{k: torch.cat(v, dim=0) for k, v in cache_minis_i.items()} for cache_minis_i in cache_minis]
+        cur_input = torch.cat(cur_input_minis, dim=1)
+        is_ended = torch.cat(is_ended_minis, dim=0)
+        outputs = [torch.cat(outputs, dim=0)]
         cache_size = Lc
+        print(f"{cur_input.shape}, {is_ended.shape}")
 
         # make padded positional buffers
         sins = []

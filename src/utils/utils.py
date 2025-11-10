@@ -2,7 +2,7 @@ import sys, os, struct, traceback, warnings, subprocess
 from functools import partial
 from bisect import bisect_right
 from logging import getLogger
-from typing import Any
+from typing import Any, Callable
 import numpy as np
 import pandas as pd
 try:    
@@ -200,3 +200,22 @@ class IterateRecorder:
         self.data_size = 0
         self.flushed = True
 
+
+def solve_increasing_fn_left(func: Callable[[int], float], start_sup: int) -> int:
+
+    min = 0
+    sup = start_sup
+
+    # get max
+    while func(sup) <= 0:
+        min = sup
+        sup = sup*2
+
+    # narrow down
+    while sup - min > 1:
+        v = (sup+min) // 2
+        if func(v) <= 0:
+            min = v
+        else:
+            sup = v
+    return min
