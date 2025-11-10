@@ -331,8 +331,8 @@ class Model(nn.Module):
         coss = []
         for b, size in enumerate(context_sizes):
             pad_size = Lc - size
-            sins.append(torch.cat([torch.zeros_like(sin_buf[:pad_size]), sin_buf[:max_input_size-pad_size]], dim=0))
-            coss.append(torch.cat([torch.zeros_like(cos_buf[:pad_size]), cos_buf[:max_input_size-pad_size]], dim=0))
+            sins.append(sin_buf[Lc-pad_size:Lc-pad_size+max_len-1])
+            coss.append(cos_buf[Lc-pad_size:Lc-pad_size+max_len-1])
         sins = torch.stack(sins, dim=0) # [B, L, Dh]
         coss = torch.stack(coss, dim=0) # [B, L, Dh]
         src_mask_bool = torch.cat([
@@ -349,8 +349,8 @@ class Model(nn.Module):
             x = self.embedding(cur_input)
             for i_layer, layer in enumerate(self.layers):    
                 x, cache[i_layer] = layer(x, 
-                        sins[:, cache_size:cache_size+1],
-                        coss[:, cache_size:cache_size+1], 
+                        sins[:, cache_size-Lc:cache_size-Lc+1],
+                        coss[:, cache_size-Lc:cache_size-Lc+1], 
                         is_causal=False, 
                         cache=cache[i_layer], 
                         src_mask=src_masks[..., :cache_size+1]
