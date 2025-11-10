@@ -306,7 +306,7 @@ for step in step_timer:
         logger.debug(f"step[{step}] generate started.")
         model.eval()
         with torch.inference_mode():
-            outputs = net_model.generate2(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, 10, args.tqdm_generate) # [B, L]
+            outputs = net_model.generate2(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, args.tqdm_generate) # [B, L]
 
         out_batch = pad_sequence([torch.cat([prompt.to(device), output]) for prompt, output in zip(prompt_tokens, outputs)], batch_first, padding_value=voc_encoder.pad_token) # [L, B]
         Lo, B = out_batch.shape

@@ -274,7 +274,7 @@ class Model(nn.Module):
             return x
 
     @torch.inference_mode()
-    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, remove_freq: int, tqdm=True) -> list[torch.Tensor]:
+    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm=True) -> list[torch.Tensor]:
         """
         context: torch.Tensor(long)[L, B]
         """
@@ -317,12 +317,19 @@ class Model(nn.Module):
             cur_input_size = len(cur_input)
             cur_sin = sins[:, cache_size:cache_size+cur_input_size]
             cur_cos = coss[:, cache_size:cache_size+cur_input_size]
-            cur_src_mask = src_masks[...,:cache_size+cur_input_size]
-
+            cur_src_mask = src_masks[...,:cache_size+cur_input_size] # [B, 1, 1 (Li), Lc]
+            if cur_input_size > 0:
+                # [B, 1, 1, Lc] + [Li, Lc] -> [B, 1, Li, Lc]
+                cur_src_mask = cur_src_mask + torch.triu(torch.full((cur_input_size, cache_size+cur_input_size), -torch.inf, dtype=cur_src_mask.dtype, device=device), diagonal=cache_size+1)
             x = self.embedding(cur_input)
             for i_layer, layer in enumerate(self.layers):    
-                x, cache[i_layer] = layer(x, cur_sin, cur_cos, is_causal=True if i_gen == 0 else False, 
-                        cache=cache[i_layer], src_mask=cur_src_mask)
+                x, cache[i_layer] = layer(x, cur_sin, cur_cos, is_causal=False, 
+                        cache=cache[i_layer], src_mask=cur_src_mask) # [L, B, D], {'k': [B, H, L, Dh]}
+                
+                # remove nan in padding areas
+                x.nan_to_num_(0.0)
+                cache[i_layer] = {key: value.nan_to_num_(0.0) for key, value in cache[i_layer].items()}
+
             if self.norm is not None:
                 x = self.norm(x)
             x = self.predictor(x[-1])
