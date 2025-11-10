@@ -278,6 +278,102 @@ class Model(nn.Module):
         """
         context: torch.Tensor(long)[L, B]
         """
+
+        Lc, B = context.shape
+        max_input_size = Lc+max_len-1
+        device = context.device
+        assert Lc >= 1
+        end_token = self.vocs.index(end_voc)
+
+        context = left_to_right_padding(context, pad_token) # [L, B]
+        context_sizes = torch.sum(context != pad_token, dim=0).tolist()
+        sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh],  [L, Dh],  [L, Dh]
+        gen_pbar = _tqdm(range(max_len)) if tqdm else range(max_len)
+        gen_iter = iter(gen_pbar)
+
+
+        outputs = []
+        is_ended = torch.full((B,), False, device=device)
+        def forward_one(x: Tensor, is_ended: Tensor):
+            """
+            x: [B, Nt]
+            """
+            x = self.predictor(x)
+            prob = F.softmax(x, dim=1) # [B, D]
+            output = torch.multinomial(prob, num_samples=1) # [B, 1]
+            output = output.view(-1) # [B]
+            outputs.append(output)
+            is_ended = torch.logical_or(is_ended, output == end_token)
+            cur_input = output.unsqueeze(0) # [1, B]
+            
+            if tqdm:
+                GB = 2**30
+                g = torch.cuda.memory_allocated()
+                g_max = torch.cuda.max_memory_allocated()
+                gen_pbar.set_postfix_str(f"now={g/GB:.02f}GB, max={g_max/GB:.02f}GB")
+            
+            return cur_input, is_ended
+
+        # Initial forward
+        cache = [None for layer in self.layers]
+        cur_input = context # [Lc, B]
+        i_gen = next(gen_iter)
+        x = self.embedding(context)
+        for i_layer, layer in enumerate(self.layers):    
+            x, cache[i_layer] = layer(x, sin_buf[:Lc], cos_buf[:Lc], is_causal=True, cache=None) # [L, B, D], {'k': [B, H, Lc, Dh]}
+        if self.norm is not None:
+            x = self.norm(x)
+        cur_input, is_ended = forward_one(x[-1], is_ended)
+        cache_size = Lc
+
+        # make padded positional buffers
+        sins = []
+        coss = []
+        for b, size in enumerate(context_sizes):
+            pad_size = Lc - size
+            sins.append(torch.cat([torch.zeros_like(sin_buf[:pad_size]), sin_buf[:max_input_size-pad_size]], dim=0))
+            coss.append(torch.cat([torch.zeros_like(cos_buf[:pad_size]), cos_buf[:max_input_size-pad_size]], dim=0))
+        sins = torch.stack(sins, dim=0) # [B, L, Dh]
+        coss = torch.stack(coss, dim=0) # [B, L, Dh]
+        src_mask_bool = torch.cat([
+            context.T == pad_token, # [B, Lc]
+            torch.full((B, max_len-1), False, dtype=torch.bool, device=device) # [B, max_len-1]
+        ], dim=1).reshape(B, 1, 1, -1) # [B, 1, 1, L]
+        src_masks = torch.zeros_like(src_mask_bool, dtype=sins.dtype)
+        src_masks.masked_fill_(src_mask_bool, -torch.inf)
+
+        # generation forward
+        for i_gen in gen_pbar:
+            
+            if torch.all(is_ended): break
+            x = self.embedding(cur_input)
+            for i_layer, layer in enumerate(self.layers):    
+                x, cache[i_layer] = layer(x, 
+                        sins[:, cache_size:cache_size+1],
+                        coss[:, cache_size:cache_size+1], 
+                        is_causal=False, 
+                        cache=cache[i_layer], 
+                        src_mask=src_masks[..., :cache_size+1]
+                ) # [L, B, D], {'k': [B, H, L, Dh]}
+            
+            cur_input, is_ended = forward_one(x[0], is_ended)
+            cache_size += 1
+
+        outputs = torch.stack(outputs, dim=-1) # [B, L]
+
+        # cut outputs
+        cut_outputs = []
+        for output in outputs:
+            if end_token in output:
+                output = output[:torch.where(output == end_token)[0][0]+1]
+            cut_outputs.append(output)
+        return cut_outputs        
+
+    @torch.inference_mode()
+    def generate1(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm=True) -> list[torch.Tensor]:
+        """
+        context: torch.Tensor(long)[L, B]
+        """
         
         Lc, B = context.shape
         max_input_size = Lc+max_len-1
@@ -288,7 +384,7 @@ class Model(nn.Module):
         input = context[:1] # [1, B]
         outputs = input # [1, B]
 
-        context = left_to_right_padding(context, pad_token) # [L, B]
+        context = right_to_left_padding(context, pad_token) # [L, B]
         # 
         context_sizes = torch.sum(context != pad_token, dim=0).tolist()
         sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh],  [L, Dh],  [L, Dh], 
@@ -432,16 +528,22 @@ class Model(nn.Module):
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16=bf16, kernel=kernel)
         return max_gpuuse
 
-def left_to_right_padding(inputs: Tensor, padding_idx: int) -> Tensor:
+def right_to_left_padding(inputs: Tensor, padding_idx: int) -> Tensor:
+    return left_to_right_padding(inputs.flip(0), padding_idx, _is_right=True).flip(0)
+
+def left_to_right_padding(inputs: Tensor, padding_idx: int, _is_right: bool=False) -> Tensor:
     """
+    Parameters
+    ----------
     inputs: Tensor[L, B]
-    
+    padding_idx: int        
     """
     is_context = (inputs != padding_idx).to(torch.int)
-    if torch.any(is_context[:-1] > is_context[1:]):
-        logger.warning(f"context is modified to left-padding.")
-        i_revs = list(inputs.T.flip(1)) # [B][L]
-        i_revs = [c[c != padding_idx] for c in i_revs]
-        inputs_rev = pad_sequence(i_revs, padding_value=padding_idx) # [L, B]
-        inputs = inputs_rev.flip(0)
+    if torch.any(is_context[1:] > is_context[:-1]):
+        logger.warning(f"context is modified to {'right' if _is_right else 'left'}-padding.")
+        is_ = list(inputs.T) # [B][L]
+        is_ = [i[i != padding_idx] for i in is_]
+        inputs = pad_sequence(is_, padding_value=padding_idx) # [L, B]
+        inputs = inputs
     return inputs
+
