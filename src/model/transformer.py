@@ -262,7 +262,7 @@ class Model(nn.Module):
             self.logger.debug(f"make_pos_buffer call={self.n_make_pos_buffer}/{self.n_forward}")
         output = x
         for layer in self.layers:
-            output = layer(output, sin, cos, is_causal=True)
+            output, _ = layer(output, sin, cos, is_causal=True)
         if self.norm is not None:
             output = self.norm(output)
         x = output
@@ -275,10 +275,11 @@ class Model(nn.Module):
             return x
 
     @torch.inference_mode()
-    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm=True, do_sample: bool=False, gpu_size: float|None=None) -> list[torch.Tensor]:
+    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm=True, do_sample: bool=True) -> list[torch.Tensor]:
         """
         context: torch.Tensor(long)[L, B]
         """
+        assert do_sample # TODO
 
         Lc, B = context.shape
         max_input_size = Lc+max_len-1
@@ -287,8 +288,11 @@ class Model(nn.Module):
         end_token = self.vocs.index(end_voc)
 
         context = left_to_right_padding(context, pad_token) # [L, B]
+        logger.info(f"{context[:2]=}")
         context_sizes = torch.sum(context != pad_token, dim=0).tolist()
+        logger.info(f"{context_sizes=}")
         sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh],  [L, Dh],  [L, Dh]
+        torch.save(sin_buf, "sin_buf.pt")
         gen_pbar = _tqdm(range(max_len)) if tqdm else range(max_len)
         gen_iter = iter(gen_pbar)
 
@@ -300,11 +304,10 @@ class Model(nn.Module):
             """
             x = self.predictor(x)
             prob = F.softmax(x, dim=1) # [B, D]
-            output = torch.multinomial(prob, num_samples=1) # [B, 1]
-            output = output.view(-1) # [B]
+            output = torch.multinomial(prob, num_samples=1).view(-1) # [B, 1] -> [B]
             outputs.append(output)
             is_ended = torch.logical_or(is_ended, output == end_token)
-            cur_input = output.unsqueeze(0) # [1, B]
+            next_input = output.unsqueeze(0) # [1, B]
             
             if tqdm:
                 GB = 2**30
@@ -312,36 +315,37 @@ class Model(nn.Module):
                 g_max = torch.cuda.max_memory_allocated()
                 gen_pbar.set_postfix_str(f"now={g/GB:.02f}GB, max={g_max/GB:.02f}GB")
             
-            return cur_input, is_ended
+            return next_input, is_ended
 
         # Initial forward
-        if gpu_size is not None:
-            Bm = solve_increasing_fn_left(lambda b: self.get_gpuuse(b, Lc, False, 'EFFICIENT')-gpu_size, B)
-            if Bm <= 0: raise ValueError(f'context is too large({Lc})')
-        else:
-            Bm = B
-        Bm = 1
         cache_minis = [{'k': [], 'v': []} for layer in self.layers]
         cur_input_minis = []
         is_ended_minis = []
         i_gen = next(gen_iter)
-        for im in _tqdm(range(0, B, Bm)) if tqdm else range(0, B, Bm):
-            x = self.embedding(context[:,im:im+Bm])
+        for b in (b_pbar:=_tqdm(range(0, B)) if tqdm else range(0, B)):
+            x = self.embedding(context[:,b:b+1])
             for i_layer, layer in enumerate(self.layers):    
                 x, cache_mini_i = layer(x, sin_buf[:Lc], cos_buf[:Lc], is_causal=True, cache=None) # [L, B, D], {'k': [B, H, Lc, Dh]}
                 for k, v in cache_mini_i.items():
-                    cache_minis[i_layer][k].append(v)
+                    cache_minis[i_layer][k].append(v.detach().clone()) # なぜか必要
             if self.norm is not None:
                 x = self.norm(x)
-            cur_input_mini, is_ended_mini = forward_one(x[-1], is_ended[im:im+Bm])
+            cur_input_mini, is_ended_mini = forward_one(x[context_sizes[b]-1], is_ended[b:b+1])
             cur_input_minis.append(cur_input_mini)
             is_ended_minis.append(is_ended_mini)
+            if tqdm:
+                GB = 2**30
+                g = torch.cuda.memory_allocated()
+                g_max = torch.cuda.max_memory_allocated()
+                b_pbar.set_postfix_str(f"now={g/GB:.02f}GB, max={g_max/GB:.02f}GB")
+
         cache = [{k: torch.cat(v, dim=0) for k, v in cache_minis_i.items()} for cache_minis_i in cache_minis]
         cur_input = torch.cat(cur_input_minis, dim=1)
+        logger.info(f"{cur_input=}")
         is_ended = torch.cat(is_ended_minis, dim=0)
         outputs = [torch.cat(outputs, dim=0)]
+        logger.info(F"{outputs=}")
         cache_size = Lc
-        print(f"{cur_input.shape}, {is_ended.shape}")
 
         # make padded positional buffers
         sins = []
@@ -360,7 +364,7 @@ class Model(nn.Module):
         src_masks.masked_fill_(src_mask_bool, -torch.inf)
 
         # generation forward
-        for i_gen in gen_pbar:
+        for i_gen in gen_iter:
             
             if torch.all(is_ended): break
             x = self.embedding(cur_input)
@@ -384,92 +388,8 @@ class Model(nn.Module):
             if end_token in output:
                 output = output[:torch.where(output == end_token)[0][0]+1]
             cut_outputs.append(output)
+        logger.info(f"cut_outputs shape={[output.shape for output in cut_outputs]}")
         return cut_outputs        
-
-    @torch.inference_mode()
-    def generate1(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm=True) -> list[torch.Tensor]:
-        """
-        context: torch.Tensor(long)[L, B]
-        """
-        
-        Lc, B = context.shape
-        max_input_size = Lc+max_len-1
-        device = context.device
-        assert Lc >= 1
-        end_token = self.vocs.index(end_voc)
-
-        input = context[:1] # [1, B]
-        outputs = input # [1, B]
-
-        context = right_to_left_padding(context, pad_token) # [L, B]
-        # 
-        context_sizes = torch.sum(context != pad_token, dim=0).tolist()
-        sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh],  [L, Dh],  [L, Dh], 
-        sins = []
-        coss = []
-        src_masks = []
-        for b, size in enumerate(context_sizes):
-            pad_size = Lc - size
-            sins.append(torch.cat([torch.zeros_like(sin_buf[:pad_size]), sin_buf[:max_input_size-pad_size]], dim=0))
-            coss.append(torch.cat([torch.zeros_like(cos_buf[:pad_size]), cos_buf[:max_input_size-pad_size]], dim=0))
-            src_masks.append(torch.cat([
-                torch.full((pad_size,), -torch.inf, device=device, dtype=sin_buf.dtype), 
-                torch.full((max_input_size-pad_size+1,), 0.0, device=device, dtype=sin_buf.dtype)
-            ]).reshape(1, 1, -1)) # [1(H), 1(Lk), L]
-        sins = torch.stack(sins, dim=0) # [B, L, Dh]
-        coss = torch.stack(coss, dim=0) # [B, L, Dh]
-        src_masks = torch.stack(src_masks, dim=0) # [B, 1, 1, L]
-
-        # generation forward
-        is_ended = torch.full((B,), False, device=device)
-        cache = [None for layer in self.layers]
-        outputs = []
-        cache_size = 0
-        cur_input = context # [Lc, B]
-        for i_gen in (gen_pbar:=_tqdm(range(max_len)) if tqdm else range(max_len)):
-            cur_input_size = len(cur_input)
-            cur_sin = sins[:, cache_size:cache_size+cur_input_size]
-            cur_cos = coss[:, cache_size:cache_size+cur_input_size]
-            cur_src_mask = src_masks[...,:cache_size+cur_input_size] # [B, 1, 1 (Li), Lc]
-            if cur_input_size > 0:
-                # [B, 1, 1, Lc] + [Li, Lc] -> [B, 1, Li, Lc]
-                cur_src_mask = cur_src_mask + torch.triu(torch.full((cur_input_size, cache_size+cur_input_size), -torch.inf, dtype=cur_src_mask.dtype, device=device), diagonal=cache_size+1)
-            x = self.embedding(cur_input)
-            for i_layer, layer in enumerate(self.layers):    
-                x, cache[i_layer] = layer(x, cur_sin, cur_cos, is_causal=False, 
-                        cache=cache[i_layer], src_mask=cur_src_mask) # [L, B, D], {'k': [B, H, L, Dh]}
-                
-                # remove nan in padding areas
-                x.nan_to_num_(0.0)
-                cache[i_layer] = {key: value.nan_to_num_(0.0) for key, value in cache[i_layer].items()}
-
-            if self.norm is not None:
-                x = self.norm(x)
-            x = self.predictor(x[-1])
-            prob = F.softmax(x, dim=1) # [B, D]
-            output = torch.multinomial(prob, num_samples=1) # [B, 1]
-            output = output.view(-1) # [B]
-            outputs.append(output)
-            is_ended = torch.logical_or(is_ended, output == end_token)
-            if torch.all(is_ended): break
-            cur_input = output.unsqueeze(0) # [1, B]
-            cache_size += cur_input_size
-
-            if tqdm:
-                GB = 2**30
-                g = torch.cuda.memory_allocated()
-                g_max = torch.cuda.max_memory_allocated()
-                gen_pbar.set_postfix_str(f"now={g/GB:.02f}GB, max={g_max/GB:.02f}GB")
-
-        outputs = torch.stack(outputs, dim=-1) # [B, L]
-
-        # cut outputs
-        cut_outputs = []
-        for output in outputs:
-            if end_token in output:
-                output = output[:torch.where(output == end_token)[0][0]+1]
-            cut_outputs.append(output)
-        return cut_outputs
 
     def _get_mname(self, bf16: bool, kernel: str):        
         mname = f'tf_{kernel.lower()}'
