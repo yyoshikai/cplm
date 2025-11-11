@@ -46,28 +46,7 @@ if __name__ == '__main__':
         args.genname = f"{args.n_trial}_{args.max_len}_{args.seed}"
 
     # Environment
-    rdir = f"{WORKDIR}/cplm/pocket_conditioned_generation/finetune/{args.genname}/{args.sname}/{args.opt}"
-    os.makedirs(rdir, exist_ok=True)
-
-    ## check if result exists
-    if os.path.exists(f"{rdir}/info.csv"):
-        print(f"{rdir} already finished.", flush=True)
-        sys.exit()
-    ## device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # Data
-    added_vocs = StringTokenizer(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines()).vocs()
-    voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation_data, \
-        _protein_filename_data, _ligand_filename_data \
-        = get_finetune_data(fargs, 'test', False, True, added_vocs, prompt_score='none' if fargs.no_score else 'low')
-    def collate_fn(batch):
-        indices, batch, centers = list(zip(*batch))
-        batch = pad_sequence(batch, padding_value=voc_encoder.pad_token)
-        return indices, batch, centers
-    
-    # model
-    model = get_model(fargs, voc_encoder, f"{fdir}/models/{args.opt}.pth", device)
+    odir = f"{WORKDIR}/cplm/pocket_conditioned_generation/finetune/{args.genname}/{args.sname}/{args.opt}"
     
     # generate
-    generate(model, voc_encoder, prompt_token_data, center_data, rdir, args.n_trial, args.batch_size, args.seed, args.max_len)
+    generate(odir, args.n_trial, args.batch_size, args.seed, args.max_len, fargs, f"{fdir}/models/{args.opt}.pth", no_score=fargs.no_score)
