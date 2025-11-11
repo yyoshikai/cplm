@@ -37,7 +37,7 @@ def mol_from_unimol_data(smi: str, coord: np.ndarray):
         mol.AddConformer(conf)
     coord = mol.GetConformer().GetPositions()
     if np.any(np.isnan(coord)):
-        raise ValueError(f"{coord=}, {n_atom == len(coord)=}, {conf.GetPositions()=}")
+        raise ValueError(f"{smi=}, {coord=}")
     return mol
 
 class UniMolLigandDataset(Dataset[Chem.Mol]):
