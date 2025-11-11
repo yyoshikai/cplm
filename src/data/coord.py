@@ -21,7 +21,7 @@ class Scaler:
         return (to_v-self.to_a) / (self.to_b-self.to_a) \
             * (self.from_b - self.from_a) + self.from_a
     def __str__(self):
-        return f"Scaler([{self.from_b}, {self.from_a}]->[{self.to_b}, {self.to_a}])"
+        return f"Scaler([{self.from_a}, {self.from_b}]->[{self.to_a}, {self.to_b}])"
 
 
 class RescaleDataset(WrapDataset[float]):
