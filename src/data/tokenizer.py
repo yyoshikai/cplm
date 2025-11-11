@@ -23,11 +23,11 @@ class VocEncoder:
         self.voc2i = {voc: i for i, voc in enumerate(self.i2voc)}
     
     def encode(self, words: str):
-        # try:
+        try:
             return [self.voc2i[t] for t in words]
-        # except KeyError as e:
-        #     self.logger.error(f"KeyError in {words}")
-        #     raise e
+        except KeyError as e:
+            self.logger.error(f"KeyError in {words}")
+            raise e
             
     def decode(self, tokens: Iterable[int]):
         return [self.i2voc[t] for t in 
