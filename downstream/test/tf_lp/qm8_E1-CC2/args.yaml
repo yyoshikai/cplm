@@ -1,0 +1,37 @@
+batch_sizes:
+- 32
+- 64
+- 128
+- 256
+data: qm8
+ddp_size: 1
+deterministic: false
+gpu_size: 42949672960.0
+gpu_size_gb: 40.0
+local_batch_size: 128
+lrs:
+- 5.0e-05
+- 8.0e-05
+- 0.0001
+- 0.0004
+- 0.0005
+n_epochs:
+- 2
+- 3
+n_trials: 2
+no_commit: false
+num_workers: 4
+patience: 10
+pretrain_dir: downstream/finetune/results/251001_20000/cls/tf_lp
+pretrain_opt: 900
+pretrain_patience_val: 10
+sdp_kernel: FLASH
+seed: 0
+studyname: test/tf_lp
+task: E1-CC2
+test: null
+warmup_ratios:
+- 0.0
+- 0.06
+- 0.1
+weight_decay: 0.01

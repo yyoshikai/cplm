@@ -74,7 +74,8 @@ if args.seed is None:
     args.seed = targs.seed
 if args.task is None:
     tasks = raw.tasks
-    assert len(tasks) == 1
+    if len(tasks) != 1:
+        raise ValueError(f"Please select task from {raw.tasks}")
     args.task = tasks[0]
 if args.pretrain_opt is None:
     if args.pretrain_patience_val is not None:
