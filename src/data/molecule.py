@@ -61,6 +61,8 @@ class MolProcessDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
                     .to_csv(f"{save_dir}/out_coord.csv", header=False, index=False)
 
         self.getitem_count += 1
+        if np.any(np.isnan(coord)):
+            raise ValueError(coord)
         return smi, coord
     
 
