@@ -12,6 +12,8 @@ from ..data import is_main_worker, Subset
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
+logger = getLogger(__name__)
+
 def mol_from_unimol_data(smi: str, coord: np.ndarray):
     coord = coord.astype(float)
     org_coord = coord
@@ -35,8 +37,13 @@ def mol_from_unimol_data(smi: str, coord: np.ndarray):
             conf.SetAtomPosition(i, Point3D(*coord[i]))
         mol.AddConformer(conf)
     coord = mol.GetConformer().GetPositions()
-    if np.any(np.isnan(coord)):
-        raise ValueError(f"{smi=}, {coord=}, {org_coord=}")
+    if np.any(np.isnan(coord)): # 251111 QM7データでこうなる場合があり, 追加 experiments/241202_241201_mol_pocket5_debugの `4. (251111) Chem.AddHsでエラーになるものがあったため, 対策を調べる`より。
+        logger.warning(f"coord has nan: {smi=}, {coord=}")
+        mol = Chem.RWMol(mol)
+        nan_idxs = np.where(np.any(np.isnan(coord), axis=1))[0]
+        mol = Chem.RWMol(mol)
+        for idx in nan_idxs[::-1]:
+            mol.RemoveAtom(int(idx))
     return mol
 
 class UniMolLigandDataset(Dataset[Chem.Mol]):
