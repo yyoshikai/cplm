@@ -14,7 +14,8 @@ DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
 def mol_from_unimol_data(smi: str, coord: np.ndarray):
     coord = coord.astype(float)
-
+    if np.any(np.isnan(coord)):
+        raise ValueError(coord)
     # Generate mol with conformer
     mol = Chem.MolFromSmiles(smi)
     mol = Chem.AddHs(mol)
