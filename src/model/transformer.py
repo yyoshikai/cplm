@@ -288,11 +288,8 @@ class Model(nn.Module):
         end_token = self.vocs.index(end_voc)
 
         context = left_to_right_padding(context, pad_token) # [L, B]
-        logger.info(f"{context[:2]=}")
         context_sizes = torch.sum(context != pad_token, dim=0).tolist()
-        logger.info(f"{context_sizes=}")
         sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh],  [L, Dh],  [L, Dh]
-        torch.save(sin_buf, "sin_buf.pt")
         gen_pbar = _tqdm(range(max_len)) if tqdm else range(max_len)
         gen_iter = iter(gen_pbar)
 
@@ -323,14 +320,17 @@ class Model(nn.Module):
         is_ended_minis = []
         i_gen = next(gen_iter)
         for b in (b_pbar:=_tqdm(range(0, B)) if tqdm else range(0, B)):
-            x = self.embedding(context[:,b:b+1])
+            context_size = context_sizes[b]
+            x = self.embedding(context[:context_size,b:b+1])
             for i_layer, layer in enumerate(self.layers):    
-                x, cache_mini_i = layer(x, sin_buf[:Lc], cos_buf[:Lc], is_causal=True, cache=None) # [L, B, D], {'k': [B, H, Lc, Dh]}
+                x, cache_mini_i = layer(x, sin_buf[:context_size], cos_buf[:context_size], is_causal=True, cache=None) # [L, B, D], {'k': [B, H, Lc, Dh]}
                 for k, v in cache_mini_i.items():
+                    # [1(B), H, Lc, Dh] -> [H, Lc, Dh] -> [Lc, H, Dh]
+                    v = v.squeeze(0).transpose(0, 1)
                     cache_minis[i_layer][k].append(v.detach().clone()) # なぜか必要
             if self.norm is not None:
                 x = self.norm(x)
-            cur_input_mini, is_ended_mini = forward_one(x[context_sizes[b]-1], is_ended[b:b+1])
+            cur_input_mini, is_ended_mini = forward_one(x[-1], is_ended[b:b+1])
             cur_input_minis.append(cur_input_mini)
             is_ended_minis.append(is_ended_mini)
             if tqdm:
@@ -339,12 +339,10 @@ class Model(nn.Module):
                 g_max = torch.cuda.max_memory_allocated()
                 b_pbar.set_postfix_str(f"now={g/GB:.02f}GB, max={g_max/GB:.02f}GB")
 
-        cache = [{k: torch.cat(v, dim=0) for k, v in cache_minis_i.items()} for cache_minis_i in cache_minis]
+        cache = [{k: pad_sequence(v, batch_first=True).transpose(1, 2) for k, v in cache_minis_i.items()} for cache_minis_i in cache_minis]
         cur_input = torch.cat(cur_input_minis, dim=1)
-        logger.info(f"{cur_input=}")
         is_ended = torch.cat(is_ended_minis, dim=0)
         outputs = [torch.cat(outputs, dim=0)]
-        logger.info(F"{outputs=}")
         cache_size = Lc
 
         # make padded positional buffers
@@ -388,7 +386,6 @@ class Model(nn.Module):
             if end_token in output:
                 output = output[:torch.where(output == end_token)[0][0]+1]
             cut_outputs.append(output)
-        logger.info(f"cut_outputs shape={[output.shape for output in cut_outputs]}")
         return cut_outputs        
 
     def _get_mname(self, bf16: bool, kernel: str):        
