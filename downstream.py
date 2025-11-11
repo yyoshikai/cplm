@@ -18,7 +18,6 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.nn.parallel import DistributedDataParallel
 
 from src.utils import IterateRecorder, should_show
-from src.utils.time import TimerTqdm
 from src.utils.ddp import dist_broadcast_object, dist_send_tensor, dist_recv_tensor
 from src.utils.random import ddp_set_random_seed
 from src.utils.rdkit import ignore_warning
@@ -29,7 +28,6 @@ from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetD
 from src.data.tokenizer import StringTokenizer, FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
 from src.data.collator import DDPStringCollateLoader
 from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch, NO_DUP
-
 
 # Environment
 logs = []
@@ -43,11 +41,14 @@ parser.add_argument('--patience', type=int, default=10)
 parser.add_argument('--seed', type=int)
 parser.add_argument('--n-trials', type=int, default=100)
 ### param range
-parser.add_argument('--batch-sizes', type=int, nargs='+', default=[32, 64, 128, 256])
+parser.add_argument('--batch-size-max', type=int, default=16384)
+parser.add_argument('--batch-size-min', type=int, default=32)
+parser.add_argument('--lr-max', type=float, default=)
+parser.add_argument('--lr-min', type=float, default=)
+parser.add_argument('--n-epoch-max', type=int, default=80)
+parser.add_argument('--n-epoch-min', type=int, default=20)
+parser.add_argument('--warmup-ratios', type=float, nargs='+', default=[0.0, 0.05, 0.1])
 parser.add_argument('--local-batch-size', type=int, default=128)
-parser.add_argument('--lrs', type=float, nargs='+', default=[5e-5, 8e-5, 1e-4, 4e-4, 5e-4])
-parser.add_argument('--n-epochs', type=int, nargs='+', default=[40, 60, 80, 100])
-parser.add_argument('--warmup-ratios', type=float, nargs='+', default=[0.0, 0.06, 0.1])
 ## pretrain
 parser.add_argument('--pretrain-dir', required=True)
 parser.add_argument('--pretrain-opt', type=int)
@@ -140,6 +141,10 @@ train_data, voc_encoder, target_tokenizer, scaler = get_downstream_data('train',
 valid_datas = {split: get_downstream_data(split, True, voc_encoder) for split in ['train', 'valid', 'test']}
 vocs = None
 
+if args.batch_size_max > len(train_data):
+    logs.append(f"{args.batch_size_max=} was modified to {len(train_data)=}")
+    args.batch_size_max = len(train_data)
+
 def train_collate(batch: list[tuple[Tensor, Tensor]]):
     tokens, weights = zip(*batch)
     token_batch = pad_sequence(tokens, padding_value=voc_encoder.pad_token)
@@ -182,9 +187,9 @@ def objective(trial: Trial):
     # Trial params
     if rank == MAIN_RANK:
         trargs = Namespace(**{
-            'batch_size': trial.suggest_categorical('batch_size', args.batch_sizes), 
-            'lr': trial.suggest_categorical('lr', args.lrs), 
-            'n_epoch': trial.suggest_categorical('n_epoch', args.n_epochs), 
+            'batch_size': trial.suggest_int('batch_size', args.batch_size_min, args.batch_size_max, log=True), 
+            'lr': trial.suggest_float('lr', args.lr_min, args.lr_max, log=True), 
+            'n_epoch': trial.suggest_int('n_epoch', args.n_epoch_min, args.n_epoch_max, log=True), 
             'warmup_ratio': trial.suggest_categorical('warmup_ratio', args.warmup_ratios)
         })
     else:

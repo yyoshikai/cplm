@@ -101,7 +101,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
 
             
             pbar.start("generation")
-            outputs = model.generate2(batch, '[END]', max_len, pad_token)
+            outputs = model.generate2(batch, '[END]', max_len, pad_token, tqdm=False)
             outputs = [out.cpu().numpy() for out in outputs]
 
             # Log tokens
