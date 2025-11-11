@@ -35,6 +35,9 @@ def mol_from_unimol_data(smi: str, coord: np.ndarray):
         for i in range(n_atom):
             conf.SetAtomPosition(i, Point3D(*coord[i]))
         mol.AddConformer(conf)
+    coord = mol.GetConformer().GetPositions()
+    if np.any(np.isnan(coord)):
+        raise ValueError(coord)
     return mol
 
 class UniMolLigandDataset(Dataset[Chem.Mol]):
