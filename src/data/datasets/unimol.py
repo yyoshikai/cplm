@@ -14,8 +14,7 @@ DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
 def mol_from_unimol_data(smi: str, coord: np.ndarray):
     coord = coord.astype(float)
-    if np.any(np.isnan(coord)):
-        raise ValueError(coord)
+    org_coord = coord
     # Generate mol with conformer
     mol = Chem.MolFromSmiles(smi)
     mol = Chem.AddHs(mol)
@@ -37,7 +36,7 @@ def mol_from_unimol_data(smi: str, coord: np.ndarray):
         mol.AddConformer(conf)
     coord = mol.GetConformer().GetPositions()
     if np.any(np.isnan(coord)):
-        raise ValueError(f"{smi=}, {coord=}")
+        raise ValueError(f"{smi=}, {coord=}, {org_coord=}")
     return mol
 
 class UniMolLigandDataset(Dataset[Chem.Mol]):
