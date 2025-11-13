@@ -26,7 +26,7 @@ def add_generate_args(parser: ArgumentParser):
     parser.add_argument("--batch-size", type=int, required=True)
 
 def generate(rdir: str, n_trial: int, batch_size: int, 
-        seed: int, max_len: int, model_args, init_state_path, no_score):
+        seed: int, max_len: int, model_args, init_state_path, no_score, tqdm_generate: bool=False):
 
     # Environment
     os.makedirs(rdir, exist_ok=True)
@@ -76,8 +76,6 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     model = get_model(model_args, voc_encoder, init_state_path, device)
     model.to(device)
 
-
-
     # 生成
     sampler = UnfinishedSampler(data, n_trial)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=False)
@@ -101,7 +99,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
 
             
             pbar.start("generation")
-            outputs = model.generate2(batch, '[END]', max_len, pad_token, tqdm=False)
+            outputs = model.generate2(batch, '[END]', max_len, pad_token, tqdm=tqdm_generate)
             outputs = [out.cpu().numpy() for out in outputs]
 
             # Log tokens
@@ -111,7 +109,6 @@ def generate(rdir: str, n_trial: int, batch_size: int,
 
             pbar.start("parsing")
             n_valid = 0
-            batch_errors = []
             for i, output in enumerate(outputs):
 
                 words = ['[LIGAND]']+voc_encoder.decode(itertools.takewhile(lambda x: x != end_token, output))
@@ -131,7 +128,6 @@ def generate(rdir: str, n_trial: int, batch_size: int,
                 coords += center
                 error, mol = parse_mol(smiles, coords)
                 errors[idx] = error
-                batch_errors.append(error)
                 if error != "":
                     continue
                 with open(f"{rdir}/sdf/{idx}.sdf", 'w') as f:
@@ -139,6 +135,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
                 n_valid += 1
                 sampler.is_remain[idx] = False
             logger.debug(f"{n_valid=}")
+            batch_errors = [errors[idx] for idx in batch_idxs]
             logger.debug(f"{batch_errors=}")
 
     df = pd.DataFrame({'idx': indices, 'smiles': smiless, 'error': errors})

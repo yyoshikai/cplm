@@ -2,14 +2,9 @@ import sys, os, yaml
 from argparse import ArgumentParser
 from glob import glob
 from addict import Dict
-import torch
-from torch.nn.utils.rnn import pad_sequence
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 sys.path += [f"{WORKDIR}/cplm"]
 from src.utils.path import subs_vars
-from src.data.tokenizer import StringTokenizer
-from src.finetune import get_finetune_data
-from src.train import get_model
 from src.generate import generate
 
 if __name__ == '__main__':
@@ -25,6 +20,7 @@ if __name__ == '__main__':
     parser.add_argument("--genname")
     ## Environment
     parser.add_argument("--batch-size", type=int, required=True)
+    parser.add_argument('--tqdm-generate', action='store_true')
     args = parser.parse_args()
 
     logs = []
@@ -49,4 +45,4 @@ if __name__ == '__main__':
     odir = f"{WORKDIR}/cplm/pocket_conditioned_generation/finetune/{args.genname}/{args.sname}/{args.opt}"
     
     # generate
-    generate(odir, args.n_trial, args.batch_size, args.seed, args.max_len, fargs, f"{fdir}/models/{args.opt}.pth", no_score=fargs.no_score)
+    generate(odir, args.n_trial, args.batch_size, args.seed, args.max_len, fargs, f"{fdir}/models/{args.opt}.pth", fargs.no_score, args.tqdm_generate)
