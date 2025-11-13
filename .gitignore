@@ -26,3 +26,4 @@ graph/
 !/pocket_conditioned_generation/*/*.py
 /test_qvina
 !test.sh
+tmp
