@@ -84,6 +84,7 @@ class CDProteinTestDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, str
     def __init__(self):
         self.split_by_name = torch.load(f"{CDDIR}/targetdiff/split_by_name.pt", 
                 weights_only=True)['test']
+        os.makedirs("./tmp", exist_ok=True)
     def __getitem__(self, idx):
 
         pname, lname = self.split_by_name[idx]
@@ -104,6 +105,7 @@ class CDProteinTestDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, str
 
         # protein
         tmp_path = f"./tmp/{idx}_{time()}.pdb"
+        print(protein_path)
         addMissingAtoms(protein_path, outfile=tmp_path)
         protein = parsePDB(tmp_path, )
         assert protein is not None

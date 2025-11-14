@@ -1,3 +1,5 @@
+disable_openbabel_log()
+
 import sys, os, itertools, math
 from argparse import ArgumentParser
 from collections.abc import Sized
@@ -10,7 +12,7 @@ from rdkit import Chem, RDLogger
 
 sys.path += ["/workspace/cplm"]
 from src.utils.random import set_random_seed
-from src.utils.logger import add_stream_handler, add_file_handler, get_logger
+from src.utils.logger import add_stream_handler, add_file_handler, get_logger, disable_openbabel_log
 from src.utils.path import cleardir
 from src.utils.time import wtqdm
 from src.data.tokenizer import StringTokenizer
@@ -26,7 +28,7 @@ def add_generate_args(parser: ArgumentParser):
     parser.add_argument("--batch-size", type=int, required=True)
 
 def generate(rdir: str, n_trial: int, batch_size: int, 
-        seed: int, max_len: int, model_args, init_state_path, no_score, tqdm_generate: bool=False):
+        seed: int, max_len: int, model_args, init_state_path, no_score, tqdm_generate: bool=False, max_prompt_len: int=math.inf):
 
     # Environment
     os.makedirs(rdir, exist_ok=True)
@@ -50,6 +52,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     add_file_handler(token_logger, f"{rdir}/tokens.log")
     token_logger.debug(f"[step][batch_idx][batch_index]=")
     RDLogger.DisableLog("rdApp.*")
+    disable_openbabel_log()
 
     ## Log args
     logger.info("args:")
@@ -61,14 +64,13 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation_data, \
         _protein_filename_data, _ligand_filename_data \
         = get_finetune_data(model_args, 'test', False, True, added_vocs, prompt_score='none' if no_score else 'low')
-    index_data, prompt_token_data = index_dataset(prompt_token_data)
-    data = StackDataset(index_data, prompt_token_data, center_data)
+    data = StackDataset(prompt_token_data, center_data)
     pad_token = voc_encoder.pad_token
     end_token = voc_encoder.voc2i['[END]']
-    def collate_fn(batch):
-        indices, batch, centers = list(zip(*batch))
-        batch = pad_sequence(batch, padding_value=pad_token)
-        return indices, batch, centers
+    def worker_init_fn(worker_id):
+        RDLogger.DisableLog("rdApp.*")
+        disable_openbabel_log()
+
 
     num_workers = min(28, batch_size)
     
@@ -77,35 +79,49 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     model.to(device)
 
     # 生成
-    sampler = UnfinishedSampler(data, n_trial)
+    sampler = UnfinishedSampler(data, n_trial, max_prompt_len=max_prompt_len)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=False)
     smiless = [None] * len(data)
     errors = [None] * len(data)
-    indices = [None] * len(data)
     os.makedirs(f"{rdir}/sdf", exist_ok=True)
 
     with torch.inference_mode():
         for step, batch_idxs in enumerate(pbar:=wtqdm(batch_sampler)):
+            logger.debug(f"batch_idxs[{step}]={batch_idxs}")
 
             pbar.start('data')
             train_loader = DataLoader(Subset(data, batch_idxs), shuffle=False, 
                     num_workers=num_workers, batch_size=len(batch_idxs), 
-                    collate_fn=collate_fn)
-            batch_indices, batch, centers = next(iter(train_loader))
+                    collate_fn=lambda x: x, worker_init_fn=worker_init_fn)
+            batch = next(iter(train_loader))
+            tokens, centers = list(zip(*batch))
+            for idx, token in zip(batch_idxs, tokens):
+                token_size = len(token)
+                sampler.sizes[idx] = token_size
+                if token_size > max_prompt_len:
+                    errors[idx] = 'LARGE_PROMPT'
+                    logger.warning(f"Too large prompt: {idx}")
+            
+            batch_idxs = [idx for idx, token in zip(batch_idxs, tokens) if len(token) <= max_prompt_len]
+            centers = [center for center, token in zip(batch_idxs, centers) if len(token) <= max_prompt_len]
+            tokens = [token for token in tokens if len(token) <= max_prompt_len]
+            if len(batch_idxs) == 0:
+                logger.info(f"step[{step}] All prompts were too large.")
+                continue
+            batch = pad_sequence(tokens)
+            logger.info(f"small batch_idxs[{step}]={batch_idxs}")
+
             L, B = batch.shape
             batch = batch.to(device)
-            logger.debug(f"batch_idxs[{step}]={batch_idxs}")
-            logger.debug(f"batch_indices[{step}]={batch_indices}")
-
             
             pbar.start("generation")
             outputs = model.generate2(batch, '[END]', max_len, pad_token, tqdm=tqdm_generate)
             outputs = [out.cpu().numpy() for out in outputs]
 
             # Log tokens
-            for batch_idx, batch_index, input, output in zip(batch_idxs, batch_indices, batch.T, outputs):
-                token_logger.debug(f"[{step}][{batch_idx}][{batch_index}]Input={voc_encoder.decode(input)}")
-                token_logger.debug(f"[{step}][{batch_idx}][{batch_index}]Output={voc_encoder.decode(output)}")
+            for batch_idx, input, output in zip(batch_idxs, batch.T, outputs):
+                token_logger.debug(f"[{step}][{batch_idx}]Input={voc_encoder.decode(input)}")
+                token_logger.debug(f"[{step}][{batch_idx}]Output={voc_encoder.decode(output)}")
 
             pbar.start("parsing")
             n_valid = 0
@@ -116,8 +132,6 @@ def generate(rdir: str, n_trial: int, batch_size: int,
                 idx = batch_idxs[i]
 
                 if not sampler.is_remain[idx]: continue
-
-                indices[idx] = batch_indices[i]
 
                 error, smiles, coords = parse_mol_tokens(words)
                 smiless[idx] = smiles
@@ -138,17 +152,19 @@ def generate(rdir: str, n_trial: int, batch_size: int,
             batch_errors = [errors[idx] for idx in batch_idxs]
             logger.debug(f"{batch_errors=}")
 
-    df = pd.DataFrame({'idx': indices, 'smiles': smiless, 'error': errors})
+    df = pd.DataFrame({'smiles': smiless, 'error': errors})
     df.to_csv(f"{rdir}/info.csv")
 
     return True
 
 class UnfinishedSampler:
-    def __init__(self, dataset: Sized, max_cycle: int=math.inf):
+    def __init__(self, dataset: Sized, max_cycle: int=math.inf, max_prompt_len: int=math.inf):
         
         self.iter_idxs = list(range(len(dataset)))
         self.is_remain = np.full(len(dataset), True)
         self.max_cycle = max_cycle
+        self.sizes = [None] * len(dataset)
+        self.max_prompt_len = max_prompt_len
 
     def __iter__(self):
 
@@ -157,6 +173,8 @@ class UnfinishedSampler:
             if np.all(~self.is_remain):
                 return
             for i in np.where(self.is_remain)[0]:
+                if self.sizes[i] is not None and self.sizes[i] > self.max_prompt_len:
+                    continue
                 if self.is_remain[i]:
                     yield i
             i_cycle += 1

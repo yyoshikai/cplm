@@ -300,7 +300,6 @@ def parse_qvina_outputs(docked_sdf_path, ref_mol):
 
     return results
 
-
 def eval_qvina(lig_path, rec_path, out_dir, lig_idx=0, conda_env='adt', use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None):
     """
     Pocket2Molの実装を再現

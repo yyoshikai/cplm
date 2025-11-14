@@ -78,3 +78,8 @@ def add_stream_handler(logger: Logger, level=logging.INFO, tqdm: bool=True,
 
 def log_git_hash(logger):
     logger.info(f"git hash={get_git_hash()}")
+
+def disable_openbabel_log():
+    from openbabel import openbabel
+    handler = openbabel.OBMessageHandler()
+    handler.SetOutputLevel(-1)
