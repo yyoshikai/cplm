@@ -1,5 +1,3 @@
-disable_openbabel_log()
-
 import sys, os, itertools, math
 from argparse import ArgumentParser
 from collections.abc import Sized
