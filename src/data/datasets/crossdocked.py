@@ -105,7 +105,6 @@ class CDProteinTestDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, str
 
         # protein
         tmp_path = f"./tmp/{idx}_{time()}.pdb"
-        print(protein_path)
         addMissingAtoms(protein_path, outfile=tmp_path)
         protein = parsePDB(tmp_path, )
         assert protein is not None

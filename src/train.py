@@ -28,7 +28,7 @@ from .data.tokenizer import VocEncoder
 from .data.collator import DDPStringCollateLoader, InfiniteLoader
 from .model import Model, MambaModel
 from .utils import git_commit, get_git_hash, reveal_data, should_show
-from .utils.logger import add_stream_handler, add_file_handler
+from .utils.logger import add_stream_handler, add_file_handler, disable_openbabel_log
 from .utils.rdkit import set_rdkit_logger
 from .utils.model import get_num_params, get_model_size
 from .utils.path import cleardir
@@ -128,6 +128,7 @@ def _get_train_logger(result_dir):
     # third-party modules
     set_rdkit_logger()
     getLogger('.prody').setLevel(logging.CRITICAL)
+    disable_openbabel_log()
     transformers.utils.logging.enable_propagation()
     transformers.utils.logging.disable_default_handler()
 

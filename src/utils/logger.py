@@ -80,6 +80,5 @@ def log_git_hash(logger):
     logger.info(f"git hash={get_git_hash()}")
 
 def disable_openbabel_log():
-    from openbabel import openbabel
-    handler = openbabel.OBMessageHandler()
-    handler.SetOutputLevel(-1)
+    from openbabel import pybel
+    pybel.ob.obErrorLog.SetOutputLevel(0)

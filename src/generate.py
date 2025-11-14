@@ -1,9 +1,11 @@
-import sys, os, itertools, math
+import sys, os, itertools, math, logging
 from argparse import ArgumentParser
 from collections.abc import Sized
 from inspect import getfullargspec
+from logging import getLogger
 import numpy as np, pandas as pd
 import torch
+import transformers
 from torch.utils.data import DataLoader, Subset, StackDataset, BatchSampler
 from torch.nn.utils.rnn import pad_sequence
 from rdkit import Chem, RDLogger
@@ -12,12 +14,11 @@ sys.path += ["/workspace/cplm"]
 from src.utils.random import set_random_seed
 from src.utils.logger import add_stream_handler, add_file_handler, get_logger, disable_openbabel_log
 from src.utils.path import cleardir
-from src.utils.time import wtqdm
+from src.utils.rdkit import set_rdkit_logger
 from src.data.tokenizer import StringTokenizer
 from src.finetune import get_finetune_data
-from src.data import index_dataset
 from src.train import get_model
-from src.evaluate import parse_mol_tokens, parse_mol
+from src.evaluate import parse_mol_tokens2
 
 def add_generate_args(parser: ArgumentParser):
     parser.add_argument('--n-trial', type=int, default=1)
@@ -52,6 +53,13 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     RDLogger.DisableLog("rdApp.*")
     disable_openbabel_log()
 
+    # third-party modules
+    set_rdkit_logger()
+    getLogger('.prody').setLevel(logging.CRITICAL)
+    disable_openbabel_log()
+    transformers.utils.logging.enable_propagation()
+    transformers.utils.logging.disable_default_handler()
+
     ## Log args
     logger.info("args:")
     for name in getfullargspec(generate)[0][2:]:
@@ -59,15 +67,11 @@ def generate(rdir: str, n_trial: int, batch_size: int,
 
     # Data
     added_vocs = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()).vocs()
-    voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation_data, \
-        _protein_filename_data, _ligand_filename_data \
-        = get_finetune_data(model_args, 'test', False, True, added_vocs, prompt_score='none' if no_score else 'low')
+    voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation, _protein_filename_data, _ligand_filename_data \
+        = get_finetune_data(model_args, 'test', False, False, added_vocs, prompt_score='none' if no_score else 'low')
     data = StackDataset(prompt_token_data, center_data)
     pad_token = voc_encoder.pad_token
     end_token = voc_encoder.voc2i['[END]']
-    def worker_init_fn(worker_id):
-        RDLogger.DisableLog("rdApp.*")
-        disable_openbabel_log()
 
 
     num_workers = min(28, batch_size)
@@ -84,13 +88,12 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     os.makedirs(f"{rdir}/sdf", exist_ok=True)
 
     with torch.inference_mode():
-        for step, batch_idxs in enumerate(pbar:=wtqdm(batch_sampler)):
+        for step, batch_idxs in enumerate(batch_sampler):
             logger.debug(f"batch_idxs[{step}]={batch_idxs}")
 
-            pbar.start('data')
             train_loader = DataLoader(Subset(data, batch_idxs), shuffle=False, 
                     num_workers=num_workers, batch_size=len(batch_idxs), 
-                    collate_fn=lambda x: x, worker_init_fn=worker_init_fn)
+                    collate_fn=lambda x: x)
             batch = next(iter(train_loader))
             tokens, centers = list(zip(*batch))
             for idx, token in zip(batch_idxs, tokens):
@@ -101,7 +104,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
                     logger.warning(f"Too large prompt: {idx}")
             
             batch_idxs = [idx for idx, token in zip(batch_idxs, tokens) if len(token) <= max_prompt_len]
-            centers = [center for center, token in zip(batch_idxs, centers) if len(token) <= max_prompt_len]
+            centers = [center for center, token in zip(centers, tokens) if len(token) <= max_prompt_len]
             tokens = [token for token in tokens if len(token) <= max_prompt_len]
             if len(batch_idxs) == 0:
                 logger.info(f"step[{step}] All prompts were too large.")
@@ -112,7 +115,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
             L, B = batch.shape
             batch = batch.to(device)
             
-            pbar.start("generation")
+            logger.info(f"step[{step}] generating...")
             outputs = model.generate2(batch, '[END]', max_len, pad_token, tqdm=tqdm_generate)
             outputs = [out.cpu().numpy() for out in outputs]
 
@@ -121,34 +124,21 @@ def generate(rdir: str, n_trial: int, batch_size: int,
                 token_logger.debug(f"[{step}][{batch_idx}]Input={voc_encoder.decode(input)}")
                 token_logger.debug(f"[{step}][{batch_idx}]Output={voc_encoder.decode(output)}")
 
-            pbar.start("parsing")
-            n_valid = 0
+            logger.debug(f"step[{step}] parsing...")
             for i, output in enumerate(outputs):
 
                 words = ['[LIGAND]']+voc_encoder.decode(itertools.takewhile(lambda x: x != end_token, output))
-                center = centers[i]
                 idx = batch_idxs[i]
 
                 if not sampler.is_remain[idx]: continue
 
-                error, smiles, coords = parse_mol_tokens(words)
-                smiless[idx] = smiles
-                if error != "":
-                    errors[idx] = error
-                    continue
-
-                coords += center
-                error, mol = parse_mol(smiles, coords)
+                error, mol = parse_mol_tokens2(words, centers[i])
                 errors[idx] = error
-                if error != "":
-                    continue
+                if error != "": continue
                 with open(f"{rdir}/sdf/{idx}.sdf", 'w') as f:
                     f.write(Chem.MolToMolBlock(mol))
-                n_valid += 1
                 sampler.is_remain[idx] = False
-            logger.debug(f"{n_valid=}")
-            batch_errors = [errors[idx] for idx in batch_idxs]
-            logger.debug(f"{batch_errors=}")
+            logger.info(f"batch_errors={[errors[idx] for idx in batch_idxs]}")
 
     df = pd.DataFrame({'smiles': smiless, 'error': errors})
     df.to_csv(f"{rdir}/info.csv")

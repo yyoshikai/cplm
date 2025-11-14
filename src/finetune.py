@@ -147,11 +147,13 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     pocket_atom, pocket_coord, pocket_coord_position = ProteinProcessDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
 
     if args.protein:
-        pocket_coord, lig_coord, center, rotation \
+        pocket_coord, lig_coord, *center_rotation \
             = CoordTransformDataset(pocket_coord, lig_coord, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
     else:
-        lig_coord, pocket_coord, center, rotation \
+        lig_coord, pocket_coord, *center_rotation \
             = CoordTransformDataset(lig_coord, pocket_coord, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
+    center = center_rotation[0]
+    rotation = center_rotation[1] if random_rotate else None
 
     # sentence
     separates = {'[POCKET]', '[XYZ]', '[SCORE]', '[LIGAND]', '[END]'}

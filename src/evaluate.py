@@ -109,6 +109,23 @@ def parse_mol(smiles: str, coords: np.ndarray) -> tuple[str, Chem.Mol|None]:
     mol.AddConformer(conf)
     return '', mol
 
+def parse_mol_tokens2(tokens: list[str], center: np.ndarray|None=None, 
+        rotation: np.ndarray|None=None) \
+        -> tuple[str, Chem.Mol|None]:
+    if center is not None:
+        assert center.shape == (3,), center.shape
+    if rotation is not None:
+        assert rotation.shape == (3,3)
+    error, smiles, coords = parse_mol_tokens(tokens)
+    if error != "":
+        return error, None
+    if rotation is not None:
+        coords = np.matmul(coords, np.linalg.inv(rotation))
+    if center is not None:
+        coords += center
+    error, mol = parse_mol(smiles, coords)
+    return error, mol
+    
 def parse_pocket_tokens(tokens: list[str], end_token: str, 
         pocket_coord_heavy: bool, coord_follow_atom: bool) \
         -> tuple[str, list[str], np.ndarray|None]:

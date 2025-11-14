@@ -14,7 +14,7 @@ from torch import Tensor
 from transformers.models.mamba.configuration_mamba import MambaConfig
 from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
 from transformers.generation.streamers import BaseStreamer
-from .transformer import save_vocs, align_embedding, left_to_right_padding
+from .transformer import save_vocs, align_embedding, right_to_left_padding
 from ..utils.memory import get_mems
 
 
@@ -192,13 +192,14 @@ class MambaModel(nn.Module):
         assert self.model.config.eos_token_id == self.vocs.index(end_voc)
         assert self.model.config.pad_token_id == pad_token
         Lc, B = context.shape
-        context = left_to_right_padding(context, pad_token)
+        context = right_to_left_padding(context, pad_token)
         context = context.T # [B, L]
 
         device = next(self.parameters()).device
-        self.logger.info(f"GPU[pred]={self.get_gpuuse(B, Lc, False)/2**30:.03f}GB")
-        self.logger.info(f"{Lc=}")
-        torch.cuda.reset_peak_memory_stats(device)
+        self.logger.debug(f"GPU[pred]={self.get_gpuuse(B, Lc, False)/2**30:.03f}GB")
+        self.logger.debug(f"{Lc=}")
+        if tqdm:
+            torch.cuda.reset_peak_memory_stats(device)
 
         # Left to right padding
         

@@ -24,7 +24,7 @@ from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
 from src.utils.path import cleardir
 from src.utils.time import TimerTqdm
-from src.evaluate import parse_mol_tokens, parse_mol
+from src.evaluate import parse_mol_tokens2, parse_mol
 from src.evaluate import eval_vina, eval_qvina3
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks, log_batch
 from src.model import Model
@@ -358,19 +358,10 @@ for step in step_timer:
                         yaml.dump(info, f)
                     with open(f"{eval_dir}/tokens.txt", 'w') as f:
                         f.write(','.join(out_tokens)+'\n')
-                error, smiles, coords = parse_mol_tokens(out_tokens)
                 
-                if error != '':
-                    errors.append(error)
-                    continue
-                
-                rotation_inv = np.linalg.inv(rotation)
-                coords = np.matmul(coords, rotation_inv) + center
-                error, mol = parse_mol(smiles, coords)
+                error, mol = parse_mol_tokens2(out_tokens, center, rotation)
                 errors.append(error)
-
-                if error != '':
-                    continue
+                if error != '': continue
                 
                 with open(f"{eval_dir}/lig.sdf", 'w') as f:
                     f.write(Chem.MolToMolBlock(mol))
