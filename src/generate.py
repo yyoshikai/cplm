@@ -54,7 +54,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     disable_openbabel_log()
 
     # third-party modules
-    set_rdkit_logger()
+    set_rdkit_logger().setLevel(logging.CRITICAL)
     getLogger('.prody').setLevel(logging.CRITICAL)
     disable_openbabel_log()
     transformers.utils.logging.enable_propagation()
@@ -101,7 +101,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
                 sampler.sizes[idx] = token_size
                 if token_size > max_prompt_len:
                     errors[idx] = 'LARGE_PROMPT'
-                    logger.warning(f"Too large prompt: {idx}")
+                    logger.warning(f"Too large prompt: {idx}({token_size})")
             
             batch_idxs = [idx for idx, token in zip(batch_idxs, tokens) if len(token) <= max_prompt_len]
             centers = [center for center, token in zip(centers, tokens) if len(token) <= max_prompt_len]
