@@ -58,7 +58,7 @@ def eval_vina(gname):
     with cf.ProcessPoolExecutor(28) as e:
         fs = []
         for i in is_:
-            didx=dfg.loc[i, 'idx']
+            didx=i
 
             fs.append(e.submit(metric, lig_path=f"{gdir}/sdf/{i}.sdf", 
                     rec_path=data[didx][3], 

@@ -1,11 +1,9 @@
-import sys, os, yaml, shutil, psutil, gc, math, random, re
+import sys, os, yaml, psutil, gc, math, random, re
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 from logging import getLogger
 import numpy as np, pandas as pd
-from addict import Dict
-from glob import glob
 from contextlib import nullcontext
 import torch
 import torch.distributed as dist
@@ -24,7 +22,7 @@ from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
 from src.utils.path import cleardir
 from src.utils.time import TimerTqdm
-from src.evaluate import parse_mol_tokens2, parse_mol
+from src.evaluate import parse_mol_tokens2
 from src.evaluate import eval_vina, eval_qvina3
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks, log_batch
 from src.model import Model
