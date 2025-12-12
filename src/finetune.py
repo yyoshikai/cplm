@@ -1,6 +1,7 @@
 from argparse import Namespace
 from typing import Literal
 import numpy as np
+from torch.utils.data import Dataset
 from .data import CacheDataset, RepeatDataset, Subset, StackDataset, untuple
 from .data.tokenizer import StringTokenizer, FloatTokenizer, \
     ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
@@ -9,7 +10,7 @@ from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDP
 from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from .data.datasets.crossdocked import CDDataset, CDProteinDataset
 from .data.datasets.pdb import PDBUniMolRandomDataset
-from .data.protein import ProteinProcessDataset
+from .data.protein import ProteinProcessDataset, Protein
 from .data.molecule import MolProcessDataset, RandomScoreDataset, RandomClassDataset
 from .data.coord import CoordTransformDataset
 from .data.tokenizer import TokenEncodeDataset, VocEncoder, \
@@ -123,7 +124,7 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_wei
     split2datas[split] = datas
 
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
-        added_vocs: set[str], prompt_score: Literal['data', 'low', 'none']):
+        added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[Protein]|None=None):
     
     # tokenizer
     coord_tokenizer = FloatTokenizer('ligand', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
@@ -131,16 +132,17 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 
     # raw data
-    if getattr(args, 'targetdiff', True):
-        if args.protein:
-            raw_data = TargetDiffScafCDProteinDataset(split)
+    if raw_data is None:
+        if getattr(args, 'targetdiff', True):
+            if args.protein:
+                raw_data = TargetDiffScafCDProteinDataset(split)
+            else:
+                raw_data = TargetDiffScafCDDataset(split)
         else:
-            raw_data = TargetDiffScafCDDataset(split)
-    else:
-        if args.protein:
-            raw_data = CDProteinDataset(split)
-        else:
-            raw_data = CDDataset(split)
+            if args.protein:
+                raw_data = CDProteinDataset(split)
+            else:
+                raw_data = CDDataset(split)
     protein, lig, score, protein_filename, ligand_filename = untuple(raw_data, 5)
 
     lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize).untuple()

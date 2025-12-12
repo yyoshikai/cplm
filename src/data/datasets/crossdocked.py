@@ -82,6 +82,7 @@ class CDProteinTestDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, str
     現状, 生成にしか使わなさそうなので毎回読み込むようにしている。
     """
     def __init__(self):
+        super().__init__(5)
         self.split_by_name = torch.load(f"{CDDIR}/targetdiff/split_by_name.pt", 
                 weights_only=True)['test']
         os.makedirs("./tmp", exist_ok=True)
@@ -111,7 +112,7 @@ class CDProteinTestDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, str
         protein = Protein(protein.getData('name'), protein.getCoords())
         os.remove(tmp_path)
 
-        return protein, mol, None, protein_path, None
+        return protein, mol, None, protein_path, ligands_path
     
     def __len__(self):
         return len(self.split_by_name)
@@ -126,6 +127,7 @@ class CDProteinDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, str]]):
         else:
             raise ValueError(f"Unsupported {split=}")
     def __init__(self, split: Literal['train', 'valid']):
+        super().__init__(5)
         self.indices = IntLMDBDataset(f"{CDDIR}/pockets/mask/{split}_idxs.lmdb")
         self.dataset = CDProteinWholeDataset()
     def __getitem__(self, idx: int):

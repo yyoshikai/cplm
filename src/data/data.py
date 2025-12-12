@@ -163,6 +163,12 @@ def index_dataset(dataset: Dataset[T]) -> tuple[Dataset[int], Dataset[T]]:
     dataset = IndexDataset(dataset)
     return untuple_dataset(dataset, 2)
 
+class IndexIDataset(IterableDataset[tuple[int, T_co]]):
+    def __init__(self, dataset: Dataset[T_co]):
+        self.dataset = dataset
+    def __iter__(self):
+        yield from enumerate(self.dataset)
+
 class ConstantDataset(Dataset[T_co]):
     def __init__(self, value: T_co, size: int):
         self.size = size
@@ -181,6 +187,17 @@ class TensorDataset(Dataset[Tensor]):
 
     def __len__(self):
         return self.tensor.size(0)
+
+class WorkerIDataset(IterableDataset[T_co]):
+    def __init__(self, dataset: IterableDataset[T_co]):
+        self.dataset = dataset
+    def __iter__(self):
+        worker_info = get_worker_info()
+        if worker_info is not None:
+            size, rank = worker_info.num_workers, worker_info.id
+        else:
+            size, rank = 1, 0
+        yield from itr.islice(self.dataset, rank, None, size)
 
 def is_main_worker() -> bool:
     worker_info = get_worker_info()

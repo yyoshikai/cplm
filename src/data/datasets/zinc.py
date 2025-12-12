@@ -1,5 +1,3 @@
-import sys, os
-from pathlib import Path
 from torch.utils.data import Subset
 from ..lmdb import StringLMDBDataset, IntLMDBDataset
 from ...utils.path import WORKDIR
@@ -9,3 +7,7 @@ class ZincDataset(Subset[str]):
     def __init__(self, split: str):
         index_data = IntLMDBDataset(f"{ZINC_DIR}/idxs/{split}.lmdb")
         super().__init__(StringLMDBDataset(f"{ZINC_DIR}/smi.lmdb"), index_data)
+
+class ZincAllDataset(StringLMDBDataset):
+    def __init__(self):
+        super().__init__(f"{ZINC_DIR}/smi.lmdb")
