@@ -49,7 +49,7 @@ class MoleculeNetDataset(PickleLMDBDataset):
 
 from rdkit import Chem
 from ..data import TupleDataset
-class UniMolMoleculeNetDataset(TupleDataset[tuple[Chem.Mol, tuple[int|float,...]]]):
+class UniMolConformerMoleculeNetDataset(TupleDataset[tuple[Chem.Mol, tuple[int|float,...]]]):
     def __init__(self, data_name: str, split: Literal['train', 'valid', 'test'], 
                 n_conformer: int=10, choice_coord: bool=True, base_seed: int=None):
         super().__init__(2)
