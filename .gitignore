@@ -27,3 +27,6 @@ graph/
 /test_qvina
 !test.sh
 tmp
+/downstream/*
+!/downstream/finetune
+!/downstream/finetune/*.py

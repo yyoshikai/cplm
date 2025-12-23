@@ -69,7 +69,6 @@ parser.add_argument('--finetune-opt', type=int, default=None)
 parser.add_argument('--finetune-patience-val', type=int)
 ## environment
 parser.add_argument('--num-workers', type=int, default=0)
-parser.add_argument('--pin-memory', action='store_true')
 parser.add_argument('--prefetch-factor', type=int)
 parser.add_argument('--num-score-workers', type=int, default=1)
 parser.add_argument('--cpu', type=int)
@@ -214,7 +213,7 @@ if args.max_prompt_len is not None:
 # DataLoader
 class ReinforceIter:
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, dataset: Dataset, num_workers:int, pin_memory: bool, prefetch_factor: int, 
+    def __init__(self, dataset: Dataset, num_workers:int, prefetch_factor: int, 
             batch_size: int, batch_first: bool, padding_value: int, repeat_per_sample: int,
             fix_pocket: bool):
         self.size = dist.get_world_size()
@@ -230,7 +229,7 @@ class ReinforceIter:
         if self.rank == self.main_rank:
             loader = DataLoader(dataset, batch_size=None, 
                 sampler=InfiniteRandomSampler(dataset, generator=torch.Generator().manual_seed(args.seed)),
-                num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
+                num_workers=num_workers, pin_memory=True, prefetch_factor=prefetch_factor)
             self.iter = loader.__iter__()
             if args.max_prompt_len is not None:
                 self.iter = itr.filterfalse(lambda x: len(x[1]) > args.max_prompt_len, self.iter)
@@ -259,7 +258,7 @@ class ReinforceIter:
         tokens, centers, rotations, protein_paths, lfnames = zip(*items_box[0])
         return all_idxs, tokens, centers, rotations, protein_paths, lfnames
 train_iter = ReinforceIter(train_data, args.num_workers, 
-    args.pin_memory, args.prefetch_factor, args.batch_size, batch_first, 
+    args.prefetch_factor, args.batch_size, batch_first, 
     voc_encoder.pad_token, args.generate_per_sample, args.fix_pocket)
 
 # optimizer
