@@ -88,8 +88,6 @@ parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'opt
 add_env_args(parser)
 args = parser.parse_args()
 ## set default args
-sdp_kernel = args.sdp_kernel
-args.sdp_kernel = None # Do not set_sdp_kernel to use EFFICIENT in inference
 if args.test: args.studyname+='_test'
 if args.record_opt is None:
     args.record_opt = 1 if args.test else 500
