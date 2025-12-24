@@ -3,29 +3,19 @@ from typing import Literal
 import numpy as np
 from torch.utils.data import Dataset
 from .data import CacheDataset, RepeatDataset, Subset, StackDataset, untuple
-from .data.tokenizer import StringTokenizer, FloatTokenizer, \
-    ProteinAtomTokenizer, TokenizeDataset, ArrayTokenizeDataset, \
-    SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
+from .data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from .data.datasets.crossdocked import CDDataset, CDProteinDataset
 from .data.datasets.pdb import PDBUniMolRandomDataset
-from .data.protein import ProteinProcessDataset, Protein
-from .data.molecule import MolProcessDataset, RandomScoreDataset, RandomClassDataset
+from .data.protein import Protein
+from .data.molecule import RandomScoreDataset, RandomClassDataset
 from .data.coord import CoordTransformDataset
-from .data.tokenizer import TokenEncodeDataset, VocEncoder, \
-        ProteinAtomTokenizer, FloatTokenizer, StringTokenizer
-from .data.protein import CoordFollowDataset
 from .utils.path import WORKDIR
 
 def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
     logs = []
     logs.append(f"{split} data actual_size/total_size=")
-
-    smiles_tokenizer = StringTokenizer(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines())
-    mol_coord_tokenizer = FloatTokenizer('ligand', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
-    pocket_coord_tokenizer = FloatTokenizer('pocket', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
-    pocket_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 
     datas = []
     weight_datas = []
@@ -54,59 +44,48 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_wei
         ### Molecules
         if cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset]:
             mol = data
-            smi, coord = MolProcessDataset(mol, args.seed+d_seed, 
-                h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, 
-                randomize=args.lig_randomize).untuple()
-            coord = CoordTransformDataset(coord, base_seed=args.seed+d_seed, 
+            mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, 
                 normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-
+            mol = MolTokenizeDataset(mol, args.seed+d_seed, 
+                h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, 
+                randomize=args.lig_randomize)
+            
             ### sentence
-            smi = TokenizeDataset(smi, smiles_tokenizer)
-            coord = ArrayTokenizeDataset(coord, mol_coord_tokenizer)
-            sentence = ['[LIGAND]', smi, '[XYZ]', coord, '[END]']
-            weights = [None, lig_weight, 0.0]
+            sentence = ['[LIGAND]', mol, '[END]']
+            separates = {'[LIGAND]', '[SCORE]', '[END]'}
+            weights = [None, lig_weight, 0.0, ]
             if score != 'none':
                 if score == 'cls':
-                    score = RandomClassDataset(len(smi), args.seed+d_seed)
+                    score = RandomClassDataset(len(mol), args.seed+d_seed)
                     score = TokenizeDataset(score, BinaryClassTokenizer())
                 elif score == 'reg':
-                    score = RandomScoreDataset(-50, 50, len(smi), args.seed+d_seed)
-                    score = TokenizeDataset(score, FloatTokenizer('score', -args.coord_range, args.coord_range, 
-                            log_interval=args.tokenizer_log_interval))
+                    score = RandomScoreDataset(-50, 50, len(mol), args.seed+d_seed)
+                    score = TokenizeDataset(score, FloatTokenizer('score', -args.coord_range, args.coord_range))
                 else:
                     raise ValueError
                 sentence += ['[SCORE]', score, '[END]']
                 weights += [score_weight, 0.0]
-
+            
             mol_data = SentenceDataset(*sentence)
             vocs |= mol_data.vocs()
+            data = CacheDataset(mol_data)
             
             ### weight
-            data = CacheDataset(mol_data)
-            separates = {'[LIGAND]', '[SCORE]', '[END]'}
-            weight_data = RemoveLastDataset(TokenWeightDataset(mol_data, separates, weights, by_n_separate=True))
-        ### Pockets
+            weight_data = RemoveLastDataset(TokenWeightDataset(data, separates, weights, by_n_separate=True))
+        ### Proteins
         else:
-            pocket = data
-            atoms, coord, coord_position = ProteinProcessDataset(pocket, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
-
-            coord = CoordTransformDataset(coord, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-
-            ### setntence
-            atoms = TokenizeDataset(atoms, pocket_atom_tokenizer)
-            coord = ArrayTokenizeDataset(coord, pocket_coord_tokenizer)
-            if args.coord_follow_atom:
-                pocket_data = CoordFollowDataset(atoms, coord, coord_position)
-                pocket_data = SentenceDataset('[POCKET]', pocket_data, '[END]')
-            else:
-                pocket_data = SentenceDataset('[POCKET]', atoms, '[XYZ]', coord, '[END]')
-            vocs |= pocket_data.vocs()
-            data = CacheDataset(pocket_data)
+            protein = data
+            protein = CoordTransformDataset(protein, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
+            protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord,
+                    coord_follow_atom = args.coord_follow_atom)
+            protein_data = SentenceDataset('[POCKET]', protein, '[END]')
+            vocs |= protein_data.vocs()
+            data = CacheDataset(protein_data)
 
             #### weight
             separates = {'[POCKET]', '[END]'}
             separates2weight = { ('[POCKET]',): pocket_weight, ('[POCKET]', '[END]'): 0.0 }
-            weight_data = RemoveLastDataset(TokenWeightDataset(pocket_data, separates, separates2weight))
+            weight_data = RemoveLastDataset(TokenWeightDataset(protein_data, separates, separates2weight))
 
         datas.append(data)
         weight_datas.append(weight_data)
@@ -125,11 +104,6 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_wei
 
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
         added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[Protein]|None=None):
-    
-    # tokenizer
-    coord_tokenizer = FloatTokenizer('ligand', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
-    protein_coord_tokenizer = FloatTokenizer('pocket', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
-    protein_atom_tokenizer = ProteinAtomTokenizer(log_interval=args.tokenizer_log_interval)
 
     # raw data
     if raw_data is None:
@@ -145,36 +119,35 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
                 raw_data = CDDataset(split)
     protein, lig, score, protein_filename, ligand_filename = untuple(raw_data, 5)
 
-    lig_smi, lig_coord = MolProcessDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize).untuple()
-    pocket_atom, pocket_coord, pocket_coord_position = ProteinProcessDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord).untuple()
-
+    ## rotation
     if args.protein:
-        pocket_coord, lig_coord, *center_rotation \
-            = CoordTransformDataset(pocket_coord, lig_coord, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
+        protein, lig, *center_rotation \
+            = CoordTransformDataset(protein, lig, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
     else:
-        lig_coord, pocket_coord, *center_rotation \
-            = CoordTransformDataset(lig_coord, pocket_coord, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
+        lig, protein, *center_rotation \
+            = CoordTransformDataset(lig, protein, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
     center = center_rotation[0]
     rotation = center_rotation[1] if random_rotate else None
 
+
     # sentence
     separates = {'[POCKET]', '[XYZ]', '[SCORE]', '[LIGAND]', '[END]'}
+    sentence = []
+    weights = []
     ## pocket
-    pocket_atom = TokenizeDataset(pocket_atom, protein_atom_tokenizer)
-    pocket_coord = ArrayTokenizeDataset(pocket_coord, protein_coord_tokenizer)
+    protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow=args.coord_follow_atom)
+    sentence += ['[POCKET]', protein, '[END]']
     if args.coord_follow_atom:
         assert args.pocket_atom_weight == args.pocket_coord_weight
-        sentence = ['[POCKET]', CoordFollowDataset(pocket_atom, pocket_coord, pocket_coord_position), '[END]']
-        weights = [None, args.pocket_coord_weight, 0.0]
+        weights += [None, args.pocket_coord_weight, 0.0]
     else:
-        sentence = ['[POCKET]', pocket_atom, '[XYZ]', pocket_coord, '[END]']
-        weights = [None, args.pocket_atom_weight, args.pocket_coord_weight, 0.0]
+        weights += [None, args.pocket_atom_weight, args.pocket_coord_weight, 0.0]
     ## score
     assert prompt_score in ['none', 'data', 'low']
     if prompt_score != 'none':
         if prompt_score == 'low':
-            score = RandomScoreDataset(-12.0, -10.0, len(pocket_atom), args.seed)
-        score_tokenizer = FloatTokenizer('score', -args.coord_range, args.coord_range, log_interval=args.tokenizer_log_interval)
+            score = RandomScoreDataset(-12.0, -10.0, len(protein), args.seed)
+        score_tokenizer = FloatTokenizer('score', -args.coord_range, args.coord_range)
         score = TokenizeDataset(score, score_tokenizer)
         sentence += ['[SCORE]', score, '[END]']
         weights += [0.0, 0.0]
@@ -183,9 +156,8 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     sentence.append('[LIGAND]')
     weights.append(args.lig_smiles_weight)
     if add_ligand:
-        lig_smi = TokenizeDataset(lig_smi, StringTokenizer(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines()))
-        lig_coord = ArrayTokenizeDataset(lig_coord, coord_tokenizer)
-        sentence += [lig_smi, '[XYZ]', lig_coord, '[END]']
+        lig = MolTokenizeDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize)
+        sentence += [lig, '[END]']
         weights += [args.lig_coord_weight, 0.0]
     sentence = SentenceDataset(*sentence)
     vocs = sentence.vocs() | added_vocs

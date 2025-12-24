@@ -167,8 +167,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
     parser.add_argument("--gpu-size-gb", type=float, required=True)
-    ## log interval
-    parser.add_argument("--tokenizer-log-interval", type=int)
     ## test
     parser.add_argument("--weight-decay-all", action='store_true')
     parser.add_argument('--deterministic', action='store_true')
@@ -207,9 +205,6 @@ def update_pretrain_args(args: Namespace, targs: dict):
             setattr(args, key, value)
 
 def set_default_args(args: Namespace):
-    # log interval
-    if args.tokenizer_log_interval is None:
-        args.tokenizer_log_interval = int(1e6) if args.test else int(1e8)
     if args.test: args.studyname+='_test'
 
     # post_init

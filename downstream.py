@@ -22,10 +22,9 @@ from src.utils.ddp import dist_broadcast_object, dist_send_tensor, dist_recv_ten
 from src.utils.random import ddp_set_random_seed
 from src.utils.rdkit import ignore_warning
 from src.data import KeyDataset, CacheDataset, StackDataset
-from src.data.molecule import MolProcessDataset
 from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
-from src.data.tokenizer import StringTokenizer, FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, ArrayTokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
+from src.data.tokenizer import SmilesTokenizer, FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
 from src.data.collator import DDPStringCollateLoader
 from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch, NO_DUP
 
@@ -91,18 +90,16 @@ prefetch_factor = 1 if args.num_workers == 0 else 10
 def get_downstream_data(split, is_valid, voc_encoder=None):
     unimol_raw = UniMolMoleculeNetDataset(args.data, split, 1, True, args.seed)
     mol, target = unimol_raw.untuple()
-    smi, coord = MolProcessDataset(mol, args.seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize).untuple()
-    coord = CoordTransformDataset(coord, base_seed=args.seed, normalize_coord=True, random_rotate=False if is_valid else True).untuple()[0]
     target = KeyDataset(CacheDataset(target), raw.tasks.index(args.task))
+    
+    # coord transform
+    mol = CoordTransformDataset(mol, base_seed=args.seed, normalize_coord=True, random_rotate=False if is_valid else True).untuple()[0]
 
+    smi_tokenizer = SmilesTokenizer()
     # tokenize
     sentence = []
-    smi_tokenizer = StringTokenizer(open(f"src/data/smiles_tokens.txt").read().splitlines())
-    smi = TokenizeDataset(smi, smi_tokenizer)
-    sentence += ['[LIGAND]', smi]
-    coord_tokenizer = FloatTokenizer('coord', -targs.coord_range, targs.coord_range)
-    coord = ArrayTokenizeDataset(coord, coord_tokenizer)
-    sentence += ['[XYZ]', coord, '[END]']
+    mol = MolTokenizeDataset(mol, args.seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize)
+    sentence += ['[LIGAND]', mol, '[END]']
     if is_valid:
         sentence += ['[SCORE]']
         sentence = SentenceDataset(*sentence)

@@ -15,7 +15,7 @@ from src.utils.random import set_random_seed
 from src.utils.logger import add_stream_handler, add_file_handler, get_logger, disable_openbabel_log
 from src.utils.path import cleardir
 from src.utils.rdkit import set_rdkit_logger
-from src.data.tokenizer import StringTokenizer
+from src.data.tokenizer import SmilesTokenizer
 from src.finetune import get_finetune_data
 from src.train import get_model
 from src.evaluate import parse_mol_tokens2
@@ -66,7 +66,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
         logger.info(f"    {name}: {eval(name)}")
 
     # Data
-    added_vocs = StringTokenizer(open("src/data/smiles_tokens.txt").read().splitlines()).vocs()
+    added_vocs = SmilesTokenizer()
     voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation, _protein_filename_data, _ligand_filename_data \
         = get_finetune_data(model_args, 'test', False, False, added_vocs, prompt_score='none' if no_score else 'low')
     data = StackDataset(prompt_token_data, center_data)

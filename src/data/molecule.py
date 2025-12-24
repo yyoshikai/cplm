@@ -1,28 +1,27 @@
-import os
-from typing import Optional
-import numpy as np, pandas as pd
-from torch.utils.data import Dataset, get_worker_info
+import numpy as np
+from torch.utils.data import Dataset
 from rdkit import Chem
-from .data import WrapTupleDataset, is_main_worker, get_rng
+from .data import WrapDataset, get_rng
+from .tokenizer import SmilesTokenizer, FloatTokenizer
 
-class MolProcessDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, h_atom: bool, h_coord: bool, randomize: bool, sample_save_dir: Optional[str]=None):
-        super().__init__(mol_data, 2)
+class MolTokenizeDataset(WrapDataset[list[str]]):
+    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, h_atom: bool, h_coord: bool, randomize: bool, coord_range: float, coord_follow_atom: bool, atoms: bool):
+        super().__init__(mol_data)
         self.mol_data = mol_data
         self.h_atom = h_atom
         self.h_coord = h_coord
-        assert not ((not self.h_atom) and self.h_coord), 'Not supported.'
+        self.coord_follow_atom = coord_follow_atom
+        self.atoms = atoms
+        assert not ((not self.h_atom) and self.h_coord), 'Not Implemented.'
+        assert not ((not self.atoms) and self.coord_follow_atom), 'Not Implemented'
         self.randomize = randomize
         self.seed = base_seed
 
-        self.sample_save_dir = sample_save_dir
-        self.getitem_count = 0
+        self.smi_tokenizer = SmilesTokenizer()
+        self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
         
     def __getitem__(self, idx: int):
         mol = self.mol_data[idx]
-
-        # rng
-        epoch = int(os.environ.get('EPOCH', 0))
         rng = get_rng(self.seed, idx)
 
         # remove/add hydrogen
@@ -36,33 +35,43 @@ class MolProcessDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
             idxs = np.arange(mol.GetNumAtoms(), dtype=int)
             rng.shuffle(idxs)
             mol = Chem.RenumberAtoms(mol, idxs.tolist())
-            smi = Chem.MolToSmiles(mol, canonical=False)
-        else:
-            smi = Chem.MolToSmiles(mol)
+        smi = Chem.MolToSmiles(mol, canonical=not self.randomize)
         try:
-            atom_order = eval(mol.GetProp('_smilesAtomOutputOrder'))
+            atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
         except Exception as e:
-            print(f"{mol=}")
+            print(f"{mol=}", flush=True)
             raise e
-        if self.h_atom and not self.h_coord:
-            atom_order = [o for o in atom_order if mol.GetAtomWithIdx(o).GetSymbol() != 'H']
-        coord = mol.GetConformer().GetPositions()
-        coord = coord[atom_order]
+        
+        coords = mol.GetConformer().GetPositions()
+        symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
+        tokens = []
+        if self.atoms and self.coord_follow_atom:
+            for i in range(mol.GetNumAtoms()):
+                ai = atom_idxs[i]
+                tokens.append(symbols[ai])
+                if self.h_coord or symbols[ai] != 'H':
+                    tokens += self.coord_tokenizer.tokenize_array(coords[ai])
+        elif self.atoms:
+            tokens = [symbols[ai] for ai in atom_idxs] + ['[XYZ]'] \
+                    + self.coord_tokenizer.tokenize_array(coords[atom_idxs].ravel())
+        else: # smiles
+            tokens = self.smi_tokenizer.tokenize(smi)
+            shown_coords = np.concatenate([coords[ai] 
+                    for ai in atom_idxs if (symbols[ai] != 'H' or self.h_coord)])
+            tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(shown_coords)
+        
+        return tokens
 
-        # save sample
-        if self.sample_save_dir is not None and self.getitem_count < 5 and is_main_worker():
-            worker_info = get_worker_info()
-            if worker_info is None or worker_info.id == 0:
-                save_dir = f"{self.sample_save_dir}/{idx}"
-                os.makedirs(save_dir, exist_ok=True)
-                with open(f"{save_dir}/out_smi.txt", 'w') as f:
-                    f.write(smi)
-                pd.DataFrame(coord) \
-                    .to_csv(f"{save_dir}/out_coord.csv", header=False, index=False)
+            
 
-        self.getitem_count += 1
-        return smi, coord
-    
+
+                
+
+
+
+
+
+
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):

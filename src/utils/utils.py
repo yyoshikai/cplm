@@ -1,8 +1,8 @@
-import sys, os, struct, traceback, warnings, subprocess
+import sys, os, struct, traceback, warnings, subprocess, math
 from functools import partial
 from bisect import bisect_right
 from logging import getLogger
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 import numpy as np
 import pandas as pd
 try:    
@@ -146,7 +146,7 @@ def get_git_hash() -> str:
     p = subprocess.run('git rev-parse --short HEAD', shell=True, capture_output=True)
     return p.stdout.decode().strip()
 
-def should_show(n: int, max_interval: int):
+def should_show(n: int, max_interval: int|float):
     if n < max_interval:
         return (n&(n-1)) == 0 # True if n == 2**x
     else:

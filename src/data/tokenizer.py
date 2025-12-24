@@ -1,4 +1,4 @@
-import itertools, re
+import itertools, re, math
 from collections.abc import Iterable
 from collections import defaultdict
 from logging import getLogger
@@ -10,7 +10,9 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from .data import WorkerAggregator, is_main_worker, WrapDataset
-from ..utils.utils import should_show
+from ..utils import should_show
+from ..utils.path import WORKDIR
+
 
 T_co = TypeVar('T_co', covariant=True)
 
@@ -68,10 +70,9 @@ class Tokenizer:
 
 class ProteinAtomTokenizer(Tokenizer):
     unk_logger = getLogger(f"unk.{__module__}.{__qualname__}")
-    def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN', 'BR', 'MG'], unk_voc='[UNK]', log_interval: int=1000000):
+    def __init__(self, atom_vocs: list=['CA', 'C', 'H', 'O', 'N', 'S', 'P', 'F', 'ZN', 'BR', 'MG'], unk_voc='[UNK]'):
         self.atom_vocs = sorted(atom_vocs, key=len, reverse=True)
         self.unk_voc = unk_voc
-        self.log_interval = log_interval
 
         # Process-specific attributes
         self.n_tokenized = 0
@@ -96,7 +97,7 @@ class ProteinAtomTokenizer(Tokenizer):
         self.n_tokenized += len(atoms)
 
         # Log unknown tokens
-        if (self.n_tokenized%self.log_interval) < len(atoms):
+        if (self.n_tokenized-len(atoms)).bit_length() < self.n_tokenized.bit_length():
             self.unk_count_agg.add(self.unk_count)
             self.n_tokenized_agg.add(self.n_tokenized)
             self.unk_count.clear()
@@ -150,7 +151,6 @@ class StringTokenizer2(Tokenizer):
             vocs = f.read().splitlines()
         self.tokenizer = StringTokenizer(vocs, unk_voc)
 
-
     def tokenize(self, string: str):
         tokens = self.pattern.findall(string)
         if len(''.join(tokens)) != len(string):
@@ -160,11 +160,15 @@ class StringTokenizer2(Tokenizer):
 
     def vocs(self):
         return self.tokenizer.vocs()
+    
+class SmilesTokenizer(StringTokenizer):
+    def __init__(self):
+        super().__init__(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines())
 
 class FloatTokenizer(Tokenizer):
     
 
-    def __init__(self, name, vmin: float, vmax: float, decimal: int=3, log_interval: int=1000000):
+    def __init__(self, name, vmin: float, vmax: float, decimal: int=3):
         self.name = name
         self.decimal = decimal
         self.vmin = float(vmin)
@@ -175,7 +179,6 @@ class FloatTokenizer(Tokenizer):
         self.n_agg = WorkerAggregator((0, 0, 0), 
                 lambda x, y: tuple(x0+y0 for x0, y0 in zip(x, y)))
 
-        self.log_interval = log_interval
         self.float_format = "{:.0"+str(self.decimal)+"f}"
         self.unk_logger = getLogger(f"unk.src.data.tokenizer.FloatTokenizer.{self.name}")
 
@@ -188,7 +191,7 @@ class FloatTokenizer(Tokenizer):
             self.n_under += 1
             x = self.vmax
         self.n_tokenized += 1
-        if self.n_tokenized % self.log_interval == 0:
+        if should_show(self.n_tokenized, math.inf):
             self.n_agg.add((self.n_tokenized, self.n_over, self.n_under))
             self.n_tokenized = self.n_over = self.n_under = 0
 

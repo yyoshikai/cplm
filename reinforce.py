@@ -78,7 +78,6 @@ parser.add_argument('--gpu-size-gb', type=float, required=True)
 ## verbosity
 parser.add_argument('--tqdm-generate', action='store_true')
 parser.add_argument('--record-opt', type=int)
-parser.add_argument('--tokenizer-log-interval', type=int)
 ## test
 parser.add_argument('--use-categorical', action='store_true')
 parser.add_argument('--all-autocast', action='store_true')
@@ -91,8 +90,6 @@ args = parser.parse_args()
 if args.test: args.studyname+='_test'
 if args.record_opt is None:
     args.record_opt = 1 if args.test else 500
-if args.tokenizer_log_interval is None:
-    args.tokenizer_log_interval = 10000 if args.test else int(1e7)
 args.gpu_size = args.gpu_size_gb * (2**30)
 
 logs = []

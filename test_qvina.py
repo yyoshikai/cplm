@@ -1,3 +1,8 @@
+"""
+qvinaの実行速度を調べている。
+TargetDiffのtest setのデータについてQVinaを実行し，実行時間を調べている
+
+"""
 import sys, os
 import concurrent.futures as cf
 from time import time

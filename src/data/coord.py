@@ -3,7 +3,10 @@ from logging import getLogger
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from rdkit import Chem
+from rdkit.Geometry import Point3D
 from .data import WrapDataset, WrapTupleDataset, get_rng
+from .protein import Protein
 
 class Scaler:
     def __init__(self, from_a: float, from_b: float, to_a: float, to_b: float):
@@ -34,21 +37,28 @@ class RescaleDataset(WrapDataset[float]):
 
 class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, base_coord_data: Dataset[np.ndarray], *coord_datas: tuple[Dataset[np.ndarray]], base_seed: int=0, normalize_coord=False, random_rotate=False, coord_noise_std=0.0):
+    def __init__(self, base_data: Dataset[Chem.Mol|Protein], *datas: 
+                tuple[Dataset[Chem.Mol|Protein]], base_seed: 
+                int=0, normalize_coord=False, random_rotate=False, 
+                coord_noise_std=0.0):
         self.normalize_coord = normalize_coord
         self.random_rotate = random_rotate
-        self.coord_datas = (base_coord_data,)+(coord_datas)
+        self.datas = (base_data,)+(datas)
         self.base_seed = base_seed
         self.coord_noise_std = coord_noise_std
 
         # Initialize TupleDataset
-        tuple_size = 1+len(coord_datas) \
+        tuple_size = 1+len(datas) \
             + (1 if self.normalize_coord else 0) \
             + (1 if self.random_rotate else 0)
-        super().__init__(base_coord_data, tuple_size)
+        super().__init__(base_data, tuple_size)
     
-    def __getitem__(self, idx: int) -> tuple[np.ndarray,...]:
-        coords = [coord_data[idx] for coord_data in self.coord_datas]
+    def __getitem__(self, idx: int) -> tuple[Chem.Mol|Protein]:
+        items = [data[idx] for data in self.datas]
+        coords = [
+            item.GetConformer().GetPositions() if isinstance(item, Chem.Mol) 
+                else item.coord for item in items
+        ]
         rng = get_rng(self.base_seed, idx)
         
         # check data_epoch
@@ -73,11 +83,29 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
             noise = rng.normal(size=3, scale=self.coord_noise_std)   
             coords = [coord+noise for coord in coords]
         
+        # set coord
+        for item, coord in zip(items, coords):
+            if isinstance(item, Chem.Mol):
+                """ confへの代入のみで元の分子も変更されることを確認:
+                from rdkit import Chem
+                from rdkit.Chem import Conformer, AllChem
+                from rdkit.Geometry import Point3D
+                mol = Chem.AddHs(Chem.MolFromSmiles('c1ccccc1'))
+                AllChem.EmbedMolecule(mol)
+                print(mol.GetConformer().GetPositions()[0]) # 適当な値
+                conf = mol.GetConformer()
+                conf.SetAtomPosition(0, Point3D(0, 0, 0))
+                print(mol.GetConformer().GetPositions()) # [0, 0, 0]になる
+                """
+                conf = item.GetConformer()
+                for i in range(len(coord)):
+                    conf.SetAtomPosition(i, Point3D(*coord[i]))
+            else:
+                item.coord = coord                
         if self.normalize_coord:
-            coords.append(center)
+            items.append(center)
         if self.random_rotate:
-            coords.append(matrix)
-        
+            items.append(matrix)
         return tuple(coords)
 
 def get_random_rotation_matrix(rng: np.random.Generator):
