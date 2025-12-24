@@ -1,5 +1,5 @@
 import sys, os, yaml, math
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from glob import glob
 from addict import Dict
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
@@ -22,7 +22,7 @@ if __name__ == '__main__':
     rargs = Dict(yaml.safe_load(open(f"{rdir}/args.yaml")))
     rargs = subs_vars(rargs, {'/work/02/ga97/a97003': WORKDIR})
     fdir = f"{WORKDIR}/cplm/finetune/results/{rargs.finetune_name}"
-    fargs = Dict(yaml.safe_load(open(f"{fdir}/args.yaml")))
+    fargs = Namespace(**yaml.safe_load(open(f"{fdir}/args.yaml")))
     if args.opt is None:
         opts = [int(path.split('/')[-1].split('.')[0]) for path in glob(f"{rdir}/models/*")]
         args.opt = max(opts)

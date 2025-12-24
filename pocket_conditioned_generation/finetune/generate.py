@@ -1,5 +1,5 @@
 import sys, os, yaml, math
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from glob import glob
 from addict import Dict
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
@@ -29,8 +29,9 @@ if __name__ == '__main__':
     # finetuning / training args
     ## finetuning
     fdir = f"{WORKDIR}/cplm/finetune/results/{args.sname}"
-    fargs = Dict(yaml.safe_load(open(f"{fdir}/args.yaml")))
+    fargs = yaml.safe_load(open(f"{fdir}/args.yaml"))
     fargs = subs_vars(fargs, {'/work/02/ga97/a97003': WORKDIR})
+    fargs = Namespace(**fargs)
 
     # default args    
     ## opt

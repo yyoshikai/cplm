@@ -19,7 +19,6 @@ args = parser.parse_args()
 set_default_args(args)
 if args.seed is None:
     args.seed = 0
-logs = []
 
 # datasets
 vocs = set()

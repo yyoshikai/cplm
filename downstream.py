@@ -24,8 +24,9 @@ from src.utils.rdkit import ignore_warning
 from src.data import KeyDataset, CacheDataset, StackDataset
 from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
-from src.data.tokenizer import SmilesTokenizer, FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
+from src.data.tokenizer import FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
 from src.data.collator import DDPStringCollateLoader
+from src.data.molecule import MolTokenizeDataset
 from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch, NO_DUP
 
 # Environment
@@ -95,10 +96,9 @@ def get_downstream_data(split, is_valid, voc_encoder=None):
     # coord transform
     mol = CoordTransformDataset(mol, base_seed=args.seed, normalize_coord=True, random_rotate=False if is_valid else True).untuple()[0]
 
-    smi_tokenizer = SmilesTokenizer()
     # tokenize
     sentence = []
-    mol = MolTokenizeDataset(mol, args.seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize)
+    mol = MolTokenizeDataset(mol, args.seed, not targs.no_lig_h_atom, not targs.no_lig_h_coord, targs.lig_randomize, targs.coord_range, getattr(targs, 'lig_coord_follow_atom', False), getattr('lig_atoms', False))
     sentence += ['[LIGAND]', mol, '[END]']
     if is_valid:
         sentence += ['[SCORE]']

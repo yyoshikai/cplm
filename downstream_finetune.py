@@ -1,5 +1,4 @@
-import argparse
-
+from argparse import ArgumentParser, Namespace
 import yaml
 from addict import Dict
 from src.train import train, add_train_args, update_pretrain_args, set_default_args
@@ -10,7 +9,7 @@ from src.data.datasets.pdb import PDBUniMolRandomDataset
 logs = []
 
 # arguments
-parser = argparse.ArgumentParser()
+parser = ArgumentParser()
 ## training
 add_train_args(parser)
 ## pretrain
@@ -38,6 +37,7 @@ if args.pretrain_opt is None:
     logs.append(f"pretrain_opt was set to {args.pretrain_opt}")
 if args.seed is None:
     args.seed = targs.seed
+targs = Namespace(**targs)
 
 # data
 split2datas = {}

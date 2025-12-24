@@ -26,8 +26,7 @@ dfdir = f"downstream/finetune/results/{args.studyname}"
 with open(f"{dfdir}/args.yaml") as f:
     dfargs = Namespace(**yaml.safe_load(f))
 tdir = f"training/results/{dfargs.pretrain_name}"
-with open(f"{tdir}/args.yaml") as f:
-    targs = Namespace(**yaml.safe_load(f))
+targs = Namespace(**yaml.safe_load(open(f"{tdir}/args.yaml")))
 
 # env
 rank, size, device = init_ddp()
@@ -40,6 +39,10 @@ if args.val_sample is not None:
     targs.UniMolLigand_val_sample = targs.UniMolLigandNoMolNet_val_sample = args.val_sample
 datas, voc_encoder, data_names, data_log = get_train_data(targs, 'valid', 
         'reg' if dfargs.reg else 'cls', lig_weight=0.0, score_weight=1.0)
+for msg, level in data_log:
+    logger.log(level, msg)
+
+
 ligand_datas = [data for data, data_name in zip(datas, data_names) if data_name in ['UniMolLigand', 'UniMolLigandNoMolNet']]
 
 # model

@@ -185,6 +185,8 @@ def add_pretrain_args(parser: ArgumentParser):
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
     # pocket-heavy-coordはデフォルトで入れるようにした。
     parser.add_argument("--lig-randomize", action='store_true')
+    parser.add_argument('--lig-coord-follow-atom', action='store_true')
+    parser.add_argument('--lig-atoms', action='store_true')
     parser.add_argument("--no-lig-h-atom", action='store_true')
     parser.add_argument("--no-lig-h-coord", action='store_true')
     parser.add_argument("--no-pocket-heavy-atom", action='store_true')
@@ -332,7 +334,12 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
     ## Log args
     logger.info(f"[Logs in preparation]", **NO_DUP)
     for log in preparation_logs:
-        logger.info(log, **NO_DUP)
+        if isinstance(log, tuple):
+            msg, level = log
+            logger.log(level, msg, **NO_DUP)
+        else:
+            logger.info(log, **NO_DUP)
+        
     logger.info('')
 
     return logger, token_logger, rank, device

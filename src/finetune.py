@@ -1,5 +1,7 @@
+import logging
 from argparse import Namespace
 from typing import Literal
+from copy import deepcopy
 import numpy as np
 from torch.utils.data import Dataset
 from .data import CacheDataset, RepeatDataset, Subset, StackDataset, untuple
@@ -8,14 +10,22 @@ from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDP
 from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from .data.datasets.crossdocked import CDDataset, CDProteinDataset
 from .data.datasets.pdb import PDBUniMolRandomDataset
-from .data.protein import Protein
-from .data.molecule import RandomScoreDataset, RandomClassDataset
+from .data.protein import Protein, ProteinTokenizeDataset
+from .data.molecule import MolTokenizeDataset, RandomScoreDataset, RandomClassDataset
 from .data.coord import CoordTransformDataset
-from .utils.path import WORKDIR
 
-def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
+def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
     logs = []
-    logs.append(f"{split} data actual_size/total_size=")
+    logs.append((f"{split} data actual_size/total_size=", logging.INFO))
+
+    # compatibility
+    assert isinstance(args, Namespace) # not Dict
+    args = deepcopy(args)
+    default_args = { 'lig_coord_follow_atom': False, 'lig_atoms': False}
+    for name, value in default_args.items():
+        if not hasattr(args, name):
+            logs.append((f"args.{name} was not set and defaults to {value}.", logging.WARNING))
+            setattr(args, name, value)
 
     datas = []
     weight_datas = []
@@ -48,7 +58,7 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_wei
                 normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
             mol = MolTokenizeDataset(mol, args.seed+d_seed, 
                 h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, 
-                randomize=args.lig_randomize)
+                randomize=args.lig_randomize, coord_range=args.coord_range, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms)
             
             ### sentence
             sentence = ['[LIGAND]', mol, '[END]']
@@ -76,8 +86,7 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_wei
         else:
             protein = data
             protein = CoordTransformDataset(protein, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-            protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord,
-                    coord_follow_atom = args.coord_follow_atom)
+            protein = ProteinTokenizeDataset(protein, not args.no_pocket_heavy_atom, args.pocket_h_atom, not args.no_pocket_heavy_coord, args.pocket_h_coord, args.coord_follow_atom, args.coord_range)
             protein_data = SentenceDataset('[POCKET]', protein, '[END]')
             vocs |= protein_data.vocs()
             data = CacheDataset(protein_data)
@@ -90,7 +99,7 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_wei
         datas.append(data)
         weight_datas.append(weight_data)
         dnames.append(dname)
-        logs.append(f"    {dname}: {len(data):,}/{len(raw):,}")
+        logs.append((f"    {dname}: {len(data):,}/{len(raw):,}", logging.INFO))
         d_seed += 1
     
     ### encode words
@@ -104,10 +113,24 @@ def get_train_data(args, split, score: Literal['none', 'cls', 'reg'], pocket_wei
 
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
         added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[Protein]|None=None):
+    logs = []
+
+    # compatibility
+    assert isinstance(args, Namespace)
+    args = deepcopy(args)
+    default_args = { 
+        'lig_coord_follow_atom': False, 
+        'lig_atoms': False, 
+        'targetdiff': True
+    }
+    for name, value in default_args.items():
+        if not hasattr(args, name):
+            logs.append((f"args.{name} was not set and defaults to {value}.", logging.WARNING))
+            setattr(args, name, value)
 
     # raw data
     if raw_data is None:
-        if getattr(args, 'targetdiff', True):
+        if args.targetdiff:
             if args.protein:
                 raw_data = TargetDiffScafCDProteinDataset(split)
             else:
@@ -156,7 +179,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     sentence.append('[LIGAND]')
     weights.append(args.lig_smiles_weight)
     if add_ligand:
-        lig = MolTokenizeDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize)
+        lig = MolTokenizeDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize, coord_range=args.coord_range, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms)
         sentence += [lig, '[END]']
         weights += [args.lig_coord_weight, 0.0]
     sentence = SentenceDataset(*sentence)
@@ -169,4 +192,4 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
   
     ## weight
     weight = RemoveLastDataset(TokenWeightDataset(sentence, separates, weights, by_n_separate=True))
-    return voc_encoder, raw_data, token, weight, center, rotation, protein_filename, ligand_filename
+    return voc_encoder, raw_data, token, weight, center, rotation, protein_filename, ligand_filename, logs

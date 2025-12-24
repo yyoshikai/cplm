@@ -96,7 +96,8 @@ logs = []
 
 # get finetune info
 finetune_dir = f"finetune/results/{args.finetune_name}"
-fargs = Namespace(**yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
+fargs = yaml.safe_load(open(f"{finetune_dir}/args.yaml"))
+fargs = Namespace(**fargs)
 pname = fargs.pretrain_name
 pretrain_dir = f"training/results/{pname}"
 pargs = Namespace(**yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
@@ -134,8 +135,9 @@ vocs = state_dict['vocs' if 'vocs' in state_dict else 'module.vocs'][1:]
 
 added_vocs = set(vocs)
 voc_encoder, raw_data, token_data, weight_data, center_data, rotation_data,\
-        protein_filename_data, ligand_filename_data \
+        protein_filename_data, ligand_filename_data, data_log \
         = get_finetune_data(fargs, 'train', False, True, added_vocs, 'none')
+logs += data_log
 index_data, token_data = index_dataset(token_data)
 train_data = StackDataset(index_data, token_data, center_data, rotation_data, 
         protein_filename_data, ligand_filename_data)
