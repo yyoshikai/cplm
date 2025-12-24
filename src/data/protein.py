@@ -71,5 +71,5 @@ class ProteinTokenizeDataset(WrapDataset[list[str]]):
         return tokens
     
     def vocs(self) -> set[str]:
-        return self.atom_tokenizer.vocs()|self.coord_tokenizer.vocs()| \
-                ({'[XYZ]'} if not self.coord_follow_atom else set())
+        return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
+                | ({'[XYZ]'} if not self.coord_follow_atom else set())

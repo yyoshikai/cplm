@@ -62,7 +62,9 @@ class MolTokenizeDataset(WrapDataset[list[str]]):
         
         return tokens
 
-            
+    def vocs(self) -> set[str]:
+        return self.smi_tokenizer.vocs() | self.coord_tokenizer.vocs() \
+            | ({'[XYZ]'} if not self.coord_follow_atom else set())
 
 
                 
