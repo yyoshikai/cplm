@@ -30,5 +30,5 @@ tmp
 /downstream/*
 !/downstream/finetune
 !/downstream/finetune/*.py
-/tests
+/tests/*
 !/tests/*.py
