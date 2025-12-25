@@ -735,4 +735,4 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     val_recorder.flush()
     logger.info("Training finished!")
 
-    dist.destroy_process_group()
+    # dist.destroy_process_group()

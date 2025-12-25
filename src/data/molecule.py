@@ -52,8 +52,9 @@ class MolTokenizeDataset(WrapDataset[list[str]]):
                 if self.h_coord or symbols[ai] != 'H':
                     tokens += self.coord_tokenizer.tokenize_array(coords[ai])
         elif self.atoms:
+            coord_atom_idxs = [ai for ai in atom_idxs if (self.h_coord or symbols[ai] != 'H')]
             tokens = [symbols[ai] for ai in atom_idxs] + ['[XYZ]'] \
-                    + self.coord_tokenizer.tokenize_array(coords[atom_idxs].ravel())
+                    + self.coord_tokenizer.tokenize_array(coords[coord_atom_idxs].ravel())
         else: # smiles
             tokens = self.smi_tokenizer.tokenize(smi)
             shown_coords = np.concatenate([coords[ai] 
@@ -65,14 +66,6 @@ class MolTokenizeDataset(WrapDataset[list[str]]):
     def vocs(self) -> set[str]:
         return self.smi_tokenizer.vocs() | self.coord_tokenizer.vocs() \
             | ({'[XYZ]'} if not self.coord_follow_atom else set())
-
-
-                
-
-
-
-
-
 
 
 class RandomScoreDataset(Dataset[float]):
@@ -87,6 +80,7 @@ class RandomScoreDataset(Dataset[float]):
 
     def __len__(self):
         return self.size
+
 
 class RandomClassDataset(Dataset[bool]):
     def __init__(self, size: int, seed: int):

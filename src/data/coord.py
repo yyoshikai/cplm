@@ -106,7 +106,7 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
             items.append(center)
         if self.random_rotate:
             items.append(matrix)
-        return tuple(coords)
+        return tuple(items)
 
 def get_random_rotation_matrix(rng: np.random.Generator):
     # get axes
