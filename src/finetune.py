@@ -11,7 +11,7 @@ from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDP
 from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from .data.datasets.crossdocked import CDDataset, CDProteinDataset
 from .data.datasets.pdb import PDBUniMolRandomDataset
-from .data.protein import Pocket, PocketTokenizeDataset
+from .data.protein import Pocket, PocketTokenizeDataset, ProteinTokenizeDataset
 from .data.molecule import MolTokenizeDataset, RandomScoreDataset, RandomClassDataset
 from .data.coord import CoordTransformDataset
 
@@ -87,7 +87,10 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
         else:
             protein = data
             protein = CoordTransformDataset(protein, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-            protein = PocketTokenizeDataset(protein, not args.no_pocket_heavy_atom, args.pocket_h_atom, not args.no_pocket_heavy_coord, args.pocket_h_coord, args.coord_follow_atom, args.coord_range)
+            if cls == UniMolPocketDataset:
+                protein = PocketTokenizeDataset(protein, not args.no_pocket_heavy_atom, args.pocket_h_atom, not args.no_pocket_heavy_coord, args.pocket_h_coord, args.coord_follow_atom, args.coord_range)
+            else:
+                protein = ProteinTokenizeDataset(protein, not args.no_pocket_heavy_atom, args.pocket_h_atom, not args.no_pocket_heavy_coord, args.pocket_h_coord, args.coord_follow_atom, args.coord_range)
             protein_data = SentenceDataset('[POCKET]', protein, '[END]')
             vocs |= protein_data.vocs()
             data = CacheDataset(protein_data)
@@ -159,7 +162,10 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     sentence = []
     weights = []
     ## pocket
-    protein = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow=args.coord_follow_atom)
+    if args.protein:
+        protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow=args.coord_follow_atom)
+    else:
+        protein = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow=args.coord_follow_atom)
     sentence += ['[POCKET]', protein, '[END]']
     if args.coord_follow_atom:
         assert args.pocket_atom_weight == args.pocket_coord_weight

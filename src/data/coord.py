@@ -1,5 +1,4 @@
 import os
-from ctypes import c_double
 from logging import getLogger
 import numpy as np
 import torch
@@ -8,7 +7,7 @@ from rdkit import Chem
 from rdkit.Geometry import Point3D
 from openbabel.openbabel import OBMol, OBMolAtomIter
 from .data import WrapDataset, WrapTupleDataset, get_rng
-from .protein import Pocket
+from .protein import Pocket, get_coord_from_mol
 
 class Scaler:
     def __init__(self, from_a: float, from_b: float, to_a: float, to_b: float):
@@ -65,7 +64,7 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
                 coord = item.coord
             elif isinstance(item, OBMol):
                 coord = item.GetCoordinates()
-                coord = np.array((c_double * (item.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
+                coord = get_coord_from_mol(item)
             else:
                 raise ValueError
             coords.append(coord)
