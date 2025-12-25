@@ -4,13 +4,14 @@ from typing import Literal
 from copy import deepcopy
 import numpy as np
 from torch.utils.data import Dataset
+from openbabel.openbabel import OBMol
 from .data import CacheDataset, RepeatDataset, Subset, StackDataset, untuple
 from .data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from .data.datasets.crossdocked import CDDataset, CDProteinDataset
 from .data.datasets.pdb import PDBUniMolRandomDataset
-from .data.protein import Protein, ProteinTokenizeDataset
+from .data.protein import Pocket, PocketTokenizeDataset
 from .data.molecule import MolTokenizeDataset, RandomScoreDataset, RandomClassDataset
 from .data.coord import CoordTransformDataset
 
@@ -86,7 +87,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
         else:
             protein = data
             protein = CoordTransformDataset(protein, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-            protein = ProteinTokenizeDataset(protein, not args.no_pocket_heavy_atom, args.pocket_h_atom, not args.no_pocket_heavy_coord, args.pocket_h_coord, args.coord_follow_atom, args.coord_range)
+            protein = PocketTokenizeDataset(protein, not args.no_pocket_heavy_atom, args.pocket_h_atom, not args.no_pocket_heavy_coord, args.pocket_h_coord, args.coord_follow_atom, args.coord_range)
             protein_data = SentenceDataset('[POCKET]', protein, '[END]')
             vocs |= protein_data.vocs()
             data = CacheDataset(protein_data)
@@ -112,7 +113,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
     split2datas[split] = datas
 
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
-        added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[Protein]|None=None):
+        added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[OBMol|Pocket]|None=None):
     logs = []
 
     # compatibility
@@ -158,7 +159,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     sentence = []
     weights = []
     ## pocket
-    protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow=args.coord_follow_atom)
+    protein = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow=args.coord_follow_atom)
     sentence += ['[POCKET]', protein, '[END]']
     if args.coord_follow_atom:
         assert args.pocket_atom_weight == args.pocket_coord_weight

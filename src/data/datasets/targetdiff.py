@@ -1,10 +1,10 @@
 import os, pickle, re
 import numpy as np
 from rdkit import Chem
-from prody import parsePDB, parsePDBStream, confProDy, Contacts, addMissingAtoms
+from openbabel.openbabel import OBMol, OBConversion
 
 from ...utils.lmdb import load_lmdb
-from ..protein import Protein
+from ..protein import Pocket
 from ..data import TupleDataset
 
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
@@ -12,7 +12,7 @@ DEFAULT_CD1_1_TYPES_DIR = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020_v
 DEFAULT_TARGETDIFF_DIR = f"{WORKDIR}/cheminfodata/crossdocked/targetdiff"
 
 # 処理を確認 @ /workspace/cplm/experiments/250824_modify_data_code/source.ipynb
-class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, str]]):
+class TargetDiffScafCDDataset(TupleDataset[tuple[Pocket, Chem.Mol, float, str, str]]):
     def __init__(self, split: str, targetdiff_dir: str=DEFAULT_TARGETDIFF_DIR, 
             crossdocked_dir: str=DEFAULT_CD1_1_TYPES_DIR):
         """
@@ -43,7 +43,7 @@ class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, 
         data = pickle.loads(value)
 
         # Pocket
-        pocket = Protein(np.array(data['protein_atom_name']), data['protein_pos'].numpy())
+        pocket = Pocket(np.array(data['protein_atom_name']), data['protein_pos'].numpy())
 
         # Get actual file path
         ligand_filename = data['ligand_filename']
@@ -64,7 +64,7 @@ class TargetDiffScafCDDataset(TupleDataset[tuple[Protein, Chem.Mol, float, str, 
     def __len__(self):
         return len(self.key_idxs)
 
-class TargetDiffScafCDProteinDataset(TupleDataset[tuple[Protein, Chem.Mol, float]]):
+class TargetDiffScafCDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float]]):
     def __init__(self, split: str, targetdiff_dir: str=DEFAULT_TARGETDIFF_DIR, 
             crossdocked_dir: str=DEFAULT_CD1_1_TYPES_DIR):
         """
@@ -85,6 +85,8 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[Protein, Chem.Mol, float
         self.key_idxs = np.load(f"{self.targetdiff_dir}/mask/split_mol/250920_0/{split}_idxs.npy")
 
         self.pfname_pattern = re.compile(r"(.+?/.+?_rec)_.+")
+        self.obc = OBConversion()
+        self.obc.SetInFormat('pdb')
         
     def __getitem__(self, idx: int):
         env, txn = load_lmdb(self.lmdb_path)
@@ -102,8 +104,9 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[Protein, Chem.Mol, float
 
 
         # Pocket
-        protein = parsePDB(protein_path)
-        protein = Protein(protein.getData('name'), protein.getCoords())
+        protein = OBMol()
+        with open(protein_path) as f:
+            self.obc.ReadString(f.read())
 
         # Molecule
         ligand_filename = data['ligand_filename']

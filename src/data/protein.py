@@ -7,7 +7,7 @@ from ..utils import slice_str
 
 
 @dataclass
-class Protein:
+class Pocket:
     atoms: np.ndarray
     coord: np.ndarray
 
@@ -15,17 +15,17 @@ class Protein:
         assert len(self.atoms) == len(self.coord)
         assert self.coord.ndim == 2 and self.coord.shape[1] == 3
 
-def protein2pdb(protein: Protein, out_path: str):
+def pocket2pdb(pocket: Pocket, out_path: str):
     with open(out_path, 'w') as f:
-        for ia in range(len(protein.atoms)):
-            atom = protein.atoms[ia][0]
-            coord = protein.coord[ia]
+        for ia in range(len(pocket.atoms)):
+            atom = pocket.atoms[ia][0]
+            coord = pocket.coord[ia]
             if atom == 'H': continue
             f.write(f"ATOM  {ia:5}  {atom:<3} UNK A   1    {coord[0]:8.03f}{coord[1]:8.03f}{coord[1]:8.03f}  1.00 40.00           {atom[0]}  \n")
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
-class ProteinTokenizeDataset(WrapDataset[list[str]]):
-    def __init__(self, protein_data: Dataset[Protein],
+class PocketTokenizeDataset(WrapDataset[list[str]]):
+    def __init__(self, protein_data: Dataset[Pocket],
             heavy_atom: bool, h_atom: bool,
             heavy_coord: bool, h_coord: bool, 
             coord_follow_atom: bool, coord_range: int):

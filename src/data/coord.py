@@ -1,12 +1,14 @@
 import os
+from ctypes import c_double
 from logging import getLogger
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from rdkit import Chem
 from rdkit.Geometry import Point3D
+from openbabel.openbabel import OBMol, OBMolAtomIter
 from .data import WrapDataset, WrapTupleDataset, get_rng
-from .protein import Protein
+from .protein import Pocket
 
 class Scaler:
     def __init__(self, from_a: float, from_b: float, to_a: float, to_b: float):
@@ -37,8 +39,8 @@ class RescaleDataset(WrapDataset[float]):
 
 class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, base_data: Dataset[Chem.Mol|Protein], *datas: 
-                tuple[Dataset[Chem.Mol|Protein]], base_seed: 
+    def __init__(self, base_data: Dataset[Chem.Mol|Pocket|OBMol], *datas: 
+                tuple[Dataset[Chem.Mol|Pocket|OBMol]], base_seed: 
                 int=0, normalize_coord=False, random_rotate=False, 
                 coord_noise_std=0.0):
         self.normalize_coord = normalize_coord
@@ -53,25 +55,30 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
             + (1 if self.random_rotate else 0)
         super().__init__(base_data, tuple_size)
     
-    def __getitem__(self, idx: int) -> tuple[Chem.Mol|Protein]:
+    def __getitem__(self, idx: int) -> tuple[Chem.Mol|Pocket|OBMol]:
         items = [data[idx] for data in self.datas]
-        coords = [
-            item.GetConformer().GetPositions() if isinstance(item, Chem.Mol) 
-                else item.coord for item in items
-        ]
+        coords = []
+        for item in items:
+            if isinstance(item, Chem.Mol):
+                coord = item.GetConformer().GetPositions()
+            elif isinstance(item, Pocket):
+                coord = item.coord
+            elif isinstance(item, OBMol):
+                coord = item.GetCoordinates()
+                coord = np.array((c_double * (item.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
+            else:
+                raise ValueError
+            coords.append(coord)
         rng = get_rng(self.base_seed, idx)
-        
-        # check data_epoch
-        # self.logger.info(f"EPOCH={os.environ.get('EPOCH')}")
 
         # normalize
         if self.normalize_coord:
             if coords[0].size > 0:
                 center = np.mean(coords[0], axis=0)
-                coords = [coord - center for coord in coords]
             else:
                 if len(coords) > 1:
                     raise ValueError("base_coord.size=0 and cannot normalized")
+            coords = [coord - center for coord in coords]
 
         # random rotate
         if self.random_rotate:
@@ -81,27 +88,20 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
         # add noise
         if self.coord_noise_std > 0:
             noise = rng.normal(size=3, scale=self.coord_noise_std)   
-            coords = [coord+noise for coord in coords]
+            coords = [coord+noise  for coord in coords]
         
         # set coord
         for item, coord in zip(items, coords):
             if isinstance(item, Chem.Mol):
-                """ confへの代入のみで元の分子も変更されることを確認:
-                from rdkit import Chem
-                from rdkit.Chem import Conformer, AllChem
-                from rdkit.Geometry import Point3D
-                mol = Chem.AddHs(Chem.MolFromSmiles('c1ccccc1'))
-                AllChem.EmbedMolecule(mol)
-                print(mol.GetConformer().GetPositions()[0]) # 適当な値
-                conf = mol.GetConformer()
-                conf.SetAtomPosition(0, Point3D(0, 0, 0))
-                print(mol.GetConformer().GetPositions()) # [0, 0, 0]になる
-                """
+                # confへの代入のみで元の分子も変更されることを確認 @tests/test.ipynb
                 conf = item.GetConformer()
                 for i in range(len(coord)):
                     conf.SetAtomPosition(i, Point3D(*coord[i]))
+            elif isinstance(item, Pocket):
+                item.coord = coord
             else:
-                item.coord = coord                
+                for i, atom in enumerate(OBMolAtomIter(item)):
+                    atom.SetVector(coord[i,0], coord[i,1], coord[i,2])
         if self.normalize_coord:
             items.append(center)
         if self.random_rotate:

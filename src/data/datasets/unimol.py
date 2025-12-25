@@ -7,7 +7,7 @@ from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
 from ..lmdb import PickleLMDBDataset
-from ..protein import Protein
+from ..protein import Pocket
 from ..data import is_main_worker, Subset
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
@@ -87,15 +87,15 @@ class UniMolLigandNoMolNetDataset(Subset[Chem.Mol]):
     def __str__(self):
         return type(self).__name__
 
-class UniMolPocketDataset(Dataset[Protein]):
+class UniMolPocketDataset(Dataset[Pocket]):
     def __init__(self, split: Literal['train', 'valid'], unimol_dir=DEFAULT_UNIMOL_DIR):
         self.dataset = PickleLMDBDataset(f"{unimol_dir}/pockets/{split}.lmdb", idx_to_key='str')
     
-    def __getitem__(self, idx) -> Protein:
+    def __getitem__(self, idx) -> Pocket:
         data = self.dataset[idx]
         atoms = np.array(data['atoms'])
         coord =  data.pop('coordinates')[0] # * np.array([0, 1, 2])
-        return Protein(atoms=atoms, coord=coord)
+        return Pocket(atoms=atoms, coord=coord)
 
     def __len__(self):
         return len(self.dataset)
