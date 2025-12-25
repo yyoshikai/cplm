@@ -19,12 +19,12 @@ args = parser.parse_args()
 set_default_args(args)
 if args.seed is None:
     args.seed = 0
-
+logs = []
 # datasets
 vocs = set()
 split2datas = {}
 for split in ['valid', 'train']:
-    split2datas[split], voc_encoder, dnames, logs = get_train_data(args, split, 'none')
-
+    split2datas[split], voc_encoder, dnames, tlogs = get_train_data(args, split, 'none')
+    logs += tlogs
 
 train('training', args, split2datas['train'], split2datas['valid'], voc_encoder, logs, dnames, args.init_state)

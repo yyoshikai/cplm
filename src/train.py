@@ -191,8 +191,8 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument("--no-lig-h-coord", action='store_true')
     parser.add_argument("--no-pocket-heavy-atom", action='store_true')
     parser.add_argument("--no-pocket-heavy-coord", action='store_true')
-    parser.add_argument("--pocket-h-atom", action='store_true') # Datasetによっては無効？
-    parser.add_argument("--pocket-h-coord", action='store_true') # Datasetによっては無効？
+    parser.add_argument("--pocket-h-atom", action='store_true') # pocketには無効
+    parser.add_argument("--pocket-h-coord", action='store_true') # pocketには無効
     parser.add_argument("--coord-range", type=int, default=250)
     parser.add_argument("--coord-follow-atom", action='store_true')
     # model

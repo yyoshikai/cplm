@@ -113,7 +113,6 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
     ### merge weight
     datas = [StackDataset(data, weight_data) for data, weight_data in zip(datas, weight_datas)]
     return datas, voc_encoder, dnames, logs
-    split2datas[split] = datas
 
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
         added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[OBMol|Pocket]|None=None):

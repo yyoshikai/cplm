@@ -27,7 +27,8 @@ def pocket2pdb(pocket: Pocket, out_path: str):
 
 
 def get_coord_from_mol(mol: OBMol) -> np.ndarray:
-    return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(mol))).reshape(-1, 3)
+    coord = mol.GetCoordinates()
+    return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
 
 class ProteinTokenizer:
     def __init__(self, heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range):
@@ -66,6 +67,10 @@ class ProteinTokenizer:
             tokens = self.atom_tokenizer.tokenize(atoms[atom_mask]) \
                     +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords[coord_mask].ravel())
         return tokens
+    
+    def vocs(self) -> set[str]:
+        return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
+                | ({'[XYZ]'} if not self.coord_follow_atom else set())
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class PocketTokenizeDataset(WrapDataset[list[str]]):
@@ -85,8 +90,7 @@ class PocketTokenizeDataset(WrapDataset[list[str]]):
         return self.protein_tokenizer(protein.atoms, protein.coord)
     
     def vocs(self) -> set[str]:
-        return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
-                | ({'[XYZ]'} if not self.coord_follow_atom else set())
+        return self.protein_tokenizer.vocs()
 
 class ProteinTokenizeDataset(WrapDataset[list[str]]):
     def __init__(self, protein_data: Dataset[OBMol],
@@ -107,9 +111,8 @@ class ProteinTokenizeDataset(WrapDataset[list[str]]):
         else:
             success = protein.DeleteHydrogens()
         assert success
-
         # Order atoms
-        atoms = np.array([atom.GetResidue().GetAtomID(atom) for atom in OBMolAtomIter(protein)])
+        atoms = np.array([atom.GetResidue().GetAtomID(atom).strip() for atom in OBMolAtomIter(protein)])
         residue_idxs = np.array([atom.GetResidue().GetIdx() for atom in OBMolAtomIter(protein)])
         coords = get_coord_from_mol(protein)
         orders = np.argsort(residue_idxs, kind='stable')
@@ -118,3 +121,6 @@ class ProteinTokenizeDataset(WrapDataset[list[str]]):
 
         # tokenize
         return self.protein_tokenizer(atoms, coords)
+
+    def vocs(self) -> set[str]:
+        return self.protein_tokenizer.vocs()
