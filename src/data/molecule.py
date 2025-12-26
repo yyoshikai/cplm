@@ -16,8 +16,8 @@ class MolTokenizeDataset(WrapDataset[list[str]]):
         assert not ((not self.atoms) and self.coord_follow_atom), 'Not Implemented'
         self.randomize = randomize
         self.seed = base_seed
-
-        self.smi_tokenizer = SmilesTokenizer()
+        if not self.atoms:
+            self.smi_tokenizer = SmilesTokenizer()
         self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
         
     def __getitem__(self, idx: int):
@@ -64,9 +64,15 @@ class MolTokenizeDataset(WrapDataset[list[str]]):
         return tokens
 
     def vocs(self) -> set[str]:
-        return self.smi_tokenizer.vocs() | self.coord_tokenizer.vocs() \
-            | ({'[XYZ]'} if not self.coord_follow_atom else set())
-
+        if self.atoms:
+            table = Chem.GetPeriodicTable()
+            vocs = {table.GetElementSymbol(i) for i in range(1, 119)}
+        else:
+            vocs = self.smi_tokenizer.vocs()
+        vocs |= self.coord_tokenizer.vocs()
+        if not self.coord_follow_atom:
+            vocs.add('[XYZ]')
+        return vocs
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):
