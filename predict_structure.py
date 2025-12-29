@@ -33,7 +33,7 @@ args = parser.parse_args()
 
 # environment
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-out_dir = f"predict_structure/{args.studyname}/{args.opt}"
+out_dir = f"predict_structure/results/{args.studyname}/{args.opt}"
 os.makedirs(out_dir, exist_ok=True)
 logger = get_logger(stream=True)
 add_file_handler(logger, f"{out_dir}/predict_structure.log")
