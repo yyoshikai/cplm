@@ -1,4 +1,3 @@
-import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from typing import TypeVar, Optional
@@ -17,14 +16,6 @@ class _Watch:
     def add_time(self, name: str, start: float, end: float):
         raise NotImplementedError
 
-class Watch(_Watch):
-    def __init__(self):
-        self.name2time = {}
-    def add_time(self, name: str, start: float, end: float):
-        if name not in self.name2time:
-            self.name2time[name] = 0.0
-        self.name2time[name] += end - start
-
 class _WatchHolder:
     def __init__(self, name: str, watch: _Watch):
         self.name = name
@@ -36,12 +27,6 @@ class _WatchHolder:
         return self
     def __exit__(self, exc_type, exc_value, traceback):
         self.watch.add_time(self.name, self.start, time())
-
-class AddWatch(_Watch):
-    def __init__(self):
-        self.name2time = defaultdict(float)
-    def add_time(self, name: str, start: float, end: float):
-        self.name2time[name] += end - start
 
 class FileWatch(_Watch):
     logger = getLogger(f"{__module__}.{__qualname__}")
@@ -74,31 +59,6 @@ class FileWatch(_Watch):
         self.starts = []
         self.ends = []
         self.logger.info(f"Wrote.")
-
-class WriteHolder:
-    def __init__(self, name: str, path: str):
-        self.name = name
-        self.path = path
-        self.start = None
-
-    def __enter__(self):
-        self.start = time()
-        return self
-    def __exit__(self, exc_type, exc_value, traceback):
-        end = time()
-        with open(self.path, 'a') as f:
-            f.write(f"{self.name},{self.start},{end}\n")
-
-class PrintHolder:
-    def __init__(self, name):
-        self.name = name
-
-    def __enter__(self):
-        self.start = time()
-        return self
-    def __exit__(self, exc_type, exc_value, traceback):
-        end = time()
-        print(f"{self.name}: {end-self.start:.05f}s")
 
 class wtqdm(tqdm):
     def __init__(self, *args, **kwargs):
@@ -197,45 +157,3 @@ class TimerTqdm(tqdm):
     def display(self, msg=None, pos=None):
         if not self.disable_bar:
             super().display(msg, pos)
-
-LOGTIME = False
-def set_logtime(logtime: bool):
-    global LOGTIME
-    LOGTIME = logtime
-
-class logtime:
-    def __init__(self, logger: logging.Logger, prefix: str='', level=logging.DEBUG, thres: float=0):
-        self.logger = logger
-        self.prefix = prefix
-        self.level = level
-        self.thres = thres
-    def __enter__(self):
-        if LOGTIME:
-            self.start = time()
-    def __exit__(self, exc_type, exc_value, traceback):
-        if LOGTIME:
-            elapse = time() - self.start
-            if elapse >= self.thres:
-                self.logger.log(self.level, f"{self.prefix} {elapse:.4f}") 
-class logend:
-    def __init__(self, logger: logging.Logger, process_name: str, level=logging.INFO, thres: float=0.0):
-        self.logger = logger
-        self.process_name = process_name
-        self.level = level
-        self.thres = thres
-    def __enter__(self):
-        self.start = time()
-        self.logger.log(self.level, f"{self.process_name}...")
-    def __exit__(self, exc_type, exc_value, traceback):
-        t = time() - self.start
-        if t >= self.thres:
-            self.logger.log(self.level, f"{self.process_name} ended ({t:.03}s).")
-
-class rectime: 
-    def __init__(self):
-        pass
-    def __enter__(self):
-        self.start = time()
-        return self
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.time = time() - self.start

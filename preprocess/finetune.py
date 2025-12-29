@@ -3,7 +3,6 @@ import argparse
 sys.path.append(".")
 from src.data.datasets.crossdocked import CDDataset
 from src.utils.logger import get_logger, add_stream_handler
-from src.utils.utils import set_logtime
 add_stream_handler(get_logger(), level=logging.ERROR)
 
 parser = argparse.ArgumentParser()
@@ -12,11 +11,9 @@ parser.add_argument("--radius", type=int)
 parser.add_argument("--test", action='store_true')
 parser.add_argument("--ends", nargs='+', default=['lig_tt_docked.sdf', 'lig_tt_min.sdf'])
 parser.add_argument("--map-size", type=int, default=int(100e9))
-parser.add_argument("--logtime", action='store_true')
 parser.add_argument("--cf-size", type=int)
 args = parser.parse_args()
 
-set_logtime(args.logtime)
 output = args.output
 if output is None:
     output = f"r{args.radius}"
