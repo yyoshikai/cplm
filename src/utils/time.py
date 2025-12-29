@@ -7,6 +7,7 @@ from time import time
 from tqdm import tqdm
 
 from .utils import IterateRecorder
+from .notice import notice, SLACK_URL
 
 T_co = TypeVar('T_co', covariant=True)
 
@@ -157,3 +158,27 @@ class TimerTqdm(tqdm):
     def display(self, msg=None, pos=None):
         if not self.disable_bar:
             super().display(msg, pos)
+
+class EndEstimator:
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, duration_h, total_step, name):
+        self.duration_h = duration_h
+        self.total_step = total_step
+        self.name = name
+        self.start_time = None
+        self.notified = False
+    def start(self):
+        self.start_time = time()
+    def check(self, cur_step: int):
+        if self.start_time is None:
+            raise ValueError("start() should be called before check().")
+        est_time = (time() - self.start_time()) * self.total_step / cur_step
+        m, s = divmod(int(est_time), 60)
+        h, m = divmod(m, 60)
+        msg = f"Estimated end time={h}:{m}:{s} at step {cur_step}"
+        self.logger.info(msg)
+        if est_time > self.duration_h * 3600 * 0.95:
+            if not self.notified and SLACK_URL is not None:
+                notice(f"[WARNING][{self.name}] {msg}", )
+                self.notified = True
+
