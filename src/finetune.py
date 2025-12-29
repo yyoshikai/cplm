@@ -162,9 +162,9 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     weights = []
     ## pocket
     if args.protein:
-        protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow=args.coord_follow_atom)
+        protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, coord_range=args.coord_range)
     else:
-        protein = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow=args.coord_follow_atom)
+        protein = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, coord_range=args.coord_range)
     sentence += ['[POCKET]', protein, '[END]']
     if args.coord_follow_atom:
         assert args.pocket_atom_weight == args.pocket_coord_weight

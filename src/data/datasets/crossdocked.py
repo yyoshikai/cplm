@@ -65,14 +65,12 @@ class CDProteinWholeDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]
         # path
         ligand_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['lig_name']}"
         protein_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}"
-        tmp_path = f"./tmp/{idx}_{time()}.pdb"
         
         protein = OBMol()
         with open(protein_path) as f:
             self.obc.ReadString(protein, f.read())
 
         score = float(data['score'])
-        os.remove(tmp_path)
         return protein, data['lig_mol'], score, protein_path, None
         # ligand_path: 251113 indexがないのはおかしい気がするので一旦こうする
 
@@ -122,7 +120,9 @@ class CDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]):
         if split == 'test':
             return CDProteinTestDataset()
         elif split in ['train', 'valid']:
-            return super().__new__(cls, split)
+            obj = super().__new__(cls)
+            obj.__init__(split)
+            return obj
         else:
             raise ValueError(f"Unsupported {split=}")
     def __init__(self, split: Literal['train', 'valid']):

@@ -493,7 +493,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
 
     # Times
     step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv", file_interval=10000, log_interval=10000, desc='step', disable_bar=True)
-    if args.end_limit is not None:
+    if args.end_limit is not None and rank == MAIN_RANK:
         end_estimator = EndEstimator(args.end_limit, args.max_opt, args.studyname)
 
     # DataLoader
@@ -608,7 +608,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             next_eval_opt += args.eval_opt
         
         # estimate end
-        if args.end_limit is not None:
+        if args.end_limit is not None and rank == MAIN_RANK:
             if not end_estimator.is_started:
                 end_estimator.start()
 
