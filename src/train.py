@@ -163,6 +163,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--patience-opt", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--reset-nan-grad", action='store_true')
+    parser.add_argument("--limit-time", type=int, help='Unit is hour')
     ## hardware
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')

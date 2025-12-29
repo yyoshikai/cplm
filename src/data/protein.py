@@ -31,7 +31,7 @@ def get_coord_from_mol(mol: OBMol) -> np.ndarray:
     return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
 
 class ProteinTokenizer:
-    def __init__(self, heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range):
+    def __init__(self, heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range, coord):
         self.heavy_atom = heavy_atom
         self.h_atom = h_atom
         self.heavy_coord = heavy_coord
@@ -42,7 +42,7 @@ class ProteinTokenizer:
         self.coord_tokenizer = FloatTokenizer('protein', -coord_range, coord_range)
         assert not (self.heavy_coord and not self.heavy_atom)
         assert not (self.h_coord and not self.h_atom)
-
+        self.coord = coord
 
     def __call__(self, atoms: np.ndarray, coords: np.ndarray):
         # calc mask
@@ -61,11 +61,12 @@ class ProteinTokenizer:
             for i in range(len(atoms)):
                 if atom_mask[i]: 
                     tokens += self.atom_tokenizer.tokenize([atoms[i]])
-                if coord_mask[i]:
+                if coord_mask[i] and self.coord:
                     tokens += self.coord_tokenizer.tokenize_array(coords[i])
         else:
-            tokens = self.atom_tokenizer.tokenize(atoms[atom_mask]) \
-                    +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords[coord_mask].ravel())
+            tokens = self.atom_tokenizer.tokenize(atoms[atom_mask]) 
+            if self.coord:        
+                tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(coords[coord_mask].ravel())
         return tokens
     
     def vocs(self) -> set[str]:
@@ -96,10 +97,10 @@ class ProteinTokenizeDataset(WrapDataset[list[str]]):
     def __init__(self, protein_data: Dataset[OBMol],
             heavy_atom: bool, h_atom: bool,
             heavy_coord: bool, h_coord: bool, 
-            coord_follow_atom: bool, coord_range: int):
+            coord_follow_atom: bool, coord_range: int, coord: bool=True):
         super().__init__(protein_data)
         self.protein_data = protein_data
-        self.protein_tokenizer = ProteinTokenizer(heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range)
+        self.protein_tokenizer = ProteinTokenizer(heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range, coord)
         self.h_atom = h_atom
 
     def __getitem__(self, idx: int):

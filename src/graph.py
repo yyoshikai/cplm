@@ -39,9 +39,9 @@ def compare_loss(fname, snames, slabels=None, script='training'):
     fig.savefig(fpath, **tightargs)
     plt.close(fig)
 
-def compare_loss_train(fname, snames, slabels):
+def compare_loss_train(fname, snames, slabels=None):
     return compare_loss(fname, snames, slabels, 'training')
 
-def compare_loss_finetune(fname, snames, slabels):
+def compare_loss_finetune(fname, snames, slabels=None):
     return compare_loss(fname, snames, slabels, 'finetune')
 

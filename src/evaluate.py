@@ -1,6 +1,7 @@
 import sys, os
 from logging import getLogger
 import itertools as itr, random, subprocess
+from collections.abc import Iterable
 from typing import Any, TypeVar, Optional
 from time import time
 import numpy as np
@@ -31,6 +32,25 @@ def split_list(l: list[T], sep: T) -> list[list[T]]:
     splits.append(split)
     return splits
 
+def parse_coord_tokens(tokens: Iterable[str]) -> tuple[str, Optional[np.ndarray]]:
+    tokens = iter(tokens)
+    coords = []
+    while True:
+        try:
+            coord = tokens.__next__()+tokens.__next__()
+            coord = float(coord)
+            coords.append(coord)
+        except StopIteration:
+            break
+        except ValueError:
+            return 'COORD_NOT_FLOAT', None
+    coords = np.array(coords)
+    if len(coords) % 3 != 0:
+        return 'COORD_SIZE', None
+    coords = coords.reshape(-1, 3)
+    return '', coords
+
+
 def parse_mol_tokens(tokens: list[str]) -> tuple[str, str, np.ndarray|None]:
     """
     Parameters
@@ -55,21 +75,9 @@ def parse_mol_tokens(tokens: list[str]) -> tuple[str, str, np.ndarray|None]:
     tokens = split_list(clauses[1], '[END]')[0].__iter__()
 
     smiles = ''.join(itr.takewhile(lambda x: x != '[XYZ]', tokens))
-    coords = []
-    while True:
-        try:
-            coord = tokens.__next__()+tokens.__next__()
-            coord = float(coord)
-            coords.append(coord)
-        except StopIteration:
-            break
-        except ValueError:
-            return 'COORD_NOT_FLOAT', smiles, None
-    coords = np.array(coords)
-    if len(coords) % 3 != 0:
-        return 'COORD_SIZE', smiles, None
-    coords = coords.reshape(-1, 3)
-    return '', smiles, coords
+
+    error, coords = parse_coord_tokens(tokens)
+    return error, smiles, coords
 
 def parse_mol(smiles: str, coords: np.ndarray) -> tuple[str, Chem.Mol|None]:
     """

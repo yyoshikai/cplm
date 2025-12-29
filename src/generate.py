@@ -80,7 +80,6 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     
     # model
     model = get_model(model_args, voc_encoder, init_state_path, device)
-    model.to(device)
 
     # 生成
     sampler = UnfinishedSampler(data, n_trial, max_prompt_len=max_prompt_len)

@@ -173,6 +173,7 @@ class FloatTokenizer(Tokenizer):
         self.decimal = decimal
         self.vmin = float(vmin)
         self.vmax = float(vmax)
+        self.n_tokenized_total = 0
         self.n_tokenized = 0
         self.n_over = 0
         self.n_under = 0
@@ -191,7 +192,8 @@ class FloatTokenizer(Tokenizer):
             self.n_under += 1
             x = self.vmax
         self.n_tokenized += 1
-        if should_show(self.n_tokenized, math.inf):
+        self.n_tokenized_total += 1
+        if should_show(self.n_tokenized_total, math.inf):
             self.n_agg.add((self.n_tokenized, self.n_over, self.n_under))
             self.n_tokenized = self.n_over = self.n_under = 0
 
