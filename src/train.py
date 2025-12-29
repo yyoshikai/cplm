@@ -34,7 +34,7 @@ from .utils.model import get_num_params, get_model_size
 from .utils.path import cleardir
 from .utils.ddp import reduce_float
 from .utils.random import ddp_set_random_seed, set_deterministic
-from .utils.time import TimerTqdm
+from .utils.time import TimerTqdm, EndEstimator
 from .utils import IterateRecorder, remove_module
 
 def init_ddp():
@@ -163,7 +163,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--patience-opt", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--reset-nan-grad", action='store_true')
-    parser.add_argument("--limit-time", type=int, help='Unit is hour')
+    parser.add_argument("--end-limit", type=int, help='Unit is hour')
     ## hardware
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
@@ -491,8 +491,10 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
     logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
 
-    # Make timer here to send to DDPStringCollateLoader
+    # Times
     step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv", file_interval=10000, log_interval=10000, desc='step', disable_bar=True)
+    if args.end_limit is not None:
+        end_estimator = EndEstimator(args.end_limit, args.max_opt, args.studyname)
 
     # DataLoader
     if rank == DATA_RANK['train']:
@@ -605,6 +607,11 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 break
             next_eval_opt += args.eval_opt
         
+        # estimate end
+        if args.end_limit is not None:
+            if not end_estimator.is_started:
+                end_estimator.start()
+
         # End of training
         if opt >= args.max_opt:
             break
@@ -730,6 +737,12 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
 
             if should_show(opt, max(1, args.eval_opt//5)):
                 logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:>9.02f}", **NO_DUP)
+
+            ## estimate end
+            if args.end_limit is not None and opt % 10 == 0 \
+                    and should_show(opt // 10, args.eval_opt // 10):
+                end_estimator.check(opt)
+                
 
     opt_recorder.flush()
     step_recorder.flush()

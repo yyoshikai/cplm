@@ -1,14 +1,13 @@
-import datetime, json
+import json
 from urllib import request
 from logging import getLogger
-from time import time
 try:
     from ._api_key import SLACK_URL
 except ImportError:
     SLACK_URL = None
 logger = getLogger(__name__)
 
-def notice(message, icon=':sunglasses:'):
+def notice(message, icon=':red_exclamation_mark:'):
     if SLACK_URL is None:
         logger.warning("SLACK_URL is not defined.")
         return
