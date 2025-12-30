@@ -4,16 +4,19 @@ from rdkit import Chem
 from .data import WrapDataset, get_rng
 from .tokenizer import SmilesTokenizer, FloatTokenizer
 
-class MolTokenizeDataset(WrapDataset[list[str]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, h_atom: bool, h_coord: bool, randomize: bool, coord_range: float, coord_follow_atom: bool, atoms: bool):
+class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
+    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, h_atom: bool, h_coord: bool, randomize: bool, coord_range: float, coord_follow_atom: bool, atoms: bool, atom_order: bool):
         super().__init__(mol_data)
         self.mol_data = mol_data
         self.h_atom = h_atom
         self.h_coord = h_coord
         self.coord_follow_atom = coord_follow_atom
         self.atoms = atoms
+        self.atom_order = atom_order
         assert not ((not self.h_atom) and self.h_coord), 'Not Implemented.'
         assert not ((not self.atoms) and self.coord_follow_atom), 'Not Implemented'
+        if self.atom_order:
+            assert self.atoms and not self.coord_follow_atom
         self.randomize = randomize
         self.seed = base_seed
         if not self.atoms:
@@ -45,23 +48,41 @@ class MolTokenizeDataset(WrapDataset[list[str]]):
         coords = mol.GetConformer().GetPositions()
         symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
         tokens = []
-        if self.atoms and self.coord_follow_atom:
-            for i in range(mol.GetNumAtoms()):
-                ai = atom_idxs[i]
-                tokens.append(symbols[ai])
-                if self.h_coord or symbols[ai] != 'H':
-                    tokens += self.coord_tokenizer.tokenize_array(coords[ai])
-        elif self.atoms:
-            coord_atom_idxs = [ai for ai in atom_idxs if (self.h_coord or symbols[ai] != 'H')]
-            tokens = [symbols[ai] for ai in atom_idxs] + ['[XYZ]'] \
-                    + self.coord_tokenizer.tokenize_array(coords[coord_atom_idxs].ravel())
+        if self.atoms:
+            if  self.coord_follow_atom:
+                for i in range(mol.GetNumAtoms()):
+                    ai = atom_idxs[i]
+                    tokens.append(symbols[ai])
+                    if self.h_coord or symbols[ai] != 'H':
+                        tokens += self.coord_tokenizer.tokenize_array(coords[ai])
+            elif self.atom_order:
+                atom_tokens = []
+                coord_tokens = []
+                atom_order = []
+                coord_order = []
+                x = 0
+                for i in range(len(symbols)):
+                    atom_token = self.atom_tokenizer.tokenize([symbols[i]])
+                    atom_tokens += atom_token
+                    atom_order += list(range(x, x+len(atom_token)))
+                    x += len(atom_token)
+                    if self.h_coord or symbols[i] != 'H':
+                        coord_token = self.coord_tokenizer.tokenize_array(coords[i])
+                        coord_tokens += coord_token
+                        coord_order += list(range(x, x+len(coord_token)))
+                        x += len(coord_token)
+                tokens = atom_tokens+['[XYZ]']+coord_tokens
+                order = atom_order+[x]+coord_order
+            else:
+                coord_atom_idxs = [ai for ai in atom_idxs if (self.h_coord or symbols[ai] != 'H')]
+                tokens = [symbols[ai] for ai in atom_idxs] + ['[XYZ]'] \
+                        + self.coord_tokenizer.tokenize_array(coords[coord_atom_idxs].ravel())
         else: # smiles
             tokens = self.smi_tokenizer.tokenize(smi)
             shown_coords = np.concatenate([coords[ai] 
                     for ai in atom_idxs if (symbols[ai] != 'H' or self.h_coord)])
             tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(shown_coords)
-        
-        return tokens
+        return tokens, order
 
     def vocs(self) -> set[str]:
         if self.atoms:

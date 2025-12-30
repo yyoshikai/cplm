@@ -31,18 +31,19 @@ def get_coord_from_mol(mol: OBMol) -> np.ndarray:
     return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
 
 class ProteinTokenizer:
-    def __init__(self, heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range, coord):
+    def __init__(self, heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range, atom_order):
         self.heavy_atom = heavy_atom
         self.h_atom = h_atom
         self.heavy_coord = heavy_coord
         self.h_coord = h_coord
+        self.atom_order = atom_order
 
         self.coord_follow_atom = coord_follow_atom
         self.atom_tokenizer = ProteinAtomTokenizer()
         self.coord_tokenizer = FloatTokenizer('protein', -coord_range, coord_range)
         assert not (self.heavy_coord and not self.heavy_atom)
         assert not (self.h_coord and not self.h_atom)
-        self.coord = coord
+        assert not (self.coord_follow_atom and self.atom_order)
 
     def __call__(self, atoms: np.ndarray, coords: np.ndarray):
         # calc mask
@@ -55,6 +56,7 @@ class ProteinTokenizer:
 
         # coord
         coord_mask = is_ca | (is_heavy if self.heavy_coord else False) | (is_h if self.h_coord else False)
+                    
 
         if self.coord_follow_atom:
             tokens = []
@@ -63,18 +65,38 @@ class ProteinTokenizer:
                     tokens += self.atom_tokenizer.tokenize([atoms[i]])
                 if coord_mask[i] and self.coord:
                     tokens += self.coord_tokenizer.tokenize_array(coords[i])
+            order = list(range(len(tokens)))
+        elif self.atom_order:
+            atom_tokens = []
+            coord_tokens = []
+            atom_order = []
+            coord_order = []
+            x = 0
+            for i in range(len(atoms)):
+                if atom_mask[i]:
+                    atom_token = self.atom_tokenizer.tokenize([atoms[i]])
+                    atom_tokens += atom_token
+                    atom_order += list(range(x, x+len(atom_token)))
+                    x += len(atom_token)
+                if coord_mask[i]:
+                    coord_token = self.coord_tokenizer.tokenize_array(coords[i])
+                    coord_tokens += coord_token
+                    coord_order += list(range(x, x+len(coord_token)))
+                    x += len(coord_token)
+            tokens = atom_tokens+['[XYZ]']+coord_tokens
+            order = atom_order+[x]+coord_order
         else:
-            tokens = self.atom_tokenizer.tokenize(atoms[atom_mask]) 
-            if self.coord:        
-                tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(coords[coord_mask].ravel())
-        return tokens
+            tokens = self.atom_tokenizer.tokenize(atoms[atom_mask]) \
+                +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords[coord_mask].ravel())
+            order = list(range(len(tokens)))
+        return tokens, order
     
     def vocs(self) -> set[str]:
         return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
                 | ({'[XYZ]'} if not self.coord_follow_atom else set())
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
-class PocketTokenizeDataset(WrapDataset[list[str]]):
+class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, pocket_data: Dataset[Pocket],
             heavy_atom: bool, h_atom: bool,
             heavy_coord: bool, h_coord: bool, 
@@ -93,7 +115,7 @@ class PocketTokenizeDataset(WrapDataset[list[str]]):
     def vocs(self) -> set[str]:
         return self.protein_tokenizer.vocs()
 
-class ProteinTokenizeDataset(WrapDataset[list[str]]):
+class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, protein_data: Dataset[OBMol],
             heavy_atom: bool, h_atom: bool,
             heavy_coord: bool, h_coord: bool, 
