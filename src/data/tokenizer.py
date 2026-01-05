@@ -44,7 +44,7 @@ class VocEncoder:
         assert vocs[0] == '[PAD]'
         return VocEncoder(vocs[1:])
 
-class TokenEncodeDataset(Tensor):
+class TokenEncodeDataset(Dataset[Tensor]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, dataset, encoder: VocEncoder):
         self.dataset = dataset

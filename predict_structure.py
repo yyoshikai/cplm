@@ -6,13 +6,14 @@ import yaml
 import numpy as np
 import pandas as pd
 import torch
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Subset, StackDataset
 from torch.nn.utils.rnn import pad_sequence
 from rdkit import RDLogger
 from openbabel.openbabel import OBMol, OBResidueIter, OBResidueAtomIter
 
 from src.utils.logger import get_logger, add_file_handler, disable_openbabel_log
-from src.data import WrapDataset, index_dataset
+from src.data import WrapDataset, index_dataset, TensorDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.protein import ProteinTokenizeDataset
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenEncodeDataset
@@ -68,7 +69,7 @@ def to_graph(out_name):
         ref_coord = df_atom[['X', 'Y', 'Z']].values.reshape(n_residue_amino, residue_size, 3)
         coords = coords[amino_mask].reshape(n_coord, n_residue_amino, residue_size, 3)
         coords = np.concatenate([ref_coord[np.newaxis], coords], axis=0) # [output, res, atom, axis]
-        matrix = np.sqrt(np.sum((coords[:,:,np.newaxis]-y[:,:,:,np.newaxis])**2, axis=-1)) # [output, res, atom, atom]
+        matrix = np.sqrt(np.sum((coords[:,:,np.newaxis]-coords[:,:,:,np.newaxis])**2, axis=-1)) # [output, res, atom, atom]
 
         fig, axs = get_grid(residue_size**2, 4, 3, residue_size, batched=True)
         xs = np.where(df_residue_ref['amino'] == amino)[0]
@@ -105,6 +106,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-trial', type=int, default=5)
     parser.add_argument('--n-protein', type=int, default=5)
     parser.add_argument('--sample-seed', type=int, default=0)
+    parser.add_argument('--max-prompt-len', type=int, default=math.inf)
     args = parser.parse_args()
 
 
@@ -140,6 +142,7 @@ if __name__ == '__main__':
     raw_idxs, protein = index_dataset(protein)
     subset_idxs = [0]+np.random.default_rng(args.sample_seed).choice(len(protein), args.n_protein-1).tolist()
     protein = Subset(protein, subset_idxs)
+    raw_idxs = Subset(raw_idxs, subset_idxs)
     protein_size = ProteinSizeDataset(protein)
     protein = ProteinTokenizeDataset(protein, not targs.no_pocket_heavy_atom, targs.pocket_h_atom, not targs.no_pocket_heavy_coord, targs.pocket_h_coord, False, targs.coord_range, False)
     sentence = SentenceDataset('[POCKET]', protein, '[XYZ]')
@@ -149,9 +152,10 @@ if __name__ == '__main__':
     pad_token = voc_encoder.pad_token
     end_token = voc_encoder.voc2i['[END]']
     token = TokenEncodeDataset(token, voc_encoder)
+    position = TensorDataset(position, torch.long)
     data_idx, token = index_dataset(token)
-    data = StackDataset(data_idx, raw_idxs, protein, position, protein_size)
-
+    data = StackDataset(data_idx, raw_idxs, token, position, protein_size)
+    sampler = itr.chain(*itr.repeat(range(len(data)), args.n_trial))
     # model
     model = get_model(targs, voc_encoder, f"{train_dir}/models/{args.opt}.pth", device)
     loader = DataLoader(data, args.batch_size, sampler=itr.chain(*itr.repeat(range(len(data)), args.n_trial)),
@@ -180,12 +184,12 @@ if __name__ == '__main__':
             positions = positions.to(device)
             
             logger.info(f"step[{step}] generating {batch_raw_idxs} ...")
-            outputs = model.generate2(tokens, '[END]', max_len, pad_token, tqdm=args.tqdm, positions=positions)
+            outputs = model.generate2(tokens, '[END]', max_len, pad_token, tqdm=args.tqdm)
             outputs = [out.cpu().numpy() for out in outputs]
 
             # Log tokens
             if step == 0:
-                for batch_idx, input, output in zip(batch_data_idxs, batch.T, outputs):
+                for batch_idx, input, output in zip(batch_data_idxs, tokens.T, outputs):
                     token_logger.debug(f"[{step}][{batch_idx}]Input={voc_encoder.decode(input)}")
                     token_logger.debug(f"[{step}][{batch_idx}]Output={voc_encoder.decode(output)}")
 

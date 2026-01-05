@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from ctypes import c_double
+from typing import Literal
 import numpy as np
 from openbabel.openbabel import OBMol, OBMolAtomIter
 from torch.utils.data import Dataset
@@ -116,9 +117,8 @@ class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
         return self.protein_tokenizer.vocs()
 
 class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, protein_data: Dataset[OBMol],
-            heavy_atom: bool, h_atom: bool,
-            heavy_coord: bool, h_coord: bool, 
+    def __init__(self, protein_data: Dataset[OBMol], heavy: Literal['none', 'atom', 'all'], 
+            hydrogen: Literal['none', 'atom', 'all'], 
             coord_follow_atom: bool, coord_range: int, coord: bool=True):
         super().__init__(protein_data)
         self.protein_data = protein_data

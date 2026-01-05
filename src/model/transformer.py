@@ -252,7 +252,8 @@ class Model(nn.Module):
         else:
             return self.sin[:L], self.cos[:L]
             
-    def forward(self, src: Tensor, get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
+    def forward(self, src: Tensor, 
+            get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
         self.n_forward += 1
         x = self.embedding(src)
         L = x.shape[0]
