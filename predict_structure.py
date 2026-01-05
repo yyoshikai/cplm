@@ -142,14 +142,15 @@ if __name__ == '__main__':
     protein = Subset(protein, subset_idxs)
     protein_size = ProteinSizeDataset(protein)
     protein = ProteinTokenizeDataset(protein, not targs.no_pocket_heavy_atom, targs.pocket_h_atom, not targs.no_pocket_heavy_coord, targs.pocket_h_coord, False, targs.coord_range, False)
-    protein = SentenceDataset('[POCKET]', protein, '[XYZ]')
-    vocs = protein.vocs() | {'[END]'}
+    sentence = SentenceDataset('[POCKET]', protein, '[XYZ]')
+    vocs = sentence.vocs() | {'[END]'}
+    token, position = sentence.untuple()
     voc_encoder = VocEncoder(vocs)
     pad_token = voc_encoder.pad_token
     end_token = voc_encoder.voc2i['[END]']
-    protein = TokenEncodeDataset(protein, voc_encoder)
-    data_idx, protein = index_dataset(protein)
-    data = StackDataset(data_idx, raw_idxs, protein, protein_size)
+    token = TokenEncodeDataset(token, voc_encoder)
+    data_idx, token = index_dataset(token)
+    data = StackDataset(data_idx, raw_idxs, protein, position, protein_size)
 
     # model
     model = get_model(targs, voc_encoder, f"{train_dir}/models/{args.opt}.pth", device)
@@ -160,7 +161,7 @@ if __name__ == '__main__':
 
     with torch.inference_mode():
         for step, batch in enumerate(loader):
-            batch_data_idxs, batch_raw_idxs, tokens, ns_atom = zip(*batch)
+            batch_data_idxs, batch_raw_idxs, tokens, positions, ns_atom = zip(*batch)
             for data_idx, token in zip(batch_data_idxs, tokens):
                 token_size = len(token)
                 if token_size > args.max_prompt_len:
@@ -169,15 +170,17 @@ if __name__ == '__main__':
             if len(batch) == 0:
                 logger.info(f"step[{step}] All prompts were too large.")
                 continue
-            batch_data_idx, batch_raw_idxs, tokens, ns_atom = zip(*batch)
-            batch = pad_sequence(tokens)
+            batch_data_idx, batch_raw_idxs, tokens, positions, ns_atom = zip(*batch)
+            tokens = pad_sequence(tokens)
+            positions = pad_sequence(positions)
             max_len = max(ns_atom)*6+1
 
-            L, B = batch.shape
-            batch = batch.to(device)
+            L, B = tokens.shape
+            tokens = tokens.to(device)
+            positions = positions.to(device)
             
             logger.info(f"step[{step}] generating {batch_raw_idxs} ...")
-            outputs = model.generate2(batch, '[END]', max_len, pad_token, tqdm=args.tqdm)
+            outputs = model.generate2(tokens, '[END]', max_len, pad_token, tqdm=args.tqdm, positions=positions)
             outputs = [out.cpu().numpy() for out in outputs]
 
             # Log tokens

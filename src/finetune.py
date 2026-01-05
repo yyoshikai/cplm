@@ -3,9 +3,10 @@ from argparse import Namespace
 from typing import Literal
 from copy import deepcopy
 import numpy as np
+import torch
 from torch.utils.data import Dataset
 from openbabel.openbabel import OBMol
-from .data import CacheDataset, RepeatDataset, Subset, StackDataset, untuple
+from .data import RepeatDataset, Subset, StackDataset, TensorDataset
 from .data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
@@ -28,7 +29,8 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             logs.append((f"args.{name} was not set and defaults to {value}.", logging.WARNING))
             setattr(args, name, value)
 
-    datas = []
+    token_datas = []
+    position_datas = []
     weight_datas = []
     dnames = []
     vocs = set()
@@ -77,12 +79,13 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
                 sentence += ['[SCORE]', score, '[END]']
                 weights += [score_weight, 0.0]
             
-            mol_data = SentenceDataset(*sentence)
-            vocs |= mol_data.vocs()
-            data = CacheDataset(mol_data)
+            sentence = SentenceDataset(*sentence)
+            vocs |= sentence.vocs()
+            token, position = sentence.untuple()
+            position = TensorDataset(position, torch.long)
             
             ### weight
-            weight_data = RemoveLastDataset(TokenWeightDataset(data, separates, weights, by_n_separate=True))
+            weight = RemoveLastDataset(TokenWeightDataset(token, separates, weights, by_n_separate=True))
         ### Proteins
         else:
             protein = data
@@ -91,27 +94,30 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
                 protein = PocketTokenizeDataset(protein, not args.no_pocket_heavy_atom, args.pocket_h_atom, not args.no_pocket_heavy_coord, args.pocket_h_coord, args.coord_follow_atom, args.coord_range)
             else:
                 protein = ProteinTokenizeDataset(protein, not args.no_pocket_heavy_atom, args.pocket_h_atom, not args.no_pocket_heavy_coord, args.pocket_h_coord, args.coord_follow_atom, args.coord_range)
-            protein_data = SentenceDataset('[POCKET]', protein, '[END]')
-            vocs |= protein_data.vocs()
-            data = CacheDataset(protein_data)
+            sentence = SentenceDataset('[POCKET]', protein, '[END]')
+            vocs |= sentence.vocs()
+            token, position = sentence.untuple()
+            position = TensorDataset(position, torch.long)
 
             #### weight
             separates = {'[POCKET]', '[END]'}
             separates2weight = { ('[POCKET]',): pocket_weight, ('[POCKET]', '[END]'): 0.0 }
-            weight_data = RemoveLastDataset(TokenWeightDataset(protein_data, separates, separates2weight))
+            weight = RemoveLastDataset(TokenWeightDataset(token, separates, separates2weight))
 
-        datas.append(data)
-        weight_datas.append(weight_data)
+        token_datas.append(token)
+        position_datas.append(position)
+        weight_datas.append(weight)
         dnames.append(dname)
         logs.append((f"    {dname}: {len(data):,}/{len(raw):,}", logging.INFO))
         d_seed += 1
     
     ### encode words
     voc_encoder = VocEncoder(vocs)
-    datas = [TokenEncodeDataset(data, voc_encoder) for data in datas]
+    token_datas = [TokenEncodeDataset(token, voc_encoder) for token in token_datas]
 
     ### merge weight
-    datas = [StackDataset(data, weight_data) for data, weight_data in zip(datas, weight_datas)]
+    datas = [StackDataset(token, position, weight) for token, position, weight
+            in zip(token_datas, position_datas, weight_datas)]
     return datas, voc_encoder, dnames, logs
 
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
@@ -143,7 +149,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
                 raw_data = CDProteinDataset(split)
             else:
                 raw_data = CDDataset(split)
-    protein, lig, score, protein_filename, ligand_filename = untuple(raw_data, 5)
+    protein, lig, score, protein_filename, ligand_filename = raw_data.untuple()
 
     ## rotation
     if args.protein:
@@ -190,12 +196,13 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
         weights += [args.lig_coord_weight, 0.0]
     sentence = SentenceDataset(*sentence)
     vocs = sentence.vocs() | added_vocs
-    sentence = CacheDataset(sentence)
+    token, position = sentence.untuple()
+    position = TensorDataset(position, torch.long)
 
     ## token
     voc_encoder = VocEncoder(vocs)
-    token = TokenEncodeDataset(sentence, voc_encoder)
+    token = TokenEncodeDataset(token, voc_encoder)
   
     ## weight
-    weight = RemoveLastDataset(TokenWeightDataset(sentence, separates, weights, by_n_separate=True))
-    return voc_encoder, raw_data, token, weight, center, rotation, protein_filename, ligand_filename, logs
+    weight = RemoveLastDataset(TokenWeightDataset(token, separates, weights, by_n_separate=True))
+    return voc_encoder, raw_data, token, position, weight, center, rotation, protein_filename, ligand_filename, logs

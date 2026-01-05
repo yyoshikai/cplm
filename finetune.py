@@ -35,12 +35,12 @@ if args.seed is None:
 # data
 split2datas = {}
 for split in ['valid', 'train']:
-    voc_encoder, raw_data, token_data, weight_data, _center_data, _rotation_data, \
+    voc_encoder, raw_data, token_data, position_data, weight_data, _center_data, _rotation_data, \
         _protein_filename_data, _ligand_filename_data, data_logs \
         = get_finetune_data(args, split, True, True, set(), prompt_score='none' if args.no_score else 'data')
     logs += data_logs
     logs.append(f"    {split} data: {len(token_data):,}/{len(raw_data):,}")
     data_names = [type(raw_data).__name__]
-    split2datas[split] = [StackDataset(token_data, weight_data)]
+    split2datas[split] = [StackDataset(token_data, position_data, weight_data)]
 
 train('finetune', args, split2datas['train'], split2datas['valid'], voc_encoder, logs, data_names, f"{pretrain_dir}/models/{args.pretrain_opt}.pth")

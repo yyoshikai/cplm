@@ -1,4 +1,4 @@
-import sys, os, yaml, psutil, gc, math, random, re
+import os, yaml, psutil, gc, math, random
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
@@ -134,7 +134,7 @@ state_dict = torch.load(f"{finetune_dir}/models/{args.finetune_opt}.pth", weight
 vocs = state_dict['vocs' if 'vocs' in state_dict else 'module.vocs'][1:]
 
 added_vocs = set(vocs)
-voc_encoder, raw_data, token_data, weight_data, center_data, rotation_data,\
+voc_encoder, raw_data, token_data, position_data, weight_data, center_data, rotation_data,\
         protein_filename_data, ligand_filename_data, data_log \
         = get_finetune_data(fargs, 'train', False, True, added_vocs, 'none')
 logs += data_log
@@ -184,9 +184,6 @@ ddp_size = dist.get_world_size()
 if rank == MAIN_RANK:
     logger.info(f"git hash={get_git_hash()}")
 
-## SDP kernel
-SDP_KERNEL = {'FLASH': SDPBackend.FLASH_ATTENTION, 'EFFICIENT': SDPBackend.EFFICIENT_ATTENTION}[sdp_kernel]
-
 # model
 init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
 init_model = get_model(pargs, voc_encoder, init_state_path, device)
@@ -201,7 +198,7 @@ model.to(device)
 from src.utils.ddp import dist_broadcast_tensor
 def get_gpuuse(batch_size: int, length: int):
     if isinstance(model.module, Model):
-        return model.module.get_gpuuse(batch_size, length, True, sdp_kernel)
+        return model.module.get_gpuuse(batch_size, length, True, 'FLASH')
     else:
         return model.module.get_gpuuse(batch_size, length, True)
 if args.max_prompt_len is not None:
@@ -434,7 +431,8 @@ for step in step_timer:
                 out_mbatch = out_batch[:, mslice]
                 weight_mbatch = weight[:, mslice]
                 scores_mbatch = scores[mslice]
-                with (nullcontext() if args.all_autocast else torch.autocast('cuda', torch.bfloat16)), sdpa_kernel(SDP_KERNEL):
+                with (nullcontext() if args.all_autocast else torch.autocast('cuda', torch.bfloat16)), \
+                        sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                     with torch.inference_mode():
                         init_logits = init_model(out_mbatch[:-1]) # [L, B, N]
                         init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]

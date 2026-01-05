@@ -178,15 +178,12 @@ class ConstantDataset(Dataset[T_co]):
     def __len__(self):
         return self.size
 
-class TensorDataset(Dataset[Tensor]):
-    def __init__(self, tensor: Tensor|np.ndarray) -> None:
-        self.tensor = torch.tensor(tensor)
-    
+class TensorDataset(WrapDataset[Tensor]):
+    def __init__(self, dataset: Dataset, dtype=None):
+        super().__init__(dataset)
+        self.dtype = dtype
     def __getitem__(self, idx: int):
-        return self.tensor[idx]
-
-    def __len__(self):
-        return self.tensor.size(0)
+        return torch.tensor(self.dataset[idx], dtype=self.dtype)
 
 class WorkerIDataset(IterableDataset[T_co]):
     def __init__(self, dataset: IterableDataset[T_co]):

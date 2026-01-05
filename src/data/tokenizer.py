@@ -9,7 +9,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from .data import WorkerAggregator, is_main_worker, WrapDataset
+from .data import WorkerAggregator, is_main_worker, WrapDataset, TupleDataset
 from ..utils import should_show
 from ..utils.path import WORKDIR
 
@@ -44,16 +44,16 @@ class VocEncoder:
         assert vocs[0] == '[PAD]'
         return VocEncoder(vocs[1:])
 
-class TokenEncodeDataset(Dataset[Tensor]):
+class TokenEncodeDataset(Tensor):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, dataset, encoder: VocEncoder):
         self.dataset = dataset
         self.encoder = encoder
     
     def __getitem__(self, idx):
-        data = self.dataset[idx]
-        data = torch.tensor(self.encoder.encode(data), dtype=torch.long)
-        return data
+        token = self.encoder.encode(self.dataset[idx])
+        token = torch.tensor(token, dtype=torch.long)
+        return token
 
     def __len__(self):
         return len(self.dataset)
@@ -252,8 +252,9 @@ class ArrayTokenizeDataset(TokenizeDataset):
     def __getitem__(self, idx: int):
         return self.tokenizer.tokenize_array(self.dataset[idx].ravel())
 
-class SentenceDataset(Dataset[list[str]]):
-    def __init__(self, *sentence: list[str|Dataset[list[str]]]):
+class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
+    def __init__(self, *sentence: list[str|Dataset[tuple[list[str], list[int]]]]):
+        super().__init__(2)
         self.sentence = sentence
 
         # check length
@@ -268,13 +269,20 @@ class SentenceDataset(Dataset[list[str]]):
             raise ValueError(f"No dataset in sentence.")
 
     def __getitem__(self, idx: int) -> list[str]:
-        item = []
+        words = []
+        positions = []
+        pos_offset = 0
         for word in self.sentence:
             if isinstance(word, str):
-                item.append(word)
+                words.append(word)
+                positions.append(pos_offset)
+                pos_offset += 1
             else:
-                item += word[idx]
-        return item
+                words0, positions0 = word[idx]
+                words += words0
+                positions += [pos+pos_offset for pos in positions0]
+                pos_offset += len(words)
+        return words, positions
     
     def __len__(self):
         return self.len

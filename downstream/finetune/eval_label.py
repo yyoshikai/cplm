@@ -42,9 +42,6 @@ datas, voc_encoder, data_names, data_log = get_train_data(targs, 'valid',
 for msg, level in data_log:
     logger.log(level, msg)
 
-
-ligand_datas = [data for data, data_name in zip(datas, data_names) if data_name in ['UniMolLigand', 'UniMolLigandNoMolNet']]
-
 # model
 net_model = get_model(targs, voc_encoder, None, device)
 criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)

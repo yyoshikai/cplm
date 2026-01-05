@@ -67,7 +67,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
 
     # Data
     added_vocs = SmilesTokenizer()
-    voc_encoder, _raw, prompt_token_data, _weight, center_data, _rotation, _protein_filename_data, _ligand_filename_data, data_logs \
+    voc_encoder, _raw, prompt_token_data, _position, _weight, center_data, _rotation, _protein_filename_data, _ligand_filename_data, data_logs \
         = get_finetune_data(model_args, 'test', False, False, added_vocs, prompt_score='none' if no_score else 'low')
     for msg, level in data_logs: 
         logger.log(level, msg)

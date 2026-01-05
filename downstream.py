@@ -21,7 +21,7 @@ from src.utils import IterateRecorder, should_show
 from src.utils.ddp import dist_broadcast_object, dist_send_tensor, dist_recv_tensor
 from src.utils.random import ddp_set_random_seed
 from src.utils.rdkit import ignore_warning
-from src.data import KeyDataset, CacheDataset, StackDataset
+from src.data import KeyDataset, CacheDataset, StackDataset, TensorDataset
 from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
 from src.data.tokenizer import FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
@@ -103,8 +103,10 @@ def get_downstream_data(split, is_valid, voc_encoder=None):
     if is_valid:
         sentence += ['[SCORE]']
         sentence = SentenceDataset(*sentence)
-        token = TokenEncodeDataset(sentence, voc_encoder)
-        data = StackDataset(token, target)
+        token, order = sentence.untuple()
+        token = TokenEncodeDataset(token, voc_encoder)
+        order = TensorDataset(order, torch.long)
+        data = StackDataset(token, order, target)
         return data
     else:
         if raw.is_cls:
@@ -121,16 +123,17 @@ def get_downstream_data(split, is_valid, voc_encoder=None):
         sentence += ['[SCORE]', target, '[END]']
         sentence = SentenceDataset(*sentence)
         vocs = sentence.vocs()
-        sentence = CacheDataset(sentence)
+        token, position = sentence.untuple()
         if voc_encoder is None:
             voc_encoder = VocEncoder(vocs)
-        token = TokenEncodeDataset(sentence, voc_encoder)
+        token = TokenEncodeDataset(token, voc_encoder)
+        position = TensorDataset(position, torch.long)
 
         ## weight
         separates = {'[LIGAND]', '[SCORE]', '[END]'}
         weights = [None, 0.0, 0.0, 1.0, 0.0]
-        weight = RemoveLastDataset(TokenWeightDataset(sentence, separates, weights, by_n_separate=True))
-        data = StackDataset(token, weight)
+        weight = RemoveLastDataset(TokenWeightDataset(token, separates, weights, by_n_separate=True))
+        data = StackDataset(token, position, weight)
         return data, voc_encoder, target_tokenizer, scaler
 
 
@@ -143,10 +146,11 @@ if args.batch_size_max > len(train_data):
     args.batch_size_max = len(train_data)
 
 def train_collate(batch: list[tuple[Tensor, Tensor]]):
-    tokens, weights = zip(*batch)
+    tokens, positions, weights = zip(*batch)
     token_batch = pad_sequence(tokens, padding_value=voc_encoder.pad_token)
+    position_batch = pad_sequence(positions, padding_value=-1)
     weight_batch = pad_sequence(weights, padding_value=voc_encoder.pad_token)
-    return token_batch, weight_batch
+    return token_batch, position_batch, weight_batch
 def valid_collate(batch: list[tuple[Tensor, float|int]]):
     tokens, targets = zip(*batch)
     token_batch = pad_sequence(tokens, padding_value=voc_encoder.pad_token)
@@ -236,7 +240,7 @@ def objective(trial: Trial):
         os.environ['EPOCH'] = str(epoch)
 
         model.train()
-        for step, (token_batch, weight_batch) in enumerate(loader):
+        for step, (token_batch, position_batch, weight_batch) in enumerate(loader):
             optimizer.zero_grad()
             token_batch = token_batch.to(device)
             weight_batch = weight_batch.to(device)
@@ -277,7 +281,7 @@ def objective(trial: Trial):
                 n_gen = 0
                 for step, batch in enumerate(valid_loaders[split]):
                     if batch is None: continue
-                    token_batch, target_batch = batch
+                    token_batch, position_batch, target_batch = batch
                     L, B = token_batch.shape
                     prompt_sizes = [torch.sum(token_batch[:,b]==voc_encoder.pad_token).item()
                             for b in range(B)]

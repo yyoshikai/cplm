@@ -443,7 +443,7 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
                         valid_reveal_loader.enabled = False
 
                 ### Forward
-                token_batch, weight_batch = batch
+                token_batch, position_batch, weight_batch = batch
                 input, target = token_batch[:-1], token_batch[1:]
                 loss = criterion(model(input), target)
                 
@@ -509,12 +509,12 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         train_loader = None
     
     ## Define functions for batch collation
-    def collate(data_list: list[tuple[Tensor, Tensor]]):
-        batch = pad_sequence([data[0] for data in data_list],
-            batch_first=False, padding_value=voc_encoder.pad_token)
-        weight_batch = pad_sequence([data[1] for data in data_list],
-            batch_first=False, padding_value=0.0)
-        return batch, weight_batch
+    def collate(data_list: list[tuple[Tensor, Tensor, Tensor]]):
+        tokens, positions, weights = zip(*data_list)
+        tokens = pad_sequence(tokens, padding_value=voc_encoder.pad_token)
+        positions = pad_sequence(positions, padding_value=-1)
+        weights = pad_sequence(weights, padding_value=0.0)
+        return tokens, positions, weights
     
     def get_gpuuse(batch_size: int, length: int):
         if isinstance(model.module, Model):
@@ -622,7 +622,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             torch.cuda.reset_peak_memory_stats(device)
         ## get batch
         step_timer.start('get_batch')
-        token_batch, weight_batch = train_iter.__next__()
+        token_batch, position_batch, weight_batch = train_iter.__next__()
         target = token_batch[1:]
         max_len, batch_size = token_batch.shape
         worker_step_weight = weight_batch.sum().item()
