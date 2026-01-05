@@ -276,7 +276,7 @@ class Model(nn.Module):
             return x
 
     @torch.inference_mode()
-    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm=True, do_sample: bool=True) -> list[torch.Tensor]:
+    def generate(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm=True, do_sample: bool=True) -> list[torch.Tensor]:
         """
         context: torch.Tensor(long)[L, B]
         """

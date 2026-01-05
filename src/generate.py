@@ -117,7 +117,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
             batch = batch.to(device)
             
             logger.info(f"step[{step}] generating...")
-            outputs = model.generate2(batch, '[END]', max_len, pad_token, tqdm=tqdm_generate)
+            outputs = model.generate(batch, '[END]', max_len, pad_token, tqdm=tqdm_generate)
             outputs = [out.cpu().numpy() for out in outputs]
 
             # Log tokens

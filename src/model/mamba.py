@@ -186,7 +186,7 @@ class MambaModel(nn.Module):
         return outputs
 
     @torch.no_grad()    
-    def generate2(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm: bool=True, do_sample: bool=True):
+    def generate(self, context: torch.Tensor, end_voc: str, max_len: int, pad_token: int, tqdm: bool=True, do_sample: bool=True):
         """
         context: Tensor[L, B](long)
         """

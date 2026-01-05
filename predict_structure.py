@@ -184,7 +184,7 @@ if __name__ == '__main__':
             positions = positions.to(device)
             
             logger.info(f"step[{step}] generating {batch_raw_idxs} ...")
-            outputs = model.generate2(tokens, '[END]', max_len, pad_token, tqdm=args.tqdm)
+            outputs = model.generate(tokens, '[END]', max_len, pad_token, tqdm=args.tqdm)
             outputs = [out.cpu().numpy() for out in outputs]
 
             # Log tokens
