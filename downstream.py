@@ -98,7 +98,7 @@ def get_downstream_data(split, is_valid, voc_encoder=None):
 
     # tokenize
     sentence = []
-    mol = MolTokenizeDataset(mol, args.seed, not targs.no_lig_h_atom, not targs.no_lig_h_coord, targs.lig_randomize, targs.coord_range, getattr(targs, 'lig_coord_follow_atom', False), getattr('lig_atoms', False))
+    mol = MolTokenizeDataset(mol, args.seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize, coord_range=targs.coord_range, coord_follow_atom=getattr(targs, 'lig_coord_follow_atom', False), atoms=getattr('lig_atoms', False), atom_order=getattr('atom_order', False))
     sentence += ['[LIGAND]', mol, '[END]']
     if is_valid:
         sentence += ['[SCORE]']

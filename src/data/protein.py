@@ -32,7 +32,7 @@ def get_coord_from_mol(mol: OBMol) -> np.ndarray:
     return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
 
 class ProteinTokenizer:
-    def __init__(self, heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range, atom_order):
+    def __init__(self, *, heavy_atom, heavy_coord, h_atom, h_coord, coord_follow_atom, coord_range, atom_order):
         self.heavy_atom = heavy_atom
         self.h_atom = h_atom
         self.heavy_coord = heavy_coord
@@ -98,13 +98,13 @@ class ProteinTokenizer:
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, pocket_data: Dataset[Pocket],
-            heavy_atom: bool, h_atom: bool,
-            heavy_coord: bool, h_coord: bool, 
-            coord_follow_atom: bool, coord_range: int):
+    def __init__(self, pocket_data: Dataset[Pocket], *,
+            heavy_atom: bool, heavy_coord: bool, 
+            h_atom: bool, h_coord: bool, 
+            coord_follow_atom: bool, atom_order: bool, coord_range: int):
         super().__init__(pocket_data)
         self.pocket_data = pocket_data
-        self.protein_tokenizer = ProteinTokenizer(heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range)
+        self.protein_tokenizer = ProteinTokenizer(heavy_atom=heavy_atom, heavy_coord=heavy_coord, h_atom=h_atom, h_coord=h_coord, coord_follow_atom=coord_follow_atom, coord_range=coord_range, atom_order=atom_order)
         assert not h_atom, f"h_atom is not supported for Pocket"
         assert not h_coord, f"h_coord is not supported for Pocket"
 
@@ -117,12 +117,13 @@ class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
         return self.protein_tokenizer.vocs()
 
 class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, protein_data: Dataset[OBMol], heavy: Literal['none', 'atom', 'all'], 
-            hydrogen: Literal['none', 'atom', 'all'], 
-            coord_follow_atom: bool, coord_range: int, coord: bool=True):
+    def __init__(self, protein_data: Dataset[OBMol], *,
+            heavy_atom: bool, heavy_coord: bool, 
+            h_atom: bool, h_coord: bool, 
+            coord_follow_atom: bool, atom_order: bool, coord_range: int):
         super().__init__(protein_data)
         self.protein_data = protein_data
-        self.protein_tokenizer = ProteinTokenizer(heavy_atom, h_atom, heavy_coord, h_coord, coord_follow_atom, coord_range, coord)
+        self.protein_tokenizer = ProteinTokenizer(heavy_atom=heavy_atom, heavy_coord=heavy_coord, h_atom=h_atom, h_coord=h_coord, coord_follow_atom=coord_follow_atom, coord_range=coord_range, atom_order=atom_order)
         self.h_atom = h_atom
 
     def __getitem__(self, idx: int):

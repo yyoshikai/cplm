@@ -5,7 +5,7 @@ from .data import WrapDataset, get_rng
 from .tokenizer import SmilesTokenizer, FloatTokenizer
 
 class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, h_atom: bool, h_coord: bool, randomize: bool, coord_range: float, coord_follow_atom: bool, atoms: bool, atom_order: bool):
+    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, *, h_atom: bool, h_coord: bool, randomize: bool, coord_range: float, coord_follow_atom: bool, atoms: bool, atom_order: bool):
         super().__init__(mol_data)
         self.mol_data = mol_data
         self.h_atom = h_atom
@@ -107,7 +107,6 @@ class RandomScoreDataset(Dataset[float]):
 
     def __len__(self):
         return self.size
-
 
 class RandomClassDataset(Dataset[bool]):
     def __init__(self, size: int, seed: int):

@@ -16,7 +16,7 @@ from src.utils.logger import get_logger, add_file_handler, disable_openbabel_log
 from src.data import WrapDataset, index_dataset, TensorDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.protein import ProteinTokenizeDataset
-from src.data.tokenizer import SentenceDataset, VocEncoder, TokenEncodeDataset
+from src.data.tokenizer import SentenceDataset, VocEncoder, TokenEncodeDataset, TokenSplitDataset
 from src.train import get_model
 from src.evaluate import parse_coord_tokens
 
@@ -144,8 +144,9 @@ if __name__ == '__main__':
     protein = Subset(protein, subset_idxs)
     raw_idxs = Subset(raw_idxs, subset_idxs)
     protein_size = ProteinSizeDataset(protein)
-    protein = ProteinTokenizeDataset(protein, not targs.no_pocket_heavy_atom, targs.pocket_h_atom, not targs.no_pocket_heavy_coord, targs.pocket_h_coord, False, targs.coord_range, False)
-    sentence = SentenceDataset('[POCKET]', protein, '[XYZ]')
+    token = ProteinTokenizeDataset(protein, heavy_atom=not targs.no_pocket_heavy_atom, heavy_coord=not targs.no_pocket_heavy_coord, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord, coord_follow_atom=targs.coord_follow_atom, atom_order=getattr(targs, 'pocket_atom_order', False), coord_range=targs.coord_range)
+    atom_token = TokenSplitDataset(token, '[XYZ]')
+    sentence = SentenceDataset('[POCKET]', atom_token, '[XYZ]')
     vocs = sentence.vocs() | {'[END]'}
     token, position = sentence.untuple()
     voc_encoder = VocEncoder(vocs)

@@ -9,7 +9,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from .data import WorkerAggregator, is_main_worker, WrapDataset, TupleDataset
+from .data import WorkerAggregator, is_main_worker, WrapDataset, TupleDataset, WrapTupleDataset
 from ..utils import should_show
 from ..utils.path import WORKDIR
 
@@ -323,3 +323,12 @@ class RemoveLastDataset(WrapDataset[T_co]):
         return self.dataset[idx][:-1]
     def __len__(self):
         return len(self.dataset)
+    
+class TokenSplitDataset(WrapTupleDataset[tuple[list[str], list[str]]]):
+    def __init__(self, dataset: Dataset[list[str]], split_token: str):
+        super().__init__(dataset, 2)
+        self.split_token = split_token
+    def __getitem__(self, idx: int):
+        token = self.dataset[idx]
+        i = token.index(self.split_token)
+        return token[:i], token[i+1:]
