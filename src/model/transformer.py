@@ -248,7 +248,7 @@ class Model(nn.Module):
             return self.sin[:L], self.cos[:L]
             
     def forward(self, src: Tensor, position: Tensor,
-            get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
+            get_mem: bool=False, offset: list[float]=None, mem_path: str=None, out_pos_buffer: bool=False):
         """
         src: [L, B]
         position: [L, B]
@@ -278,10 +278,13 @@ class Model(nn.Module):
         x = self.predictor(x)
 
         # get_mem
+        output = (x, )
         if get_mem:
-            return tuple([x]+get_mems(src.device, offset, mem_path))
-        else:
-            return x
+            output += tuple(get_mems(src.device, offset, mem_path))
+        if out_pos_buffer:
+            output += (sin, cos, )
+        if len(output) == 1: output = output[0]
+        return output
 
     @torch.inference_mode()
     def generate(self, context: torch.Tensor, position: torch.Tensor|None,

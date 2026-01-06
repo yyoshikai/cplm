@@ -1,4 +1,4 @@
-import psutil, copy, math
+import psutil, math
 from pathlib import Path
 from functools import partial, lru_cache
 from collections import defaultdict
@@ -16,7 +16,6 @@ from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCach
 from transformers.generation.streamers import BaseStreamer
 from .transformer import save_vocs, align_embedding, right_to_left_padding
 from ..utils.memory import get_mems
-
 
 class MambaModel(nn.Module):
     """
@@ -62,7 +61,7 @@ class MambaModel(nn.Module):
         L, B = src.shape
 
         # check position
-        assert torch.all((position == torch.arange(L).reshape(L, 1))|(src == self.config.pad_token_id)), \
+        assert torch.all((position == torch.arange(L, device=position.device).reshape(L, 1))|(src == self.config.pad_token_id)), \
             "Only sequential position is supported for Mamba"
 
         output = self.model(src.T.contiguous(), )
