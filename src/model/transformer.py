@@ -202,6 +202,7 @@ class Model(nn.Module):
         self.num_layers = num_layers
         self.norm = norm
 
+        self.padding_idx = padding_idx
         self.embedding = nn.Embedding(num_embeddings, d_model, padding_idx)
         self.predictor = nn.Linear(d_model, num_embeddings)
         self.head_dim = d_model // nhead
@@ -262,8 +263,8 @@ class Model(nn.Module):
             index=position.T.reshape(B, L, 1).expand(B, L, Dh//2)
         ).contiguous() # [B, L, D]
         cos = torch.gather(
-            input=cos.reshape(L, 1, Dh//2).expand(L, B, Dh//2), dim=1,
-            index=position.reshape(L, B, 1).expand(L, B, Dh//2)
+            input=cos.reshape(1, L, Dh//2).expand(B, L, Dh//2), dim=1,
+            index=position.T.reshape(B, L, 1).expand(B, L, Dh//2)
         ).contiguous() # [B, L, D]
 
         if (self.n_forward&(self.n_forward-1)) == 0:

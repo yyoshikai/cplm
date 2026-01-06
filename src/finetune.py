@@ -4,7 +4,9 @@ from typing import Literal
 from copy import deepcopy
 import numpy as np
 import torch
+from torch import Tensor
 from torch.utils.data import Dataset
+from torch.nn.utils.rnn import pad_sequence
 from openbabel.openbabel import OBMol
 from .data import RepeatDataset, Subset, StackDataset, TensorDataset
 from .data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
@@ -18,7 +20,6 @@ from .data.coord import CoordTransformDataset
 
 def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
     logs = []
-    logs.append((f"{split} data actual_size/total_size=", logging.INFO))
 
     # compatibility
     assert isinstance(args, Namespace) # not Dict
@@ -29,6 +30,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             logs.append((f"args.{name} was not set and defaults to {value}.", logging.WARNING))
             setattr(args, name, value)
 
+    logs.append((f"{split} data actual_size/total_size=", logging.INFO))
     token_datas = []
     position_datas = []
     weight_datas = []
@@ -207,3 +209,11 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     ## weight
     weight = RemoveLastDataset(TokenWeightDataset(token, separates, weights, by_n_separate=True))
     return voc_encoder, raw_data, token, position, weight, center, rotation, protein_filename, ligand_filename, logs
+
+## Define functions for batch collation
+def collate(data_list: list[tuple[Tensor, Tensor, Tensor]], pad_token):
+    tokens, positions, weights = zip(*data_list)
+    tokens = pad_sequence(tokens, padding_value=pad_token)
+    positions = pad_sequence(positions, padding_value=0)
+    weights = pad_sequence(weights, padding_value=0.0)
+    return tokens, positions, weights

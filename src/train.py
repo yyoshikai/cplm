@@ -4,6 +4,7 @@ from argparse import ArgumentParser, Namespace
 from collections.abc import Callable
 from contextlib import nullcontext
 from logging import Logger, getLogger
+from functools import partial
 from time import time
 from glob import glob
 import numpy as np
@@ -14,7 +15,6 @@ import torch.nn as nn
 import transformers
 import rdkit
 from torch import Tensor
-from torch.nn.utils.rnn import pad_sequence
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
@@ -36,6 +36,7 @@ from .utils.ddp import reduce_float
 from .utils.random import ddp_set_random_seed, set_deterministic
 from .utils.time import TimerTqdm, EndEstimator
 from .utils import IterateRecorder, remove_module
+from .finetune import collate
 
 def init_ddp():
     dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
@@ -397,12 +398,6 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
         num_workers: int, is_starting: bool, sdp_kernel: str, gpu_size: float, prefix: str, check_data_dist: bool
     ) -> tuple[list[float], list[float], Tensor, Tensor]:
     
-    def collate(data_list: list[tuple[Tensor, Tensor]]):
-        batch = pad_sequence([data[0] for data in data_list],
-            batch_first=False, padding_value=voc_encoder.pad_token)
-        weight_batch = pad_sequence([data[1] for data in data_list],
-            batch_first=False, padding_value=0.0)
-        return batch, weight_batch
     def get_gpuuse(batch_size: int, length: int):
         if isinstance(model.module, Model):
             return model.module.get_gpuuse(batch_size, length, True, sdp_kernel)
@@ -429,7 +424,7 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
                 valid_reveal_loader = valid_loader
         else:
             valid_loader = None
-        valid_loader = DDPStringCollateLoader(valid_loader, collate, get_gpuuse, gpu_size, device, math.inf, data_rank)
+        valid_loader = DDPStringCollateLoader(valid_loader, partial(collate, pad_token=voc_encoder.pad_token), get_gpuuse, gpu_size, device, math.inf, data_rank)
 
         ## Accumulate losses
         process_weight = torch.tensor(0.0, device=device, dtype=torch.float)
@@ -510,14 +505,6 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     else:
         train_loader = None
     
-    ## Define functions for batch collation
-    def collate(data_list: list[tuple[Tensor, Tensor, Tensor]]):
-        tokens, positions, weights = zip(*data_list)
-        tokens = pad_sequence(tokens, padding_value=voc_encoder.pad_token)
-        positions = pad_sequence(positions, padding_value=-1)
-        weights = pad_sequence(weights, padding_value=0.0)
-        return tokens, positions, weights
-    
     def get_gpuuse(batch_size: int, length: int):
         if isinstance(model.module, Model):
             return model.module.get_gpuuse(batch_size, length, True, args.sdp_kernel)
@@ -525,7 +512,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             return model.module.get_gpuuse(batch_size, length, True)
     
     ## collated data loader
-    train_loader = DDPStringCollateLoader(train_loader, collate, get_gpuuse, 
+    train_loader = DDPStringCollateLoader(train_loader, partial(collate, pad_token=voc_encoder.pad_token), get_gpuuse, 
             args.gpu_size, device, 100000, DATA_RANK['train'], 
             f"{result_dir}/data/train_large_items.csv", step_timer if 'data_loading' in args.check else None)
     train_iter = train_loader.__iter__()
