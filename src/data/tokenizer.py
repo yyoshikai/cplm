@@ -281,7 +281,7 @@ class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
                 words0, positions0 = word[idx]
                 words += words0
                 positions += [pos+pos_offset for pos in positions0]
-                pos_offset += len(words)
+                pos_offset += len(words0)
         return words, positions
     
     def __len__(self):
@@ -293,7 +293,7 @@ class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
             if isinstance(word, str):
                 vocs.add(word)
             else:
-                    vocs |= word.vocs()
+                vocs |= word.vocs()
         return vocs
     
     def __str__(self):

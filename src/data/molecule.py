@@ -5,7 +5,7 @@ from .data import WrapDataset, get_rng
 from .tokenizer import SmilesTokenizer, FloatTokenizer
 
 class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, *, h_atom: bool, h_coord: bool, randomize: bool, coord_range: float, coord_follow_atom: bool, atoms: bool, atom_order: bool):
+    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, *, h_atom: bool, h_coord: bool, randomize: bool, coord_follow_atom: bool, atoms: bool, atom_order: bool, coord_range: float):
         super().__init__(mol_data)
         self.mol_data = mol_data
         self.h_atom = h_atom
@@ -55,6 +55,7 @@ class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
                     tokens.append(symbols[ai])
                     if self.h_coord or symbols[ai] != 'H':
                         tokens += self.coord_tokenizer.tokenize_array(coords[ai])
+                order = list(range(len(tokens)))
             elif self.atom_order:
                 atom_tokens = []
                 coord_tokens = []
@@ -62,10 +63,9 @@ class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
                 coord_order = []
                 x = 0
                 for i in range(len(symbols)):
-                    atom_token = self.atom_tokenizer.tokenize([symbols[i]])
-                    atom_tokens += atom_token
-                    atom_order += list(range(x, x+len(atom_token)))
-                    x += len(atom_token)
+                    atom_tokens.append(symbols[i])
+                    atom_order.append(x)
+                    x += 1
                     if self.h_coord or symbols[i] != 'H':
                         coord_token = self.coord_tokenizer.tokenize_array(coords[i])
                         coord_tokens += coord_token
@@ -77,11 +77,13 @@ class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
                 coord_atom_idxs = [ai for ai in atom_idxs if (self.h_coord or symbols[ai] != 'H')]
                 tokens = [symbols[ai] for ai in atom_idxs] + ['[XYZ]'] \
                         + self.coord_tokenizer.tokenize_array(coords[coord_atom_idxs].ravel())
+                order = list(range(len(tokens)))
         else: # smiles
             tokens = self.smi_tokenizer.tokenize(smi)
             shown_coords = np.concatenate([coords[ai] 
                     for ai in atom_idxs if (symbols[ai] != 'H' or self.h_coord)])
             tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(shown_coords)
+            order = list(range(len(tokens)))
         return tokens, order
 
     def vocs(self) -> set[str]:
