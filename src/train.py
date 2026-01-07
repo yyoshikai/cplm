@@ -730,7 +730,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:>9.02f}", **NO_DUP)
 
             ## estimate end
-            if args.end_limit is not None and opt % 10 == 0 \
+            if rank == MAIN_RANK and args.end_limit is not None and opt % 10 == 0 \
                     and should_show(opt // 10, args.eval_opt // 10):
                 end_estimator.check(opt)
                 
