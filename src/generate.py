@@ -53,7 +53,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     RDLogger.DisableLog("rdApp.*")
     disable_openbabel_log()
 
-    # third-party modules
+    ### third-party modules
     set_rdkit_logger().setLevel(logging.CRITICAL)
     getLogger('.prody').setLevel(logging.CRITICAL)
     disable_openbabel_log()
