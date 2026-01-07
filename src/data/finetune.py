@@ -13,7 +13,7 @@ from ..utils import slice_str
 from rdkit import Chem
 confProDy(verbosity='none')
 from ..utils.logger import add_file_handler, get_logger
-from ..utils.rdkit import ignore_warning
+from ..utils.rdkit import ignore_rdkit_warning
 from ..utils.utils import CompressedArray
 
 
@@ -133,7 +133,7 @@ class CDDataset(Dataset):
             save_dir = f"{save_dir}/{rank}"
         os.makedirs(save_dir, exist_ok=True)
         add_file_handler(getLogger(), f"{save_dir}/root.log", level=logging.INFO)
-        ignore_warning()
+        ignore_rdkit_warning()
         logger = get_logger(f"{cls.__name__}.preprocess")
         ends = tuple(ends)
         with open(f"{save_dir}/args.yaml", 'w') as f:

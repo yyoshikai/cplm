@@ -10,7 +10,6 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel
-from rdkit import Chem, RDLogger
 from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import Dataset, DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence
@@ -23,6 +22,7 @@ from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
 from src.utils.path import cleardir
 from src.utils.time import TimerTqdm
+from src.utils.rdkit import ignore_rdkit_warning
 from src.evaluate import parse_mol_tokens2
 from src.evaluate import eval_vina, eval_qvina3
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks, log_batch
@@ -182,7 +182,7 @@ def main():
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
     for i in range(args.batch_size):
         os.makedirs(f"{result_dir}/eval_vina_tmp/{rank}/{i}", exist_ok=True)
-    RDLogger.DisableLog("rdApp.*")
+    ignore_rdkit_warning()
     ## check generate_per_sample
     ddp_size = dist.get_world_size()
 

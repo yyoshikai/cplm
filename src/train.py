@@ -29,8 +29,7 @@ from .data.tokenizer import VocEncoder
 from .data.collator import DDPStringCollateLoader, InfiniteLoader
 from .model import Model, MambaModel
 from .utils import git_commit, get_git_hash, reveal_data, should_show
-from .utils.logger import add_stream_handler, add_file_handler, disable_openbabel_log
-from .utils.rdkit import set_rdkit_logger
+from .utils.logger import add_stream_handler, add_file_handler, set_third_party_logger
 from .utils.model import get_num_params, get_model_size
 from .utils.path import cleardir
 from .utils.ddp import reduce_float
@@ -126,13 +125,7 @@ def _get_train_logger(result_dir):
     add_file_handler(logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
     add_file_handler(token_logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
     add_file_handler(unk_logger, f"{result_dir}/logs/unknowns.log", fmt=fmt, mode='a')
-
-    # third-party modules
-    set_rdkit_logger()
-    getLogger('.prody').setLevel(logging.CRITICAL)
-    disable_openbabel_log()
-    transformers.utils.logging.enable_propagation()
-    transformers.utils.logging.disable_default_handler()
+    set_third_party_logger()
 
     return logger, token_logger
 

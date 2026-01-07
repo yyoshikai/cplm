@@ -20,7 +20,7 @@ from torch.nn.parallel import DistributedDataParallel
 from src.utils import IterateRecorder, should_show
 from src.utils.ddp import dist_broadcast_object, dist_send_tensor, dist_recv_tensor
 from src.utils.random import ddp_set_random_seed
-from src.utils.rdkit import ignore_warning
+from src.utils.rdkit import ignore_rdkit_warning
 from src.data import KeyDataset, CacheDataset, StackDataset, TensorDataset
 from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
@@ -178,7 +178,7 @@ init_state_path = f"{pretrain_dir}/models/{args.pretrain_opt}.pth"
 result_dir = f"downstream/results/{args.studyname}/{args.data}_{args.task}"
 logger, token_logger, rank, device = set_env(f"downstream/{args.studyname}/{args.data}_{args.task}", args, logs, [])
 MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
-ignore_warning()
+ignore_rdkit_warning()
 ddp_size = dist.get_world_size()
 maximize = metrics[raw.main_metric].maximize
 

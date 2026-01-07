@@ -5,7 +5,7 @@ from rdkit import Chem, rdBase, RDLogger
 from rdkit.Chem.Scaffolds import MurckoScaffold
 import numpy as np
 
-def ignore_warning():
+def ignore_rdkit_warning():
     RDLogger.DisableLog("rdApp.*")
 
 def set_rdkit_logger():

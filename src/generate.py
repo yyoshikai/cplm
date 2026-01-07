@@ -1,20 +1,19 @@
-import sys, os, itertools, math, logging
-from argparse import ArgumentParser
+import sys, os, itertools, math
+from argparse import ArgumentParser, Namespace
 from collections.abc import Sized
 from inspect import getfullargspec
-from logging import getLogger
 import numpy as np, pandas as pd
 import torch
-import transformers
-from torch.utils.data import DataLoader, Subset, StackDataset, BatchSampler
+from torch import Tensor
+from torch.utils.data import Dataset, DataLoader, Subset, StackDataset, BatchSampler
 from torch.nn.utils.rnn import pad_sequence
-from rdkit import Chem, RDLogger
+from rdkit import Chem
 
 sys.path += ["/workspace/cplm"]
 from src.utils.random import set_random_seed
-from src.utils.logger import add_stream_handler, add_file_handler, get_logger, disable_openbabel_log
+from src.utils.logger import add_file_handler, get_logger, set_third_party_logger
 from src.utils.path import cleardir
-from src.utils.rdkit import set_rdkit_logger
+from src.utils.rdkit import ignore_rdkit_warning
 from src.data.tokenizer import SmilesTokenizer
 from src.finetune import get_finetune_data
 from src.train import get_model
@@ -43,22 +42,14 @@ def generate(rdir: str, n_trial: int, batch_size: int,
         sys.exit()
 
     ## Logger
-    logger = get_logger()
-    add_stream_handler(logger)
+    logger = get_logger(stream=True)
     add_file_handler(logger, f"{rdir}/generate.log")
     token_logger = get_logger("tokens")
     token_logger.propagate = False
     add_file_handler(token_logger, f"{rdir}/tokens.log")
     token_logger.debug(f"[step][batch_idx][batch_index]=")
-    RDLogger.DisableLog("rdApp.*")
-    disable_openbabel_log()
-
-    ### third-party modules
-    set_rdkit_logger().setLevel(logging.CRITICAL)
-    getLogger('.prody').setLevel(logging.CRITICAL)
-    disable_openbabel_log()
-    transformers.utils.logging.enable_propagation()
-    transformers.utils.logging.disable_default_handler()
+    ignore_rdkit_warning
+    set_third_party_logger()
 
     ## Log args
     logger.info("args:")
@@ -169,3 +160,22 @@ class UnfinishedSampler:
             i_cycle += 1
             if i_cycle >= self.max_cycle:
                 return
+
+
+def generate2(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: Dataset[tuple[Tensor, Tensor]], 
+        seed: int):
+
+    # Environment
+    set_random_seed(seed)
+    cleardir(out_dir)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    logger = get_logger(stream=True)
+    add_file_handler(logger, f"{out_dir}/generate.log")
+    token_logger = get_logger("tokens")
+    token_logger.propagate = False
+    add_file_handler(token_logger, f"{out_dir}/tokens.log")
+    
+
+
+

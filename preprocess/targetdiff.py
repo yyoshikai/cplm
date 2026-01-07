@@ -4,7 +4,7 @@ sys.path.append(".")
 import pickle
 from src.data.datasets.crossdocked import CDDataset
 from src.utils.logger import get_logger, add_file_handler
-from src.utils.rdkit import ignore_warning
+from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.lmdb import load_lmdb, new_lmdb
 from src.data.datasets.targetdiff import DEFAULT_TARGETDIFF_DIR
 
@@ -21,7 +21,7 @@ os.makedirs(result_dir, exist_ok=True)
 logger = get_logger(stream=True)
 add_file_handler(logger, f"{result_dir}/debug.log")
 logger.info(f"{args=}")
-ignore_warning()
+ignore_rdkit_warning()
 
 data_env, data_txn = load_lmdb(f"{DEFAULT_TARGETDIFF_DIR}/crossdocked_v1.1_rmsd1.0_pocket10_processed_final.lmdb")
 env, txn = new_lmdb(f"{result_dir}/main.lmdb")

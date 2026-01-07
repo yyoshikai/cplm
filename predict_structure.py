@@ -9,10 +9,10 @@ import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Subset, StackDataset
 from torch.nn.utils.rnn import pad_sequence
-from rdkit import RDLogger
 from openbabel.openbabel import OBMol, OBResidueIter, OBResidueAtomIter
 
-from src.utils.logger import get_logger, add_file_handler, disable_openbabel_log
+from src.utils.logger import get_logger, add_file_handler, set_third_party_logger
+from src.utils.rdkit import ignore_rdkit_warning
 from src.data import WrapDataset, index_dataset, TensorDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.protein import ProteinTokenizeDataset
@@ -121,8 +121,8 @@ if __name__ == '__main__':
     token_logger.propagate = False
     add_file_handler(token_logger, f"{out_dir}/tokens.log")
     token_logger.debug(f"[step][batch_idx][batch_index]=")
-    RDLogger.DisableLog("rdApp.*")
-    disable_openbabel_log()
+    ignore_rdkit_warning()
+    set_third_party_logger()
 
     train_dir = f"training/results/{args.studyname}"
     targs = Namespace(**yaml.safe_load(open(f"{train_dir}/args.yaml")))

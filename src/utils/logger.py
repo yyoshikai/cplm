@@ -79,6 +79,26 @@ def add_stream_handler(logger: Logger, level=logging.INFO, tqdm: bool=True,
 def log_git_hash(logger):
     logger.info(f"git hash={get_git_hash()}")
 
-def disable_openbabel_log():
-    from openbabel import pybel
-    pybel.ob.obErrorLog.SetOutputLevel(0)
+from src.utils.rdkit.rdkit import set_rdkit_logger
+
+def set_third_party_logger():
+    # rdkit
+    set_rdkit_logger()
+
+    # ProDy
+    getLogger('.prody').setLevel(logging.CRITICAL)
+
+    # transformers
+    try:
+        import transformers
+        transformers.utils.logging.enable_propagation()
+        transformers.utils.logging.disable_default_handler()
+    except ImportError:
+        pass
+
+    # openbabel
+    try:
+        from openbabel import pybel
+        pybel.ob.obErrorLog.SetOutputLevel(0)
+    except ImportError:
+        pass
