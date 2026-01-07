@@ -19,6 +19,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import Dataset, DataLoader, RandomSampler, ConcatDataset
+from torch.distributed.elastic.multiprocessing.errors import record
 from transformers.trainer_pt_utils import get_parameter_names
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from schedulefree import RAdamScheduleFree
@@ -468,6 +469,7 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
     dist.all_reduce(total_losses)
     return process_weights, process_losses, total_weights, total_losses
 
+@record
 def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
 
     result_dir = os.path.join(tname, 'results', args.studyname)
@@ -487,7 +489,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     model = DistributedDataParallel(model)
     logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
     logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
-
+    
     # Times
     step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv", file_interval=10000, log_interval=10000, desc='step', disable_bar=True)
     if args.end_limit is not None and rank == MAIN_RANK:

@@ -57,3 +57,4 @@ def reduce_float(value: float, device: torch.device) -> float:
     tensor = torch.tensor(value, dtype=torch.float, device=device)
     dist.all_reduce(tensor)
     return tensor.item()
+
