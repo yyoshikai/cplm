@@ -64,7 +64,7 @@ class ProteinTokenizer:
             for i in range(len(atoms)):
                 if atom_mask[i]: 
                     tokens += self.atom_tokenizer.tokenize([atoms[i]])
-                if coord_mask[i] and self.coord:
+                if coord_mask[i]:
                     tokens += self.coord_tokenizer.tokenize_array(coords[i])
             order = list(range(len(tokens)))
         elif self.atom_order:

@@ -8,7 +8,7 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from openbabel.openbabel import OBMol
-from .data import RepeatDataset, Subset, StackDataset, TensorDataset
+from .data import RepeatDataset, Subset, StackDataset, TensorDataset, untuple_dataset
 from .data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
@@ -127,7 +127,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     logs = []
 
     # compatibility
-    assert isinstance(args, Namespace)
+    assert isinstance(args, Namespace) # Dict can't check hasattr
     args = deepcopy(args)
     default_args = { 
         'lig_coord_follow_atom': False, 
@@ -152,7 +152,13 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
                 raw_data = CDProteinDataset(split)
             else:
                 raw_data = CDDataset(split)
-    protein, lig, score, protein_filename, ligand_filename = raw_data.untuple()
+    if (sample := getattr(args, f'{split}_sample', 1.0)) != 1.0:
+        assert sample < 1.0
+        rng = np.random.default_rng(args.seed)
+        idxs = rng.choice(len(raw_data), size=round(len(raw_data)*sample))
+        raw_data = Subset(raw_data, idxs)
+        assert len(raw_data) > 0
+    protein, lig, score, protein_filename, ligand_filename = untuple_dataset(raw_data, 5)
 
     ## rotation
     if args.protein:
@@ -202,12 +208,13 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     token, position = sentence.untuple()
     position = TensorDataset(position, torch.long)
 
-    ## token
+    ## weight
+    weight = RemoveLastDataset(TokenWeightDataset(token, separates, weights, by_n_separate=True))
+
+    ## encode token
     voc_encoder = VocEncoder(vocs)
     token = TokenEncodeDataset(token, voc_encoder)
   
-    ## weight
-    weight = RemoveLastDataset(TokenWeightDataset(token, separates, weights, by_n_separate=True))
     return voc_encoder, raw_data, token, position, weight, center, rotation, protein_filename, ligand_filename, logs
 
 ## Define functions for batch collation

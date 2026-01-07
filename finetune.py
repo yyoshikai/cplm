@@ -22,6 +22,8 @@ parser.add_argument('--lig-coord-weight', type=float, default=5.0)
 parser.add_argument("--no-score", action='store_true')
 parser.add_argument('--protein', action='store_true')
 parser.add_argument('--targetdiff', action='store_true')
+parser.add_argument('--train-sample', type=float, default=1.0)
+parser.add_argument('--valid-sample', type=float, default=1.0)
 args = parser.parse_args()
 pretrain_dir = f"training/results/{args.pretrain_name}"
 targs = yaml.safe_load(open(f"{pretrain_dir}/args.yaml"))

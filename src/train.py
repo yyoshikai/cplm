@@ -441,12 +441,13 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
 
                 ### Forward
                 token_batch, position_batch, weight_batch = batch
-                input, target = token_batch[:-1], token_batch[1:]
-                loss = criterion(model(input), target)
+                input_token, target_token = token_batch[:-1], token_batch[1:]
+                input_position = position_batch[:-1]
+                loss = criterion(model(input_token, input_position), target_token)
                 
                 ### Log result
                 if is_starting and val_step_is_starting:
-                    log_batch(f"valid{prefix}[{data_name}]", logger, token_logger, target, 
+                    log_batch(f"valid{prefix}[{data_name}]", logger, token_logger, target_token, 
                             weight_batch, voc_encoder, val_step, check_data_dist, get_gpuuse)
 
                 ### Add
@@ -466,7 +467,6 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
     dist.all_reduce(total_weights)
     dist.all_reduce(total_losses)
     return process_weights, process_losses, total_weights, total_losses
-
 
 def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
 
@@ -634,7 +634,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         step_timer.start('forward')
         with nullcontext() if do_opt or args.sync_every_step else model.no_sync():
             with torch.autocast('cuda', torch.bfloat16):
-                pred = model(token_batch[:-1])
+                pred = model(token_batch[:-1], position_batch[:-1])
                 loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
                 worker_step_loss = loss.item()
 

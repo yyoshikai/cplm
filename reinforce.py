@@ -49,6 +49,8 @@ parser.add_argument('--alpha', type=float, default=0.05) # same as BindGPT
 ## Data
 parser.add_argument('--max-prompt-len', type=int)
 parser.add_argument('--generate-per-sample', type=int, default=1)
+parser.add_argument('--train-sample', type=float, default=1.0)
+parser.add_argument('--valid-sample', type=float, default=1.0)
 ## training
 parser.add_argument('--studyname', required=True)
 parser.add_argument('--batch-size', type=int, default=32)

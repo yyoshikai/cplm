@@ -237,7 +237,9 @@ class TokenizeDataset(WrapDataset[list[str]]):
         self.tokenizer = tokenizer
     
     def __getitem__(self, idx: int):
-        return self.tokenizer.tokenize(self.dataset[idx])
+        token = self.tokenizer.tokenize(self.dataset[idx])
+        position = list(range(len(token))) 
+        return token, position
     
     def __len__(self):
         return len(self.dataset)
@@ -250,7 +252,9 @@ class ArrayTokenizeDataset(TokenizeDataset):
         super().__init__(dataset, tokenizer)
 
     def __getitem__(self, idx: int):
-        return self.tokenizer.tokenize_array(self.dataset[idx].ravel())
+        token = self.tokenizer.tokenize_array(self.dataset[idx].ravel())
+        position = list(range(len(token)))
+        return token, position
 
 class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
     def __init__(self, *sentence: list[str|Dataset[tuple[list[str], list[int]]]]):
@@ -273,15 +277,19 @@ class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
         positions = []
         pos_offset = 0
         for word in self.sentence:
-            if isinstance(word, str):
-                words.append(word)
-                positions.append(pos_offset)
-                pos_offset += 1
-            else:
-                words0, positions0 = word[idx]
-                words += words0
-                positions += [pos+pos_offset for pos in positions0]
-                pos_offset += len(words0)
+            try:
+                if isinstance(word, str):
+                    words.append(word)
+                    positions.append(pos_offset)
+                    pos_offset += 1
+                else:
+                    words0, positions0 = word[idx]
+                    words += words0
+                    positions += [pos+pos_offset for pos in positions0]
+                    pos_offset += len(words0)
+            except Exception as e:
+                print(f"Error at {word}: {e.args}", flush=True)
+                raise e
         return words, positions
     
     def __len__(self):
@@ -312,6 +320,7 @@ class TokenWeightDataset(WrapDataset[Tensor]):
         separates = 0 if self.by_n_separate else tuple()
         self.separates2weight[0] if self.by_n_separate else self.separates2weight.get(separates, None)
         for token in tokens:
+            
             if token in self.separates:
                 separates = separates+1 if self.by_n_separate else separates + (token,)
                 cur_weight = self.separates2weight[separates]
