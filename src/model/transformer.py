@@ -1,4 +1,5 @@
 import logging
+import itertools as itr
 from typing import Optional, Union, Callable
 from collections import defaultdict
 from functools import partial, lru_cache
@@ -176,6 +177,24 @@ def align_embedding(module: nn.Module, state_dict, prefix, local_metadata,
     # remove vocs
     del state_dict[prefix+'vocs']
 
+class Streamer:
+    def __init__(self, end_token: int, voc_size: int):
+        self.end_token = end_token
+        self.voc_size = voc_size
+        self.n = 0
+        self.tokens = []
+
+    def put(self, token: torch.Tensor) -> tuple[bool, Tensor, list[int]]:
+        L, = token.shape
+        self.tokens += token.tolist()
+        is_end = token[-1] == self.end_token # prompt中にend_tokenがある場合も考慮している。
+        position = torch.arange(self.n, self.n+L, device=token.device)
+        next_token_range = list(range(self.voc_size))
+        return is_end, position, next_token_range
+    
+    def end(self):
+        return self.tokens
+
 class Model(nn.Module):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
     data_logger = logging.getLogger(f"dexs.{__module__}.{__qualname__}")
@@ -295,6 +314,7 @@ class Model(nn.Module):
         """
         assert do_sample # TODO
 
+        ## get & check shape
         Lc, B = context.shape
         if position is not None:
             Lp, _ = position.shape
@@ -308,6 +328,8 @@ class Model(nn.Module):
 
         context = left_to_right_padding(context, pad_token) # [L, B]
         context_sizes = torch.sum(context != pad_token, dim=0).tolist()
+
+        ## get position buffers
         sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh],  [L, Dh],  [L, Dh]
         if position is not None:
             sin_buf = torch.gather(
@@ -336,10 +358,7 @@ class Model(nn.Module):
             next_input = output.unsqueeze(0) # [1, B]
             
             if tqdm:
-                GB = 2**30
-                g = torch.cuda.memory_allocated()
-                g_max = torch.cuda.max_memory_allocated()
-                gen_pbar.set_postfix_str(f"now={g/GB:.02f}GB, max={g_max/GB:.02f}GB")
+                gen_pbar.set_postfix_str(f"now={torch.cuda.memory_allocated()/2**30:.02f}GB, max={torch.cuda.max_memory_allocated()/2**30:.02f}GB")
             
             return next_input, is_ended
 
@@ -413,7 +432,103 @@ class Model(nn.Module):
             if end_token in output:
                 output = output[:torch.where(output == end_token)[0][0]+1]
             cut_outputs.append(output)
-        return cut_outputs        
+        return cut_outputs
+    
+    @torch.inference_mode()
+    def generate2(self, contexts: list[Tensor], streamers: list[Streamer], max_new_token: int):
+        """
+        contexts: list[Tensor(L, torch.long)]
+        positions: list[Tensor(L, torch.long)]
+        """
+
+        # get shape
+        B = len(contexts)
+        context_sizes = [len(context) for context in contexts]
+        device = contexts[0].device
+        
+        # check shape
+        assert len(streamers) == B
+        assert max_new_token >= 1
+
+
+        # Get position buffer
+        max_input_size = max(context_sizes)+max_new_token-1
+        sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh], [L, Dh]
+
+
+        # Initial forward
+        caches = [{'k': [], 'v': []} for layer in self.layers] # caches[i_layer][k/v][i_data]
+        cur_inputs = []
+        is_continues = []
+        positions = []
+        for b in range(B):
+            is_continue, position, next_token_range = streamers[b].put(contexts[b]) # [L], list[int]
+            is_continues.append(is_continue)
+            if not is_continue: continue
+            sin, cos = sin_buf[position], cos_buf[position] # [L, Dh], [L, Dh]
+            x = contexts[b].unsqueeze(-1) # [L, 1]
+            x = self.embedding(x)
+            for il, layer in enumerate(self.layers):
+                x, cache = layer(x, sin, cos, is_causal=True, cache=None) # [L, 1, D], {'k': [1, H, L, Dh]}
+                for k, v in cache.items():
+                    v = v.squeeze(0).transpose(0, 1) # [L, H, Dh]
+                    caches[il][k].append(v.detach().clone())
+            x = x[-1, 0] # [D]
+            if self.norm is not None: x = self.norm(x)
+            logit = self.predictor(x) # [D]
+            range_logit = logit[next_token_range]
+            range_output = torch.multinomial(F.softmax(range_logit), num_samples=1).item()
+            output = next_token_range[range_output]
+            cur_inputs.append(output)
+        cache = [{k: pad_sequence(v, batch_first=True).transpose(1, 2) for k, v in cache.items()} for cache in caches] # [i_layer][k,v][B, H, L, Dh]
+        Bc, _, L, _ = cache[0]['k'].shape
+        src_mask = torch.zeros((Bc, L), device=device)
+        for b, context in enumerate(contexts):
+            src_mask[b, len(context):] = -torch.inf
+        streamers = list(itr.compress(streamers, is_continues))
+
+        for i_gen in range(1, max_new_token):
+            is_continues, positions, next_token_ranges = zip(*[ 
+                streamer.put(torch.tensor([cur_input], torch.long, device)) 
+                for streamer, cur_input in zip(streamers, cur_inputs)
+            ])
+            if not any(is_continues):
+                break
+            
+            # remove finished sample
+            if not all(is_continues):
+                ## cur_inputs
+                cur_inputs = list(itr.compress(cur_inputs, is_continues))
+                ## positions
+                positions = list(itr.compress(positions, is_continues))
+                ## next_token_ranges
+                next_token_ranges = list(itr.compress(next_token_ranges, is_continues))
+                is_continues = torch.tensor(is_continues, device=device)
+                ## src_mask
+                src_mask = src_mask[is_continues]
+                length_mask = torch.any(src_mask == 0, dim=1)
+                src_mask = src_mask[:, length_mask]
+                ## cache
+                cache = [{k: v[is_continues, length_mask] for k, v in layer_cache.items()}
+                        for layer_cache in cache]
+
+            # make position
+            sin = sin_buf[positions].unsqueeze(1) # [B, Dh] -> [B, 1, Dh]
+            cos = cos_buf[positions].unsqueeze(1) # [B, Dh] -> [B, 1, Dh]
+
+            x = torch.tensor(cur_inputs, torch.long, device).unsqueeze(0) # [1(L), B]
+            x = self.embedding(x)
+            for il, layer in enumerate(self.layers):
+                x, cache[il] = layer(x, sin, cos, is_causal=False, cache=cache[il], src_mask=src_mask)
+            if self.norm is not None:
+                x = self.norm(x)
+            logits = self.predictor(x[0]) # [B, D]
+            for b, (logit, next_token_range) in enumerate(zip(logits, next_token_ranges)):
+                range_logit = logit[next_token_range]
+                range_output = torch.multinomial(F.softmax(range_logit), num_samples=1).item()
+                output = next_token_range[range_output]
+                cur_inputs.append(output)
+            src_mask = torch.cat([src_mask, torch.zeros((len(src_mask), 1), device=device)], dim=-1)
 
     def _get_mname(self, bf16: bool, kernel: str):        
         mname = f'tf_{kernel.lower()}'

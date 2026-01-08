@@ -26,7 +26,7 @@ def add_generate_args(parser: ArgumentParser):
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--batch-size", type=int, required=True)
 
-def generate(rdir: str, n_trial: int, batch_size: int, 
+def generate0(rdir: str, n_trial: int, batch_size: int, 
         seed: int, max_len: int, model_args, init_state_path, no_score, tqdm_generate: bool=False, max_prompt_len: int=math.inf):
 
     # Environment
@@ -163,16 +163,10 @@ class UnfinishedSampler:
                 return
 
 
-class GenerateParser:
-    def prompt(self):
-        raise NotImplementedError
-    def add(self, token: str) -> int:
-        raise NotImplementedError
-    def is_finished(self) -> bool:
-        raise NotImplementedError
 
 
-def generate2(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: Dataset[T], 
+
+def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: Dataset[T], 
         max_sample: int, 
         max_valid_sample: int|None,
         max_prompt_len: int,
@@ -200,6 +194,7 @@ def generate2(out_dir: str, targs: Namespace, init_state_path: str, prompt_data:
     data_size = len(prompt_data)
     sampler = UnfinishedSampler2(data_size, max_sample)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=False)
+    ns_sample = np.zeros(data_size, int)
     ns_valid_sample = np.zeros(data_size, int)
 
     result_path = f"{out_dir}/generation.tsv"
@@ -207,13 +202,28 @@ def generate2(out_dir: str, targs: Namespace, init_state_path: str, prompt_data:
         f.write("prompt_idx\ttrial_idx\tprompt\tgeneration\n")
 
     n_raw = n_large = 0
-    for step, raw_batch_idxs in enumerate(batch_sampler):
+    for step, raw_data_idxs in enumerate(batch_sampler):
         
-        raw_items = list(DataLoader(Subset(prompt_data, raw_batch_idxs), shuffle=False, num_workers=min(len(raw_batch_idxs), 28), batch_size=None))
+        raw_items = list(DataLoader(Subset(prompt_data, raw_data_idxs), shuffle=False, num_workers=min(len(raw_data_idxs), 28), batch_size=None))
         n_raw += len(raw_items)
         raw_tokens = [get_token(item) for item in raw_items]
-        batch_idxs, items, tokens = zip(*[data for data in zip(raw_batch_idxs, raw_items, raw_tokens) if len(data[2]) <= max_prompt_len])
+        for i_data, token in zip(raw_data_idxs, raw_tokens):
+            i_sample = ns_sample[i_data]
+            with open(f"generate/{i_sample}/{i_data}/prompt.txt", 'w') as f:
+                f.write(' '.join(voc_encoder.decode(token))+'\n') 
+        data_idxs, items, tokens = zip(*[data for data in zip(raw_data_idxs, raw_items, raw_tokens) if len(data[2]) <= max_prompt_len])
         n_gen += len(items)
+        tokens = [torch.tensor(token, torch.long, device) for token in tokens]
+        model.generate2(tokens)
+
+
+        ns_sample[raw_data_idxs] += 1
+
+
+        
+
+
+
 
 
 
