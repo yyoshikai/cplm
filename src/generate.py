@@ -1,4 +1,5 @@
 import sys, os, itertools, math
+import itertools as itr
 from argparse import ArgumentParser, Namespace
 from collections.abc import Sized
 from inspect import getfullargspec
@@ -14,7 +15,7 @@ from src.utils.random import set_random_seed
 from src.utils.logger import add_file_handler, get_logger, set_third_party_logger
 from src.utils.path import cleardir
 from src.utils.rdkit import ignore_rdkit_warning
-from src.data.tokenizer import SmilesTokenizer
+from src.data.tokenizer import SmilesTokenizer, VocEncoder
 from src.finetune import get_finetune_data
 from src.train import get_model
 from src.evaluate import parse_mol_tokens2
@@ -48,7 +49,7 @@ def generate(rdir: str, n_trial: int, batch_size: int,
     token_logger.propagate = False
     add_file_handler(token_logger, f"{rdir}/tokens.log")
     token_logger.debug(f"[step][batch_idx][batch_index]=")
-    ignore_rdkit_warning
+    ignore_rdkit_warning()
     set_third_party_logger()
 
     ## Log args
@@ -162,20 +163,80 @@ class UnfinishedSampler:
                 return
 
 
-def generate2(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: Dataset[tuple[Tensor, Tensor]], 
-        seed: int):
+class GenerateParser:
+    def prompt(self):
+        raise NotImplementedError
+    def add(self, token: str) -> int:
+        raise NotImplementedError
+    def is_finished(self) -> bool:
+        raise NotImplementedError
+
+
+def generate2(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: Dataset[T], 
+        max_sample: int, 
+        max_valid_sample: int|None,
+        max_prompt_len: int,
+        batch_size: int,
+        seed: int, ):
 
     # Environment
     set_random_seed(seed)
     cleardir(out_dir)
+    for subdir in ["generation"]:
+        os.makedirs(f"{out_dir}/{subdir}", exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # logger
     logger = get_logger(stream=True)
-    add_file_handler(logger, f"{out_dir}/generate.log")
-    token_logger = get_logger("tokens")
-    token_logger.propagate = False
-    add_file_handler(token_logger, f"{out_dir}/tokens.log")
-    
+    ignore_rdkit_warning()
+    set_third_party_logger()
+    logger.debug("args:")
+    for name in getfullargspec(generate)[0][2:]:
+        logger.debug(f"    {name}: {eval(name)}")
+
+    # model
+    model, voc_encoder = get_model(targs, voc_encoder=None, init_state_path=init_state_path, device=device)
+
+    data_size = len(prompt_data)
+    sampler = UnfinishedSampler2(data_size, max_sample)
+    batch_sampler = BatchSampler(sampler, batch_size, drop_last=False)
+    ns_valid_sample = np.zeros(data_size, int)
+
+    result_path = f"{out_dir}/generation.tsv"
+    with open(result_path, 'w') as f:
+        f.write("prompt_idx\ttrial_idx\tprompt\tgeneration\n")
+
+    n_raw = n_large = 0
+    for step, raw_batch_idxs in enumerate(batch_sampler):
+        
+        raw_items = list(DataLoader(Subset(prompt_data, raw_batch_idxs), shuffle=False, num_workers=min(len(raw_batch_idxs), 28), batch_size=None))
+        n_raw += len(raw_items)
+        raw_tokens = [get_token(item) for item in raw_items]
+        batch_idxs, items, tokens = zip(*[data for data in zip(raw_batch_idxs, raw_items, raw_tokens) if len(data[2]) <= max_prompt_len])
+        n_gen += len(items)
+
+
+
+
+
+
+
+
+
+
+class UnfinishedSampler2:
+    def __init__(self, data_size: int, max_sample: int):
+        self.is_remain = np.ones(data_size, int)
+        self.max_sample = max_sample
+    def __iter__(self):
+        for i_sample in range(self.max_sample):
+            # fix remain_idxs here
+            remain_idxs = np.where(self.is_remain)[0].tolist()
+            for idx in remain_idxs:
+                if self.is_remain[idx]:
+                    yield idx
+    def finish(self, idx):
+        self.is_remain[idx] = 0
 
 
 

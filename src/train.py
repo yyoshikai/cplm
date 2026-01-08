@@ -246,8 +246,14 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
-def get_model(args: Namespace, voc_encoder: VocEncoder, init_state_path: str|None, device: torch.device):
-    
+def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device):
+
+    if init_state_path is not None:
+        state = remove_module(torch.load(init_state_path, map_location=device, weights_only=True))
+    if voc_encoder is None:
+        if init_state_path is None:
+            raise ValueError("Either voc_encoder or init_state_path must be specified.")
+        voc_encoder = VocEncoder.from_i2voc(state['vocs'])    
     if args.mamba:
         kwargs = {}
         if args.n_layer is not None: kwargs['num_hidden_layers'] = args.n_layer
@@ -259,9 +265,11 @@ def get_model(args: Namespace, voc_encoder: VocEncoder, init_state_path: str|Non
     if args.model_bfloat16:
         model.to(torch.bfloat16)
     if init_state_path is not None:
-        state = torch.load(init_state_path, map_location=device, weights_only=True)
-        model.load_state_dict(remove_module(state)) # temp
-    return model
+        model.load_state_dict(state)
+    if voc_encoder is None:
+        return model, voc_encoder
+    else:
+        return model
 
 def log_batch(prefix: str, logger: Logger, token_logger: Logger, target_batch: Tensor, weight_batch: Tensor, voc_encoder: VocEncoder, step: int, check_data_dist: bool, gpuuse_getter: Callable[[int, int], float]):
 
