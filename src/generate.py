@@ -1,12 +1,10 @@
 import sys, os, itertools, math
-import itertools as itr
 from argparse import ArgumentParser, Namespace
 from collections.abc import Sized, Callable, Generator
 from inspect import getfullargspec
 from typing import TypeVar
 import numpy as np, pandas as pd
 import torch
-from torch import Tensor
 from torch.utils.data import Dataset, DataLoader, Subset, StackDataset, BatchSampler
 from torch.nn.utils.rnn import pad_sequence
 from rdkit import Chem
