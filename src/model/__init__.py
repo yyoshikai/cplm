@@ -1,2 +1,2 @@
-from .transformer import Model
+from .transformer import Model, Streamer
 from .mamba import MambaModel

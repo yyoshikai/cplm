@@ -4,19 +4,17 @@
 
 /notes.md
 /reinforce
-/pocket_conditioned_generation/*/*
-/pocket_conditioned_generation_old/*
-/pocket_conditioned_generation_old2/*
-!/pocket_conditioned_generation/*.py
-!/pocket_conditioned_generation/*/*.py
+/olds
 /test_qvina
-!test.sh
 tmp
 /downstream/*
 !/downstream/finetune
 !/downstream/finetune/*.py
 /tests/*
 !/tests/*.py
+/generate/*/*
+!/generate/protein_structure/*.py
+!/generate/*.py
 
 # system
 __pycache__/

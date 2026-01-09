@@ -246,10 +246,11 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
-def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device):
+def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device) -> Model | MambaModel | tuple[VocEncoder, Model|MambaModel]:
 
     if init_state_path is not None:
         state = remove_module(torch.load(init_state_path, map_location=device, weights_only=True))
+    return_voc_encoder = voc_encoder is None
     if voc_encoder is None:
         if init_state_path is None:
             raise ValueError("Either voc_encoder or init_state_path must be specified.")
@@ -266,7 +267,7 @@ def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: st
         model.to(torch.bfloat16)
     if init_state_path is not None:
         model.load_state_dict(state)
-    if voc_encoder is None:
+    if return_voc_encoder:
         return model, voc_encoder
     else:
         return model

@@ -2,6 +2,7 @@ import logging
 import itertools as itr
 from typing import Optional, Union, Callable
 from collections import defaultdict
+from collections.abc import Generator
 from functools import partial, lru_cache
 from tqdm import tqdm as _tqdm
 from pathlib import Path
@@ -80,9 +81,10 @@ class MultiheadAttention(nn.Module):
         if cache is not None:
             k = torch.cat([cache['k'], k], dim=2)
             v = torch.cat([cache['v'], v], dim=2)
-        
+        if src_mask is not None:
+            src_mask = src_mask.contiguous()
         cache = {'k': k, 'v': v}
-        attn_output = scaled_dot_product_attention(q, k, v, dropout_p = self.dropout if self.training else 0.0, attn_mask=src_mask, is_causal=is_causal)
+        attn_output = scaled_dot_product_attention(q.contiguous(), k.contiguous(), v.contiguous(), dropout_p = self.dropout if self.training else 0.0, attn_mask=src_mask, is_causal=is_causal)
         attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(B * L, D)
 
         attn_output = F.linear(attn_output, self.out_proj.weight, self.out_proj.bias)
@@ -178,22 +180,8 @@ def align_embedding(module: nn.Module, state_dict, prefix, local_metadata,
     del state_dict[prefix+'vocs']
 
 class Streamer:
-    def __init__(self, end_token: int, voc_size: int):
-        self.end_token = end_token
-        self.voc_size = voc_size
-        self.n = 0
-        self.tokens = []
-
-    def put(self, token: torch.Tensor) -> tuple[bool, Tensor, list[int]]:
-        L, = token.shape
-        self.tokens += token.tolist()
-        is_end = token[-1] == self.end_token # prompt中にend_tokenがある場合も考慮している。
-        position = torch.arange(self.n, self.n+L, device=token.device)
-        next_token_range = list(range(self.voc_size))
-        return is_end, position, next_token_range
-    
-    def end(self):
-        return self.tokens
+    def put(self, tokens: list[int]) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
+        raise NotImplementedError
 
 class Model(nn.Module):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
@@ -462,7 +450,7 @@ class Model(nn.Module):
         is_continues = []
         positions = []
         for b in range(B):
-            is_continue, position, next_token_range = streamers[b].put(contexts[b]) # [L], list[int]
+            is_continue, position, next_token_range = streamers[b].put(contexts[b].tolist()) # [L], list[int]
             is_continues.append(is_continue)
             if not is_continue: continue
             sin, cos = sin_buf[position], cos_buf[position] # [L, Dh], [L, Dh]
@@ -477,58 +465,57 @@ class Model(nn.Module):
             if self.norm is not None: x = self.norm(x)
             logit = self.predictor(x) # [D]
             range_logit = logit[next_token_range]
-            range_output = torch.multinomial(F.softmax(range_logit), num_samples=1).item()
+            range_output = torch.multinomial(F.softmax(range_logit, dim=0), num_samples=1).item()
             output = next_token_range[range_output]
             cur_inputs.append(output)
         cache = [{k: pad_sequence(v, batch_first=True).transpose(1, 2) for k, v in cache.items()} for cache in caches] # [i_layer][k,v][B, H, L, Dh]
         Bc, _, L, _ = cache[0]['k'].shape
-        src_mask = torch.zeros((Bc, L), device=device)
+        src_mask = torch.zeros((Bc, L), device=device) # [B, Lkv]
         for b, context in enumerate(contexts):
             src_mask[b, len(context):] = -torch.inf
         streamers = list(itr.compress(streamers, is_continues))
 
         for i_gen in range(1, max_new_token):
             is_continues, positions, next_token_ranges = zip(*[ 
-                streamer.put(torch.tensor([cur_input], torch.long, device)) 
-                for streamer, cur_input in zip(streamers, cur_inputs)
+                streamer.put([cur_input]) for streamer, cur_input in zip(streamers, cur_inputs)
             ])
+            positions = [position[0] for position in positions]
             if not any(is_continues):
                 break
             
             # remove finished sample
             if not all(is_continues):
-                ## cur_inputs
                 cur_inputs = list(itr.compress(cur_inputs, is_continues))
-                ## positions
                 positions = list(itr.compress(positions, is_continues))
-                ## next_token_ranges
                 next_token_ranges = list(itr.compress(next_token_ranges, is_continues))
+                streamers = list(itr.compress(streamers, is_continues))
                 is_continues = torch.tensor(is_continues, device=device)
                 ## src_mask
                 src_mask = src_mask[is_continues]
-                length_mask = torch.any(src_mask == 0, dim=1)
+                length_mask = torch.any(src_mask == 0, dim=0) # [Lkv]
                 src_mask = src_mask[:, length_mask]
                 ## cache
-                cache = [{k: v[is_continues, length_mask] for k, v in layer_cache.items()}
+                cache = [{k: v[is_continues][:, :, length_mask] for k, v in layer_cache.items()}
                         for layer_cache in cache]
 
             # make position
             sin = sin_buf[positions].unsqueeze(1) # [B, Dh] -> [B, 1, Dh]
             cos = cos_buf[positions].unsqueeze(1) # [B, Dh] -> [B, 1, Dh]
+            src_mask = torch.cat([src_mask, torch.zeros((len(src_mask), 1), device=device)], dim=-1)
 
-            x = torch.tensor(cur_inputs, torch.long, device).unsqueeze(0) # [1(L), B]
+            x = torch.tensor(cur_inputs, dtype=torch.long, device=device).unsqueeze(0) # [1(L), B]
             x = self.embedding(x)
             for il, layer in enumerate(self.layers):
-                x, cache[il] = layer(x, sin, cos, is_causal=False, cache=cache[il], src_mask=src_mask)
+                x, cache[il] = layer(x, sin, cos, is_causal=False, cache=cache[il], src_mask=src_mask.unsqueeze(1).unsqueeze(2))
             if self.norm is not None:
                 x = self.norm(x)
             logits = self.predictor(x[0]) # [B, D]
+            cur_inputs = []
             for b, (logit, next_token_range) in enumerate(zip(logits, next_token_ranges)):
                 range_logit = logit[next_token_range]
-                range_output = torch.multinomial(F.softmax(range_logit), num_samples=1).item()
+                range_output = torch.multinomial(F.softmax(range_logit, dim=-1), num_samples=1).item()
                 output = next_token_range[range_output]
                 cur_inputs.append(output)
-            src_mask = torch.cat([src_mask, torch.zeros((len(src_mask), 1), device=device)], dim=-1)
 
     def _get_mname(self, bf16: bool, kernel: str):        
         mname = f'tf_{kernel.lower()}'

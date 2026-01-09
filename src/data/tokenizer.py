@@ -24,7 +24,7 @@ class VocEncoder:
         self.pad_token = 0
         self.voc2i = {voc: i for i, voc in enumerate(self.i2voc)}
     
-    def encode(self, words: str):
+    def encode(self, words: Iterable[str]):
         try:
             return [self.voc2i[t] for t in words]
         except KeyError as e:
