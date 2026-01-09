@@ -6,7 +6,6 @@ import yaml
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
-from src.model.transformer import Streamer
 from src.data.tokenizer import VocEncoder, SmilesTokenizer, FloatTokenizer
 from src.generate import generate, GeneratorStreamer
 
@@ -28,19 +27,17 @@ class LigandStreamer(GeneratorStreamer):
         prompt_tokens = yield
         prompt_tokens = self.voc_encoder.decode(prompt_tokens)
         assert prompt_tokens[-1] == '[LIGAND]'
-        pos_iter = itr.count()
-        next_positions = [next(pos_iter) for _ in prompt_tokens]
+        pos_iter = itr.count(len(prompt_tokens))
         self.is_prompt = False
 
         # smiles
         smi_tokens = []
         while True:
-            tokens = yield True, next_positions, self.smi_token_range
+            tokens = yield True, [next(pos_iter)], self.smi_token_range
             assert len(tokens) == 1
             token = tokens[0]
             if token == self.voc_encoder.voc2i['[XYZ]']: break
             smi_tokens.append(token)
-            next_positions = [next(pos_iter)]
         ## parse
         smi = ''.join(self.voc_encoder.decode(smi_tokens))
         param = Chem.SmilesParserParams()
@@ -102,8 +99,8 @@ if __name__ == '__main__':
     os.makedirs(out_dir, exist_ok=True)
 
     streamer_fn = lambda item, i_trial, voc_encoder: LigandStreamer(voc_encoder, f"{out_dir}/generate/{item}/{i_trial}", f"{out_dir}/sdfs/{item}.sdf", targs.coord_range, args.no_token_range)
-    get_token_fn = lambda item: ['[LIGAND]']
+    get_token_position_fn = lambda item: (['[LIGAND]'], [0])
 
     prompt_data = list(range(args.n))
-    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_fn, 1, None, args.max_prompt_len, args.max_new_token, args.batch_size, args.seed, )
+    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, 1, None, args.max_prompt_len, args.max_new_token, args.batch_size, args.seed, )
 

@@ -186,11 +186,11 @@ T = TypeVar('T')
 
 def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: Dataset[T], 
         streamer_fn: Callable[[T, int, VocEncoder], Streamer], 
-        get_token_fn: Callable[[T], list[str]],
+        get_token_position_fn: Callable[[T], tuple[list[str], list[int]]],
         max_sample: int, 
         max_valid_sample: int|None,
         max_prompt_len: int,
-        max_new_token: int,
+        max_new_token: int|None,
         batch_size: int,
         seed: int, ):
 
@@ -217,20 +217,18 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
     sampler = UnfinishedSampler2(data_size, max_sample)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=False)
     ns_sample = np.zeros(data_size, int)
-    ns_valid_sample = np.zeros(data_size, int)
 
     n_raw = n_large = 0
     for step, raw_data_idxs in enumerate(batch_sampler):
         
         raw_items = list(DataLoader(Subset(prompt_data, raw_data_idxs), shuffle=False, num_workers=min(len(raw_data_idxs), 28), batch_size=None))
         n_raw += len(raw_items)
-        raw_tokens = [get_token_fn(item) for item in raw_items]
-        for i_data, token in zip(raw_data_idxs, raw_tokens):
-            i_sample = ns_sample[i_data]
-        data_idxs, items, tokens = zip(*[data for data in zip(raw_data_idxs, raw_items, raw_tokens) if len(data[2]) <= max_prompt_len])
-        streamers = [streamer_fn(item, data_idx, voc_encoder) for item, data_idx in zip(items, data_idxs)]
+        raw_token_positions = [get_token_position_fn(item) for item in raw_items]
+        data_idxs, items, token_positions = zip(*[data for data in zip(raw_data_idxs, raw_items, raw_token_positions) if len(data[2]) <= max_prompt_len])
+        streamers = [streamer_fn(item, ns_sample[data_idx], voc_encoder) for item, data_idx in zip(items, data_idxs)]
+        tokens, positions = zip(*token_positions)
         tokens = [torch.tensor(voc_encoder.encode(token), dtype=torch.long, device=device) for token in tokens]
-        model.generate2(tokens, streamers, max_new_token)
+        model.generate2(tokens, positions, streamers, max_new_token)
         ns_sample[raw_data_idxs] += 1
 
 class UnfinishedSampler2:

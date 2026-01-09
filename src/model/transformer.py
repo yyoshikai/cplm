@@ -189,10 +189,6 @@ class Model(nn.Module):
     __constants__ = ['norm']
     def __init__(self, num_layers, d_model, nhead, d_ff_factor, dropout, 
             activation, norm: bool, vocs: list, padding_idx: int, pos_buffer_len: int=100):
-        if norm:
-            norm = nn.LayerNorm(d_model ,elementwise_affine=False)
-        else:
-            norm = None
         num_embeddings = len(vocs)
         
         super().__init__()
@@ -207,8 +203,8 @@ class Model(nn.Module):
             norm_first=True) for i in range(num_layers)])
 
         self.num_layers = num_layers
-        self.norm = norm
-
+        self.norm = nn.LayerNorm(d_model ,elementwise_affine=False) if norm else nn.Identity()
+        
         self.padding_idx = padding_idx
         self.embedding = nn.Embedding(num_embeddings, d_model, padding_idx)
         self.predictor = nn.Linear(d_model, num_embeddings)
@@ -234,25 +230,26 @@ class Model(nn.Module):
         self.get_capture_rate = lru_cache(1)(self._get_capture_rate)
         
     
-    def get_pos_buffer(self, L: int, get_mask: bool=True) -> tuple[Tensor, Tensor, Tensor]:
+    def get_pos_buffer(self, size_or_positions: int|list[int]) -> tuple[Tensor, Tensor]:
         """
         Returns
         -------
         sin: Tensor[L, Dh](float)
         cos: Tensor[L, Dh](float)
-        mask: Tensor[L, L](float)
         """
-        if L > self.pos_buffer_len:
-            self.n_make_pos_buffer += 1
-            position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
-                    for pos in range(L)])
-            device = self.embedding.weight.device
-            dtype = self.embedding.weight.dtype
-            sin = torch.tensor(np.sin(position_enc), device=device, dtype=dtype)
-            cos = torch.tensor(np.cos(position_enc), device=device, dtype=dtype)
-            return sin, cos
-        else:
-            return self.sin[:L], self.cos[:L]
+        sup_pos = size_or_positions if isinstance(size_or_positions, int) else max(size_or_positions)+1
+        if sup_pos <= self.pos_buffer_len: # fast path
+            if isinstance(size_or_positions, int):
+                return self.sin[:size_or_positions], self.cos[:size_or_positions]
+            else:
+                return self.sin[size_or_positions], self.cos[size_or_positions]
+        self.n_make_pos_buffer += 1
+        positions = range(sup_pos) if isinstance(size_or_positions, int) else size_or_positions
+        position_enc = np.array([[pos / np.power(10000, 2 * j / self.head_dim) for j in range(self.head_dim//2)] 
+                for pos in positions])
+        sin = torch.tensor(np.sin(position_enc)).to(self.embedding.weight)
+        cos = torch.tensor(np.cos(position_enc)).to(self.embedding.weight)
+        return sin, cos
             
     def forward(self, src: Tensor, position: Tensor,
             get_mem: bool=False, offset: list[float]=None, mem_path: str=None, out_pos_buffer: bool=False):
@@ -276,13 +273,9 @@ class Model(nn.Module):
 
         if (self.n_forward&(self.n_forward-1)) == 0:
             self.logger.debug(f"make_pos_buffer call={self.n_make_pos_buffer}/{self.n_forward}")
-        output = x
         for layer in self.layers:
-            output, _ = layer(output, sin, cos, is_causal=True)
-        if self.norm is not None:
-            output = self.norm(output)
-        x = output
-        x = self.predictor(x)
+            x, _ = layer(x, sin, cos, is_causal=True)
+        x = self.predictor(self.norm(x))
 
         # get_mem
         output = (x, )
@@ -294,7 +287,7 @@ class Model(nn.Module):
         return output
 
     @torch.inference_mode()
-    def generate2(self, contexts: list[Tensor], streamers: list[Streamer], max_new_token: int):
+    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None):
         """
         contexts: list[Tensor(L, torch.long)]
         positions: list[Tensor(L, torch.long)]
@@ -307,50 +300,45 @@ class Model(nn.Module):
         
         # check shape
         assert len(streamers) == B
-        assert max_new_token >= 1
-
-
-        # Get position buffer
-        max_input_size = max(context_sizes)+max_new_token-1
-        sin_buf, cos_buf = self.get_pos_buffer(max_input_size, get_mask=False) # [L, Dh], [L, Dh]
-
+        assert max_new_token >= 1 or max_new_token is None
+        for context_size, position in zip(context_sizes, positions):
+            assert len(position) == context_size
 
         # Initial forward
         caches = [{'k': [], 'v': []} for layer in self.layers] # caches[i_layer][k/v][i_data]
         cur_inputs = []
         is_continues = []
-        positions = []
+        next_positions = []
         for b in range(B):
-            is_continue, position, next_token_range = streamers[b].put(contexts[b].tolist()) # [L], list[int]
+            is_continue, next_position, next_token_range = streamers[b].put(contexts[b].tolist()) # [L], list[int]
             is_continues.append(is_continue)
             if not is_continue: continue
-            sin, cos = sin_buf[position], cos_buf[position] # [L, Dh], [L, Dh]
-            x = contexts[b].unsqueeze(-1) # [L, 1]
+            sin, cos = self.get_pos_buffer(positions[b]) # [L, Dh], [L, Dh]
+            x = contexts[b].unsqueeze(-1) # [L, 1(B)]
             x = self.embedding(x)
             for il, layer in enumerate(self.layers):
                 x, cache = layer(x, sin, cos, is_causal=True, cache=None) # [L, 1, D], {'k': [1, H, L, Dh]}
                 for k, v in cache.items():
                     v = v.squeeze(0).transpose(0, 1) # [L, H, Dh]
                     caches[il][k].append(v.detach().clone())
-            x = x[-1, 0] # [D]
-            if self.norm is not None: x = self.norm(x)
-            logit = self.predictor(x) # [D]
+            logit = self.predictor(self.norm(x[-1, 0])) # [L, 1, D] -> [D]
             range_logit = logit[next_token_range]
             range_output = torch.multinomial(F.softmax(range_logit, dim=0), num_samples=1).item()
             output = next_token_range[range_output]
             cur_inputs.append(output)
+            next_positions.append(next_position)
+        streamers = list(itr.compress(streamers, is_continues))
         cache = [{k: pad_sequence(v, batch_first=True).transpose(1, 2) for k, v in cache.items()} for cache in caches] # [i_layer][k,v][B, H, L, Dh]
         Bc, _, L, _ = cache[0]['k'].shape
         src_mask = torch.zeros((Bc, L), device=device) # [B, Lkv]
         for b, context in enumerate(contexts):
             src_mask[b, len(context):] = -torch.inf
-        streamers = list(itr.compress(streamers, is_continues))
 
-        for i_gen in range(1, max_new_token):
-            is_continues, positions, next_token_ranges = zip(*[ 
+        for i_gen in (range(1, max_new_token) if max_new_token is not None else itr.count(1)):
+            positions = next_positions
+            is_continues, next_positions, next_token_ranges = zip(*[ 
                 streamer.put([cur_input]) for streamer, cur_input in zip(streamers, cur_inputs)
             ])
-            positions = [position[0] for position in positions]
             if not any(is_continues):
                 break
             
@@ -370,17 +358,15 @@ class Model(nn.Module):
                         for layer_cache in cache]
 
             # make position
-            sin = sin_buf[positions].unsqueeze(1) # [B, Dh] -> [B, 1, Dh]
-            cos = cos_buf[positions].unsqueeze(1) # [B, Dh] -> [B, 1, Dh]
+            sin, cos = self.get_pos_buffer([position[0] for position in positions]) # [B, Dh], [B, Dh]
+            sin, cos = sin.unsqueeze(1), cos.unsqueeze(1) # [B, 1, Dh], # [B, 1, Dh]
             src_mask = torch.cat([src_mask, torch.zeros((len(src_mask), 1), device=device)], dim=-1)
 
             x = torch.tensor(cur_inputs, dtype=torch.long, device=device).unsqueeze(0) # [1(L), B]
             x = self.embedding(x)
             for il, layer in enumerate(self.layers):
                 x, cache[il] = layer(x, sin, cos, is_causal=False, cache=cache[il], src_mask=src_mask.unsqueeze(1).unsqueeze(2))
-            if self.norm is not None:
-                x = self.norm(x)
-            logits = self.predictor(x[0]) # [B, D]
+            logits = self.predictor(self.norm(x[0])) # [1(L), B, D] -> [B, D]
             cur_inputs = []
             for b, (logit, next_token_range) in enumerate(zip(logits, next_token_ranges)):
                 range_logit = logit[next_token_range]
