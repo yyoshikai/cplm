@@ -338,6 +338,6 @@ class TokenSplitDataset(WrapTupleDataset[tuple[list[str], list[str]]]):
         super().__init__(dataset, 2)
         self.split_token = split_token
     def __getitem__(self, idx: int):
-        token = self.dataset[idx]
+        token, position = self.dataset[idx]
         i = token.index(self.split_token)
-        return token[:i], token[i+1:]
+        return (token[:i], position[:i]), (token[i+1:], position[i+1:])

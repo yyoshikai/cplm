@@ -1,6 +1,8 @@
 import sys, os, itertools, math
+from time import time
 from argparse import ArgumentParser, Namespace
 from collections.abc import Sized, Callable, Generator
+from logging import getLogger
 from inspect import getfullargspec
 from typing import TypeVar
 import numpy as np, pandas as pd
@@ -10,6 +12,7 @@ from torch.nn.utils.rnn import pad_sequence
 from rdkit import Chem
 
 sys.path += ["/workspace/cplm"]
+from src.utils import should_show
 from src.utils.random import set_random_seed
 from src.utils.logger import add_file_handler, get_logger, set_third_party_logger
 from src.utils.path import cleardir
@@ -163,23 +166,44 @@ class UnfinishedSampler:
                 return
 
 class GeneratorStreamer(Streamer):
-    def __init__(self, voc_encoder: VocEncoder, out_token_dir: str):
+    logger = getLogger(f"{__qualname__}")
+    def __init__(self, name: str, prompt_token_path: str, new_token_path: str, voc_encoder: VocEncoder):
+        self.name = name
         self.voc_encoder = voc_encoder
-        self.out_token_dir = out_token_dir
+        self.prompt_token_path = prompt_token_path
+        self.new_token_path = new_token_path
         
         self.put_gen = self.put_generator()
         self.is_prompt = True
+        self.new_token_dir_made = False
+        self.n = 0
         next(self.put_gen)
+    def estimated_n_token(self):
+        return None
     def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
         raise NotImplementedError
     def put(self, token: list[int]) -> tuple[bool, list[int], list[int]]:
         if self.is_prompt:
-            os.makedirs(self.out_token_dir, exist_ok=True)
-            with open(f"{self.out_token_dir}/prompt.txt", 'w') as f:
+            os.makedirs(os.path.dirname(self.prompt_token_path), exist_ok=True)
+            with open(self.prompt_token_path, 'w') as f:
                 f.write(' '.join(self.voc_encoder.decode(token))+'\n')
+            self.start = time()
+            self.is_prompt = False
         else:
-            with open(f"{self.out_token_dir}/new.txt", 'a') as f:
+            if not self.new_token_dir_made:
+                os.makedirs(os.path.dirname(self.new_token_path), exist_ok=True)
+                self.new_token_dir_made = True
+            with open(self.new_token_path, 'a') as f:
                 f.write(self.voc_encoder.i2voc[token[0]]+' ')
+            self.n += 1
+            if should_show(self.n):
+                t = time() - self.start
+                est_n = self.estimated_n_token()
+                if est_n is None:
+                    self.logger.info(f"[{self.name}]generated {self.n}/? token in {t:.02f}s")
+                else:
+                    est_t = t * est_n / self.n
+                    self.logger.info(f"[{self.name}]generated {self.n}/{est_n} token in {t:02f}s (estimated end={est_t:.02f}s)")
         return self.put_gen.send(token)
 
 T = TypeVar('T')
@@ -187,8 +211,7 @@ T = TypeVar('T')
 def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: Dataset[T], 
         streamer_fn: Callable[[T, int, VocEncoder], Streamer], 
         get_token_position_fn: Callable[[T], tuple[list[str], list[int]]],
-        max_sample: int, 
-        max_valid_sample: int|None,
+        max_n_sample: int,
         max_prompt_len: int,
         max_new_token: int|None,
         batch_size: int,
@@ -197,8 +220,6 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
     # Environment
     set_random_seed(seed)
     cleardir(out_dir)
-    for subdir in ["generate"]:
-        os.makedirs(f"{out_dir}/{subdir}", exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # logger
@@ -214,29 +235,29 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
     model, voc_encoder = get_model(targs, voc_encoder=None, init_state_path=init_state_path, device=device)
 
     data_size = len(prompt_data)
-    sampler = UnfinishedSampler2(data_size, max_sample)
+    sampler = UnfinishedSampler2(data_size, max_n_sample)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=False)
     ns_sample = np.zeros(data_size, int)
 
     n_raw = n_large = 0
     for step, raw_data_idxs in enumerate(batch_sampler):
         
-        raw_items = list(DataLoader(Subset(prompt_data, raw_data_idxs), shuffle=False, num_workers=min(len(raw_data_idxs), 28), batch_size=None))
+        raw_items = list(DataLoader(Subset(prompt_data, raw_data_idxs), shuffle=False, num_workers=0, batch_size=None)) # min(len(raw_data_idxs), 28)
         n_raw += len(raw_items)
         raw_token_positions = [get_token_position_fn(item) for item in raw_items]
         data_idxs, items, token_positions = zip(*[data for data in zip(raw_data_idxs, raw_items, raw_token_positions) if len(data[2]) <= max_prompt_len])
         streamers = [streamer_fn(item, ns_sample[data_idx], voc_encoder) for item, data_idx in zip(items, data_idxs)]
         tokens, positions = zip(*token_positions)
         tokens = [torch.tensor(voc_encoder.encode(token), dtype=torch.long, device=device) for token in tokens]
-        model.generate2(tokens, positions, streamers, max_new_token)
+        model.generate2(tokens, positions, streamers, max_new_token) # , position_log_idxs=[0] if step == 0 else []
         ns_sample[raw_data_idxs] += 1
 
 class UnfinishedSampler2:
-    def __init__(self, data_size: int, max_sample: int):
+    def __init__(self, data_size: int, max_n_sample: int):
         self.is_remain = np.ones(data_size, int)
-        self.max_sample = max_sample
+        self.max_n_sample = max_n_sample
     def __iter__(self):
-        for i_sample in range(self.max_sample):
+        for i_sample in range(self.max_n_sample):
             # fix remain_idxs here
             remain_idxs = np.where(self.is_remain)[0].tolist()
             for idx in remain_idxs:

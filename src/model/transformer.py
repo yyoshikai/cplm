@@ -287,7 +287,7 @@ class Model(nn.Module):
         return output
 
     @torch.inference_mode()
-    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None):
+    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None, position_log_idxs: list[int]=[]):
         """
         contexts: list[Tensor(L, torch.long)]
         positions: list[Tensor(L, torch.long)]
@@ -300,7 +300,7 @@ class Model(nn.Module):
         
         # check shape
         assert len(streamers) == B
-        assert max_new_token >= 1 or max_new_token is None
+        assert max_new_token is None or max_new_token >= 1
         for context_size, position in zip(context_sizes, positions):
             assert len(position) == context_size
 
@@ -309,6 +309,8 @@ class Model(nn.Module):
         cur_inputs = []
         is_continues = []
         next_positions = []
+        for idx in position_log_idxs:
+            self.logger.debug(f"[{idx}] positions={positions[idx]}")
         for b in range(B):
             is_continue, next_position, next_token_range = streamers[b].put(contexts[b].tolist()) # [L], list[int]
             is_continues.append(is_continue)
@@ -336,6 +338,8 @@ class Model(nn.Module):
 
         for i_gen in (range(1, max_new_token) if max_new_token is not None else itr.count(1)):
             positions = next_positions
+            for idx in position_log_idxs:
+                self.logger.debug(f"[{i_gen}][{idx}]position={positions[idx]}")
             is_continues, next_positions, next_token_ranges = zip(*[ 
                 streamer.put([cur_input]) for streamer, cur_input in zip(streamers, cur_inputs)
             ])

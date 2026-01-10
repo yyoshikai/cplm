@@ -4,6 +4,10 @@ from rdkit import Chem
 from .data import WrapDataset, get_rng
 from .tokenizer import SmilesTokenizer, FloatTokenizer
 
+def element_symbols() -> set[str]:
+    table = Chem.GetPeriodicTable()
+    return {table.GetElementSymbol(i) for i in range(1, 119)}
+
 class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, *, h_atom: bool, h_coord: bool, randomize: bool, coord_follow_atom: bool, atoms: bool, atom_order: bool, coord_range: float):
         super().__init__(mol_data)
@@ -88,8 +92,7 @@ class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
 
     def vocs(self) -> set[str]:
         if self.atoms:
-            table = Chem.GetPeriodicTable()
-            vocs = {table.GetElementSymbol(i) for i in range(1, 119)}
+            return element_symbols()
         else:
             vocs = self.smi_tokenizer.vocs()
         vocs |= self.coord_tokenizer.vocs()

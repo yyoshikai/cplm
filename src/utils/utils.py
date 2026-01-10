@@ -146,7 +146,9 @@ def get_git_hash() -> str:
     p = subprocess.run('git rev-parse --short HEAD', shell=True, capture_output=True)
     return p.stdout.decode().strip()
 
-def should_show(n: int, max_interval: int|float):
+def should_show(n: int, max_interval: int|float|None=None):
+    if max_interval is None:
+        max_interval = math.inf
     if n < max_interval:
         return (n&(n-1)) == 0 # True if n == 2**x
     else:
