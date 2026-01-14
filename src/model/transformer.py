@@ -453,23 +453,3 @@ class Model(nn.Module):
         if capture_rate:
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16=bf16, kernel=kernel)
         return max_gpuuse
-
-def right_to_left_padding(inputs: Tensor, padding_idx: int) -> Tensor:
-    return left_to_right_padding(inputs.flip(0), padding_idx, _is_right=True).flip(0)
-
-def left_to_right_padding(inputs: Tensor, padding_idx: int, _is_right: bool=False) -> Tensor:
-    """
-    Parameters
-    ----------
-    inputs: Tensor[L, B]
-    padding_idx: int        
-    """
-    is_context = (inputs != padding_idx).to(torch.int)
-    if torch.any(is_context[1:] > is_context[:-1]):
-        logger.warning(f"context is modified to {'right' if _is_right else 'left'}-padding.")
-        is_ = list(inputs.T) # [B][L]
-        is_ = [i[i != padding_idx] for i in is_]
-        inputs = pad_sequence(is_, padding_value=padding_idx) # [L, B]
-        inputs = inputs
-    return inputs
-
