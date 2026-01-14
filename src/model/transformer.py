@@ -180,7 +180,7 @@ def align_embedding(module: nn.Module, state_dict, prefix, local_metadata,
     del state_dict[prefix+'vocs']
 
 class Streamer:
-    def put(self, tokens: list[int]) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
+    def put(self, tokens: list[int]):
         raise NotImplementedError
 
 class Model(nn.Module):

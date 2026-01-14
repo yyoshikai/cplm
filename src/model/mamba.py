@@ -11,10 +11,11 @@ import pandas as pd
 import torch.nn as nn
 import torch
 from torch import Tensor
+from torch.nn.utils.rnn import pad_sequence
 from transformers.models.mamba.configuration_mamba import MambaConfig
 from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
 from transformers.generation.streamers import BaseStreamer
-from .transformer import save_vocs, align_embedding, right_to_left_padding
+from .transformer import save_vocs, align_embedding, right_to_left_padding, Streamer
 from ..utils.memory import get_mems
 
 class MambaModel(nn.Module):
@@ -111,6 +112,25 @@ class MambaModel(nn.Module):
             for g in generateds ]
         return generateds
 
+    @torch.inference_mode()
+    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None, position_log_idx: list[int]=[]):
+        """
+        contexts: list[Tensor(L, torch.long)]
+        positions: list[Tensor(L, torch.long)]
+        """
+        # get shape
+        device = next(self.parameters()).device
+
+        for position in positions:
+            assert position == torch.arange(len(position))
+        if tqdm:
+            torch.cuda.reset_peak_memory_stats(device)
+
+        # Left to right padding
+        contexts = pad_sequence_left(contexts).T # [B, L]
+        streamer = StreamerWrapper(streamers)
+        self.model.generate(contexts, do_sample=True, max_new_tokens=max_new_token, streamer=streamer) # [B, L]
+
     def prepare_inputs_for_generation(self, 
             input_ids,
             cache_params: Optional[MambaCache] = None,
@@ -201,6 +221,20 @@ class MambaModel(nn.Module):
         if capture_rate:
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16)
         return max_gpuuse
+
+def pad_sequence_left(sequences: list[Tensor], padding_value: float=0) -> Tensor:
+    return pad_sequence([s[::-1] for s in sequences], padding_value=padding_value)[::-1].contiguous()
+
+class StreamerWrapper(BaseStreamer):
+    def __init__(self, streamers: list[Streamer]):
+        self.streamers = streamers
+    def put(self, value: torch.Tensor):
+        if value.dim() == 1:
+            value.unsqueeze_(-1) # [B, 1(L)]
+        for b, streamer in enumerate(self.streamers):
+            streamer.put(value[b].tolist())
+    def end(self):
+        pass
 
 class ProgressStreamer(BaseStreamer):
     def __init__(self, name, max_len, model: MambaModel):

@@ -11,7 +11,7 @@ from rdkit.Geometry import Point3D
 from src.data.tokenizer import VocEncoder, SmilesTokenizer, FloatTokenizer
 from src.data.molecule import element_symbols
 from src.generate import generate, GeneratorStreamer
-from .protein_structure.train import coord_streamer, make_pardir
+from generate.protein_structure.train import coord_streamer, make_pardir
 
 def array_to_conf(coord: np.ndarray) -> Conformer:
     conf = Conformer()
