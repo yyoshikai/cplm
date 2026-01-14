@@ -15,7 +15,7 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers.models.mamba.configuration_mamba import MambaConfig
 from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
 from transformers.generation.streamers import BaseStreamer
-from .transformer import save_vocs, align_embedding, right_to_left_padding, Streamer
+from .transformer import save_vocs, align_embedding, Streamer
 from ..utils.memory import get_mems
 
 class MambaModel(nn.Module):
@@ -75,45 +75,8 @@ class MambaModel(nn.Module):
         else:
             return x
 
-    @torch.no_grad()
-    def generate(self, context: torch.Tensor, position: torch.Tensor,
-                end_voc: str, max_len: int, pad_token: int, tqdm: bool=True, do_sample: bool=True):
-        """
-        context: Tensor[L, B](long)
-        """
-        assert self.model.config.eos_token_id == self.vocs.index(end_voc)
-        assert self.model.config.pad_token_id == pad_token
-        Lc, B = context.shape
-        context = right_to_left_padding(context, pad_token)
-        context = context.T # [B, L]
-
-        # check position is sequential
-        position_is_sequential = position == torch.arange(len(position)).unsqueeze(-1)
-        position_is_sequential[:Lc] |= context == pad_token
-        assert torch.all(position_is_sequential)
-
-        device = next(self.parameters()).device
-        self.logger.debug(f"GPU[pred]={self.get_gpuuse(B, Lc, False)/2**30:.03f}GB")
-        self.logger.debug(f"{Lc=}")
-        if tqdm:
-            torch.cuda.reset_peak_memory_stats(device)
-
-        # Left to right padding
-        
-        streamer = ProgressStreamer('tqdm', max_len, self) if tqdm else None
-        outputs = self.model.generate(context, do_sample=do_sample, max_new_tokens=max_len, streamer=streamer) # [B, L]
-        generateds = outputs[:, Lc:]
-        
-        # truncate
-        eos_token_id = self.model.config.eos_token_id
-        generateds = [
-            g[:torch.where(g == eos_token_id)[0][0]+1] 
-            if eos_token_id in g else g
-            for g in generateds ]
-        return generateds
-
     @torch.inference_mode()
-    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None, position_log_idx: list[int]=[]):
+    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None, position_log_idxs: list[int]=[], token_range_log_idxs: list[int]=[]):
         """
         contexts: list[Tensor(L, torch.long)]
         positions: list[Tensor(L, torch.long)]
@@ -122,7 +85,7 @@ class MambaModel(nn.Module):
         device = next(self.parameters()).device
 
         for position in positions:
-            assert position == torch.arange(len(position))
+            assert torch.all(torch.tensor(position, device=device) == torch.arange(len(position), device=device))
         if tqdm:
             torch.cuda.reset_peak_memory_stats(device)
 
@@ -223,7 +186,7 @@ class MambaModel(nn.Module):
         return max_gpuuse
 
 def pad_sequence_left(sequences: list[Tensor], padding_value: float=0) -> Tensor:
-    return pad_sequence([s[::-1] for s in sequences], padding_value=padding_value)[::-1].contiguous()
+    return pad_sequence([s.flip(0) for s in sequences], padding_value=padding_value).flip(0).contiguous()
 
 class StreamerWrapper(BaseStreamer):
     def __init__(self, streamers: list[Streamer]):
@@ -233,24 +196,5 @@ class StreamerWrapper(BaseStreamer):
             value.unsqueeze_(-1) # [B, 1(L)]
         for b, streamer in enumerate(self.streamers):
             streamer.put(value[b].tolist())
-    def end(self):
-        pass
-
-class ProgressStreamer(BaseStreamer):
-    def __init__(self, name, max_len, model: MambaModel):
-        self.pbar = tqdm(total=max_len, desc=name, miniters=1)
-        self.model = model
-        self.device = next(self.model.parameters()).device
-
-    def put(self, value: torch.Tensor):
-        if value.dim() == 1:
-            mem = psutil.virtual_memory()
-
-            used = torch.cuda.memory_allocated(self.device)
-            used_max = torch.cuda.max_memory_allocated(self.device)
-            GB = 2**30
-            self.pbar.set_postfix_str(f"CPU mem:{mem.used/GB:.02f}/{mem.total/GB:.02f}GB, GPU mem: used={used/GB:.02f}, max={used_max/GB:.02f}", refresh=False)
-            self.pbar.update(1)
-        
     def end(self):
         pass

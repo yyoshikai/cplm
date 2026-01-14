@@ -4,7 +4,6 @@ import torch
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
-sys.path.append(f"{WORKDIR}/cplm")
 from src.data.datasets.crossdocked import CDDataset
 from src.utils.logger import get_logger
 

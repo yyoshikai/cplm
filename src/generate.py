@@ -172,6 +172,7 @@ class GeneratorStreamer(Streamer):
         self.voc_encoder = voc_encoder
         self.prompt_token_path = prompt_token_path
         self.new_token_path = new_token_path
+        self.mean_dt = None
         
         self.put_gen = self.put_generator()
         self.is_prompt = True
@@ -187,7 +188,7 @@ class GeneratorStreamer(Streamer):
             os.makedirs(os.path.dirname(self.prompt_token_path), exist_ok=True)
             with open(self.prompt_token_path, 'w') as f:
                 f.write(' '.join(self.voc_encoder.decode(token))+'\n')
-            self.start = time()
+            self.start = self.init = time()
             self.is_prompt = False
         else:
             if not self.new_token_dir_made:
@@ -195,16 +196,17 @@ class GeneratorStreamer(Streamer):
                 self.new_token_dir_made = True
             with open(self.new_token_path, 'a') as f:
                 f.write(self.voc_encoder.i2voc[token[0]]+' ')
+            dt = (end:=time()) - self.start
+            self.mean_dt = dt if self.mean_dt is None else self.mean_dt*0.9+dt*0.1
+            self.start = end
             self.n += 1
-            if should_show(self.n):
-                t = time() - self.start
-                if t >= 1.0:
-                    est_n = self.estimated_n_token()
-                    if est_n is None:
-                        self.logger.info(f"[{self.name}]generated {self.n}/? token in {t:.02f}s")
-                    else:
-                        est_t = t * est_n / self.n
-                        self.logger.info(f"[{self.name}]generated {self.n}/{est_n} token in {t:02f}s (estimated end={est_t:.02f}s)")
+            if should_show(self.n) and (t:=self.start-self.init) >= 1.0:
+                est_n = self.estimated_n_token()
+                if est_n is None:
+                    self.logger.info(f"[{self.name}]generated {self.n}/? token in {t:.02f}s")
+                else:
+                    est_t = self.mean_dt*(est_n-self.n)
+                    self.logger.info(f"[{self.name}]generated {self.n}/{est_n} token in {t:02f}s (estimated to end in {est_t:.02f}s)")
         return self.put_gen.send(token)
 
 T = TypeVar('T')
@@ -216,7 +218,9 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
         max_prompt_len: int,
         max_new_token: int|None,
         batch_size: int,
-        seed: int, ):
+        seed: int, 
+        log_position: bool, 
+        log_token_range: bool):
 
     # Environment
     set_random_seed(seed)
@@ -240,7 +244,7 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=False)
     ns_sample = np.zeros(data_size, int)
 
-    n_raw = n_large = 0
+    n_raw = 0
     for step, raw_data_idxs in enumerate(batch_sampler):
         
         raw_items = list(DataLoader(Subset(prompt_data, raw_data_idxs), shuffle=False, num_workers=0, batch_size=None)) # min(len(raw_data_idxs), 28)
@@ -250,8 +254,8 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
         streamers = [streamer_fn(item, ns_sample[data_idx], voc_encoder) for item, data_idx in zip(items, data_idxs)]
         tokens, positions = zip(*token_positions)
         tokens = [torch.tensor(voc_encoder.encode(token), dtype=torch.long, device=device) for token in tokens]
-        model.generate2(tokens, positions, streamers, max_new_token) # , position_log_idxs=[0] if step == 0 else []
 
+        model.generate2(tokens, positions, streamers, max_new_token, position_log_idxs=[len(tokens)-1] if log_position and step == 0 else [], token_range_log_idxs=[len(tokens)-1] if log_token_range and step == 0 else [])
         ns_sample[raw_data_idxs] += 1
     logger.info(f"{out_dir} finished!")
 

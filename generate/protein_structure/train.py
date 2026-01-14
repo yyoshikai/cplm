@@ -6,7 +6,7 @@ import yaml
 import numpy as np
 import pandas as pd
 import openbabel.openbabel as ob
-from torch.utils.data import StackDataset
+from torch.utils.data import StackDataset, Subset
 
 from src.data import CacheDataset, index_dataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
@@ -17,14 +17,14 @@ from src.generate import generate, GeneratorStreamer
 def make_pardir(path: str):
     return os.makedirs(os.path.dirname(path), exist_ok=True)
 
-def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool) -> Generator[tuple[bool, list[int], list[int]]]:
+def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool) -> Generator[tuple[bool, list[int], list[int]]]:
     coord_tokenizer = FloatTokenizer('', -coord_range, coord_range)
     if no_token_range:
         int_token_range = frac_token_range = list(range(voc_encoder.voc_size))
     else:
         int_token_range = sorted(voc_encoder.encode(coord_tokenizer.int_vocs()))
         frac_token_range = sorted(voc_encoder.encode(coord_tokenizer.frac_vocs()))
-    pos_iter = itr.count(start_position)
+    pos = start_position
     if new_coord_path is not None:
         make_pardir(new_coord_path)
         with open(new_coord_path, 'w') as f:
@@ -33,23 +33,26 @@ def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, v
     for i_atom in range(n_atom):
         coord_strs = []
         for dim in range(3):
-            int_token = yield True, [next(pos_iter)], int_token_range
-            frac_token = yield True, [next(pos_iter)], frac_token_range
+            int_token = yield True, [pos], int_token_range
+            frac_token = yield True, [pos+1], frac_token_range
+            pos += 2
             coord_str = ''.join(voc_encoder.decode(int_token+frac_token))
             try:
                 coord = float(coord_str)
             except Exception:
-                return None
+                return None, pos
             coords.append(coord) 
             coord_strs.append(coord_str)
+        if atom_order:
+            pos += 1
         if new_coord_path is not None:
             with open(new_coord_path, 'a') as f:
                 f.write(f"{i_atom},{coord_strs[0]},{coord_strs[1]},{coord_strs[2]}\n")
     coords = np.array(coords).reshape(-1, 3)
-    return coords
+    return coords, pos
 
 class ProteinStructureStreamer(GeneratorStreamer):
-    def __init__(self, name: str, prompt_token_path: str, prompt_pdb_path: str, prompt_atom_path: str, new_token_path, new_pdb_path: str, new_coord_path: str, protein: ob.OBMol, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, h_atom: bool, h_coord: bool):
+    def __init__(self, name: str, prompt_token_path: str, prompt_pdb_path: str, prompt_atom_path: str, new_token_path, new_pdb_path: str, new_coord_path: str, protein: ob.OBMol, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):
         super().__init__(name, prompt_token_path, new_token_path, voc_encoder)
         self.prompt_pdb_path = prompt_pdb_path
         self.prompt_atom_path = prompt_atom_path
@@ -58,6 +61,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
         self.new_pdb_path = new_pdb_path
         self.new_coord_path = new_coord_path
         self.protein = protein
+        self.atom_order = atom_order
         self.h_atom = h_atom
         self.h_coord = h_coord
         self.n_generated_atom = None
@@ -72,7 +76,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
         obc.SetOutFormat('pdb')
         prompt_tokens = yield
         prompt_tokens = self.voc_encoder.decode(prompt_tokens)
-        assert prompt_tokens[-1] == '[XYZ]'
+        assert prompt_tokens[0] == '[POCKET]' and prompt_tokens[-1] == '[XYZ]'
         self.is_prompt = False
         if self.h_atom:
             self.protein.AddHydrogens()
@@ -96,7 +100,8 @@ class ProteinStructureStreamer(GeneratorStreamer):
         df.to_csv(self.prompt_atom_path, index_label='atom_idx')
         self.n_generated_atom = len(orders)
 
-        coords = yield from coord_streamer(len(orders), len(prompt_tokens), self.new_coord_path, self.voc_encoder, self.coord_range, self.no_token_range)
+        start_position = 2 if self.atom_order else len(prompt_tokens)
+        coords, pos = yield from coord_streamer(len(orders), start_position, self.new_coord_path, self.voc_encoder, self.coord_range, self.no_token_range, self.atom_order)
 
         if coords is not None:
             for i_coord, order in enumerate(orders):
@@ -110,7 +115,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
                 self.protein.DeleteHydrogens()
             make_pardir(self.new_pdb_path)
             obc.WriteFile(self.protein, self.new_pdb_path)
-        yield False, [len(prompt_tokens)+len(orders)*6], [self.voc_encoder.voc2i['[END]']]
+        yield False, [pos], [self.voc_encoder.voc2i['[END]']]
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -122,9 +127,12 @@ if __name__ == '__main__':
     ## generation
     parser.add_argument("--genname")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--sample", type=int, default=5)
+    parser.add_argument("--n", type=int, default=5)
     parser.add_argument("--sample-seed", type=int, default=0)
     parser.add_argument("--no-token-range", action='store_true')
+    ## tests
+    parser.add_argument("--log-position", action='store_true')
+    parser.add_argument("--log-token-range", action='store_true')
     args = parser.parse_args()
 
     train_dir = f"./training/results/{args.studyname}"
@@ -140,20 +148,23 @@ if __name__ == '__main__':
     sentence = SentenceDataset('[POCKET]', protein_atom_token, '[XYZ]')
     index, sentence = index_dataset(sentence)
     prompt = StackDataset(index, protein, sentence)
+    sample_idxs = np.random.default_rng(args.sample_seed).choice(len(prompt), args.n, replace=False)
+    prompt = Subset(prompt, sample_idxs)
+
     def streamer_fn(item, i_trial, voc_encoder):
         return ProteinStructureStreamer(
             name=f"{item[0]}-{i_trial}",
             prompt_token_path=f"{out_dir}/prompt_token/{item[0]}/{i_trial}.txt", 
-            prompt_pdb_path=f"{out_dir}/prompt_pdb/{item[0]}/{i_trial}.txt", 
+            prompt_pdb_path=f"{out_dir}/prompt_pdb/{item[0]}/{i_trial}.pdb", 
             prompt_atom_path=f"{out_dir}/prompt_atoms/{item[0]}/{i_trial}.csv",
             new_token_path=f"{out_dir}/new_token/{item[0]}/{i_trial}.txt", 
-            new_pdb_path=f"{out_dir}/new_pdb/{item[0]}/{i_trial}.txt", 
+            new_pdb_path=f"{out_dir}/new_pdb/{item[0]}/{i_trial}.pdb", 
             new_coord_path=f"{out_dir}/new_coord_csv/{item[0]}/{i_trial}.csv",
             protein=item[1],
-            voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
+            voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=getattr(targs, 'pocket_atom_order', False), h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
         )
     get_token_position_fn = lambda item: item[2]
-    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, 5, 10000, None, 1, 0)
+    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, 5, 10000, None, 1, 0, args.log_position, args.log_token_range)
 
 
 
