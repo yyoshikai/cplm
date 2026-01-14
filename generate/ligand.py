@@ -23,14 +23,13 @@ class LigandStreamer(GeneratorStreamer):
     def __init__(self, name: str, prompt_token_path: str, new_token_path: str, new_sdf_path: str, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, h_atom: bool, h_coord: bool):
         super().__init__(name, prompt_token_path, new_token_path, voc_encoder)
 
+        self.coord_range = coord_range
         smi_tokenizer = SmilesTokenizer()
-        coord_tokenizer = FloatTokenizer('', -coord_range, coord_range)
         smi_vocs = list(smi_tokenizer.vocs())+['[XYZ]']
         self.smi_token_range = sorted(self.voc_encoder.encode(smi_vocs))
-        self.int_token_range = sorted(self.voc_encoder.encode(coord_tokenizer.int_vocs()))
-        self.frac_token_range = sorted(self.voc_encoder.encode(coord_tokenizer.frac_vocs()))
         if no_token_range:
-            self.smi_token_range = self.int_token_range = self.frac_token_range = list(range(self.voc_encoder.voc_size))
+            self.smi_token_range = list(range(self.voc_encoder.voc_size))
+        self.no_token_range = no_token_range
         self.new_sdf_path = new_sdf_path
 
     def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
@@ -53,7 +52,7 @@ class LigandStreamer(GeneratorStreamer):
         # conformer
         if mol is not None:
             n_atom = mol.GetNumAtoms()
-            coord = yield from coord_streamer(n_atom, next(pos_iter), self.new_coord_path, self.voc_encoder, self.coord_range, self.no_token_range)
+            coord = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, self.no_token_range)
             mol.AddConformer(array_to_conf(coord))
             make_pardir(self.new_sdf_path)
             with Chem.SDWriter(self.new_sdf_path) as w:
@@ -124,18 +123,16 @@ if __name__ == '__main__':
         train_dir = f"./training/results/{args.studyname}"
     # config
     targs = Namespace(**yaml.safe_load(open(f"{train_dir}/args.yaml")))
-    if targs.lig_atoms:
-        raise NotImplementedError
     
     out_dir = f"./generate/ligand/{'finetune' if args.finetune else 'training'}" \
             f"{f'/{args.genname}' if args.genname is not None else ''}/{args.studyname}/{args.opt}"
 
     os.makedirs(out_dir, exist_ok=True)
 
-    if targs.lig_atoms:
+    if getattr(targs, 'lig_atoms', False):
         def streamer_fn(item, i_trial, voc_encoder):
             return AtomLigandStreamer(
-                name=f"{item[0]}", 
+                name=f"{item}", 
                 prompt_token_path=f"{out_dir}/prompt_token/{item}.txt",
                 new_token_path=f"{out_dir}/new_token/{item}.txt",
                 new_sdf_path=f"{out_dir}/new_sdf/{item}.txt",
@@ -153,5 +150,5 @@ if __name__ == '__main__':
     get_token_position_fn = lambda item: (['[LIGAND]'], [0])
 
     prompt_data = list(range(args.n))
-    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, 1, None, args.max_prompt_len, args.max_new_token, args.batch_size, args.seed, )
+    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, 1, args.max_prompt_len, args.max_new_token, args.batch_size, args.seed)
 

@@ -350,6 +350,7 @@ class Model(nn.Module):
             if not all(is_continues):
                 cur_inputs = list(itr.compress(cur_inputs, is_continues))
                 positions = list(itr.compress(positions, is_continues))
+                next_positions = list(itr.compress(next_positions, is_continues))
                 next_token_ranges = list(itr.compress(next_token_ranges, is_continues))
                 streamers = list(itr.compress(streamers, is_continues))
                 is_continues = torch.tensor(is_continues, device=device)

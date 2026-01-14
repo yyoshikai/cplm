@@ -198,12 +198,13 @@ class GeneratorStreamer(Streamer):
             self.n += 1
             if should_show(self.n):
                 t = time() - self.start
-                est_n = self.estimated_n_token()
-                if est_n is None:
-                    self.logger.info(f"[{self.name}]generated {self.n}/? token in {t:.02f}s")
-                else:
-                    est_t = t * est_n / self.n
-                    self.logger.info(f"[{self.name}]generated {self.n}/{est_n} token in {t:02f}s (estimated end={est_t:.02f}s)")
+                if t >= 1.0:
+                    est_n = self.estimated_n_token()
+                    if est_n is None:
+                        self.logger.info(f"[{self.name}]generated {self.n}/? token in {t:.02f}s")
+                    else:
+                        est_t = t * est_n / self.n
+                        self.logger.info(f"[{self.name}]generated {self.n}/{est_n} token in {t:02f}s (estimated end={est_t:.02f}s)")
         return self.put_gen.send(token)
 
 T = TypeVar('T')
@@ -250,7 +251,9 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
         tokens, positions = zip(*token_positions)
         tokens = [torch.tensor(voc_encoder.encode(token), dtype=torch.long, device=device) for token in tokens]
         model.generate2(tokens, positions, streamers, max_new_token) # , position_log_idxs=[0] if step == 0 else []
+
         ns_sample[raw_data_idxs] += 1
+    logger.info(f"{out_dir} finished!")
 
 class UnfinishedSampler2:
     def __init__(self, data_size: int, max_n_sample: int):
