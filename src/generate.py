@@ -15,10 +15,10 @@ sys.path += ["/workspace/cplm"]
 from src.utils import should_show
 from src.utils.random import set_random_seed
 from src.utils.logger import add_file_handler, get_logger, set_third_party_logger
-from src.utils.path import cleardir
+from src.utils.path import cleardir, make_pardir
 from src.utils.rdkit import ignore_rdkit_warning
 from src.model import Streamer
-from src.data.tokenizer import SmilesTokenizer, VocEncoder
+from src.data.tokenizer import SmilesTokenizer, FloatTokenizer, VocEncoder
 from src.finetune import get_finetune_data
 from src.train import get_model
 from src.evaluate import parse_mol_tokens2
@@ -164,6 +164,41 @@ class UnfinishedSampler:
             i_cycle += 1
             if i_cycle >= self.max_cycle:
                 return
+
+
+def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool) -> Generator[tuple[bool, list[int], list[int]]]:
+    coord_tokenizer = FloatTokenizer('', -coord_range, coord_range)
+    if no_token_range:
+        int_token_range = frac_token_range = list(range(voc_encoder.voc_size))
+    else:
+        int_token_range = sorted(voc_encoder.encode(coord_tokenizer.int_vocs()))
+        frac_token_range = sorted(voc_encoder.encode(coord_tokenizer.frac_vocs()))
+    pos = start_position
+    if new_coord_path is not None:
+        make_pardir(new_coord_path)
+        with open(new_coord_path, 'w') as f:
+            f.write("idx,x,y,z\n")
+    coords = []
+    for i_atom in range(n_atom):
+        coord_strs = []
+        for dim in range(3):
+            int_token = yield True, [pos], int_token_range
+            frac_token = yield True, [pos+1], frac_token_range
+            pos += 2
+            coord_str = ''.join(voc_encoder.decode(int_token+frac_token))
+            try:
+                coord = float(coord_str)
+            except Exception:
+                return None, pos
+            coords.append(coord) 
+            coord_strs.append(coord_str)
+        if atom_order:
+            pos += 1
+        if new_coord_path is not None:
+            with open(new_coord_path, 'a') as f:
+                f.write(f"{i_atom},{coord_strs[0]},{coord_strs[1]},{coord_strs[2]}\n")
+    coords = np.array(coords).reshape(-1, 3)
+    return coords, pos
 
 class GeneratorStreamer(Streamer):
     logger = getLogger(f"{__qualname__}")

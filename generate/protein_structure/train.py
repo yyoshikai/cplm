@@ -8,48 +8,12 @@ import pandas as pd
 import openbabel.openbabel as ob
 from torch.utils.data import StackDataset, Subset
 
+from src.utils.path import make_pardir
 from src.data import CacheDataset, index_dataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.protein import ProteinTokenizeDataset
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset, FloatTokenizer
-from src.generate import generate, GeneratorStreamer
-
-def make_pardir(path: str):
-    return os.makedirs(os.path.dirname(path), exist_ok=True)
-
-def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool) -> Generator[tuple[bool, list[int], list[int]]]:
-    coord_tokenizer = FloatTokenizer('', -coord_range, coord_range)
-    if no_token_range:
-        int_token_range = frac_token_range = list(range(voc_encoder.voc_size))
-    else:
-        int_token_range = sorted(voc_encoder.encode(coord_tokenizer.int_vocs()))
-        frac_token_range = sorted(voc_encoder.encode(coord_tokenizer.frac_vocs()))
-    pos = start_position
-    if new_coord_path is not None:
-        make_pardir(new_coord_path)
-        with open(new_coord_path, 'w') as f:
-            f.write("idx,x,y,z\n")
-    coords = []
-    for i_atom in range(n_atom):
-        coord_strs = []
-        for dim in range(3):
-            int_token = yield True, [pos], int_token_range
-            frac_token = yield True, [pos+1], frac_token_range
-            pos += 2
-            coord_str = ''.join(voc_encoder.decode(int_token+frac_token))
-            try:
-                coord = float(coord_str)
-            except Exception:
-                return None, pos
-            coords.append(coord) 
-            coord_strs.append(coord_str)
-        if atom_order:
-            pos += 1
-        if new_coord_path is not None:
-            with open(new_coord_path, 'a') as f:
-                f.write(f"{i_atom},{coord_strs[0]},{coord_strs[1]},{coord_strs[2]}\n")
-    coords = np.array(coords).reshape(-1, 3)
-    return coords, pos
+from src.generate import generate, GeneratorStreamer, coord_streamer
 
 class ProteinStructureStreamer(GeneratorStreamer):
     def __init__(self, name: str, prompt_token_path: str, prompt_pdb_path: str, prompt_atom_path: str, new_token_path, new_pdb_path: str, new_coord_path: str, protein: ob.OBMol, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):

@@ -65,3 +65,6 @@ def subs_vars(config, vars):
         return [subs_vars(child, vars) for child in config]
     else:
         return config
+
+def make_pardir(path: str):
+    return os.makedirs(os.path.dirname(path), exist_ok=True)
