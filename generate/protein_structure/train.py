@@ -77,7 +77,6 @@ class ProteinStructureStreamer(GeneratorStreamer):
         prompt_tokens = yield
         prompt_tokens = self.voc_encoder.decode(prompt_tokens)
         assert prompt_tokens[0] == '[POCKET]' and prompt_tokens[-1] == '[XYZ]'
-        self.is_prompt = False
         if self.h_atom:
             self.protein.AddHydrogens()
         else:

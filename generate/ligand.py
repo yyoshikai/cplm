@@ -117,7 +117,6 @@ if __name__ == '__main__':
     ## generation
     parser.add_argument("--genname")
     parser.add_argument("--n", type=int, default=25)
-    parser.add_argument("--max-prompt-len", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-new-token", type=int, default=1000)
     parser.add_argument("--no-token-range", action='store_true')
@@ -147,7 +146,7 @@ if __name__ == '__main__':
                 prompt_token_path=f"{out_dir}/prompt_token/{item}.txt",
                 new_token_path=f"{out_dir}/new_token/{item}.txt",
                 new_sdf_path=f"{out_dir}/new_sdf/{item}.txt",
-                coord_range=targs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, atom_order=targs.lig_atom_order, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord,
+                coord_range=targs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, atom_order=getattr(targs, 'lig_atom_order', False), h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord,
             )
     else:
         def streamer_fn(item, i_trial, voc_encoder):
@@ -161,5 +160,5 @@ if __name__ == '__main__':
     get_token_position_fn = lambda item: (['[LIGAND]'], [0])
 
     prompt_data = list(range(args.n))
-    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, 1, args.max_prompt_len, args.max_new_token, args.batch_size, args.seed, args.log_position, args.log_token_range)
+    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, 1, 1, args.max_new_token, args.batch_size, args.seed, args.log_position, args.log_token_range)
 

@@ -1,4 +1,5 @@
 import os
+import pickle
 import lmdb
 
 def load_lmdb(path: str, readahead=False) ->tuple[lmdb.Environment, lmdb.Transaction]:
@@ -15,3 +16,8 @@ def new_lmdb(path: str, keep_exists: bool=False, map_size: int=int(100e9)) -> tu
         map_size=map_size)
     txn = env.begin(write=True)
     return env, txn
+
+def iter_pickle_lmdb(path: str):
+    env, txn = load_lmdb(path, readahead=True)
+    for value in txn.cursor().iternext(keys=False):
+        yield pickle.loads(value)

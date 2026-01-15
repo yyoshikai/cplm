@@ -15,6 +15,7 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers.models.mamba.configuration_mamba import MambaConfig
 from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
 from transformers.generation.streamers import BaseStreamer
+from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
 from .transformer import save_vocs, align_embedding, Streamer
 from ..utils.memory import get_mems
 
@@ -89,10 +90,20 @@ class MambaModel(nn.Module):
         if tqdm:
             torch.cuda.reset_peak_memory_stats(device)
 
+        wrapper = StreamerWrapper(streamers)
+        
+        criteria = StoppingCriteriaList()
+        criteria.append(StreamerCriteria(wrapper))
+
+        def prefix_allowed_tokens_fn(batch_id: int, input_ids: Tensor):
+            token_range = wrapper.outs[batch_id][2]
+            if batch_id in token_range_log_idxs:
+                self.logger.debug(f"{batch_id=}, {input_ids.shape=}, token_range={[self.vocs[t] for t in token_range]}")
+            return token_range
+
         # Left to right padding
         contexts = pad_sequence_left(contexts).T # [B, L]
-        streamer = StreamerWrapper(streamers)
-        self.model.generate(contexts, do_sample=True, max_new_tokens=max_new_token, streamer=streamer) # [B, L]
+        self.model.generate(contexts, stopping_criteria = criteria, streamer=wrapper, max_new_tokens=max_new_token, prefix_allowed_tokens_fn=prefix_allowed_tokens_fn, do_sample=True) # [B, L]
 
     def prepare_inputs_for_generation(self, 
             input_ids,
@@ -185,16 +196,29 @@ class MambaModel(nn.Module):
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16)
         return max_gpuuse
 
-def pad_sequence_left(sequences: list[Tensor], padding_value: float=0) -> Tensor:
-    return pad_sequence([s.flip(0) for s in sequences], padding_value=padding_value).flip(0).contiguous()
-
 class StreamerWrapper(BaseStreamer):
     def __init__(self, streamers: list[Streamer]):
         self.streamers = streamers
+        self.outs: list[tuple[bool, list[int], list[int]]|None] = [None for _ in streamers]
     def put(self, value: torch.Tensor):
         if value.dim() == 1:
             value.unsqueeze_(-1) # [B, 1(L)]
         for b, streamer in enumerate(self.streamers):
-            streamer.put(value[b].tolist())
+            if self.outs[b] is None or self.outs[b][0]:
+                self.outs[b] = streamer.put(value[b].tolist())
+
     def end(self):
         pass
+
+class StreamerCriteria(StoppingCriteria):
+    def __init__(self, streamer_wrapper: StreamerWrapper):
+        self.wrapper = streamer_wrapper
+    
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> torch.BoolTensor:
+        return ~torch.tensor([out is None or out[0] for out in self.wrapper.outs], device=input_ids.device, dtype=torch.bool)
+
+
+
+
+def pad_sequence_left(sequences: list[Tensor], padding_value: float=0) -> Tensor:
+    return pad_sequence([s.flip(0) for s in sequences], padding_value=padding_value).flip(0).contiguous()
