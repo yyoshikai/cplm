@@ -91,6 +91,7 @@ if __name__ == '__main__':
     parser.add_argument("--genname")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--n", type=int, default=5)
+    parser.add_argument("--trial", type=int, default=5)
     parser.add_argument("--sample-seed", type=int, default=0)
     parser.add_argument("--no-token-range", action='store_true')
     ## tests
@@ -116,7 +117,7 @@ if __name__ == '__main__':
 
     def streamer_fn(item, i_trial, voc_encoder):
         return ProteinStructureStreamer(
-            name=f"{item[0]}-{i_trial}",
+            name=f"{item[0]}][{i_trial}",
             prompt_token_path=f"{out_dir}/prompt_token/{item[0]}/{i_trial}.txt", 
             prompt_pdb_path=f"{out_dir}/prompt_pdb/{item[0]}/{i_trial}.pdb", 
             prompt_atom_path=f"{out_dir}/prompt_atoms/{item[0]}/{i_trial}.csv",
@@ -127,7 +128,7 @@ if __name__ == '__main__':
             voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=getattr(targs, 'pocket_atom_order', False), h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
         )
     get_token_position_fn = lambda item: item[2]
-    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, 5, 10000, None, 1, 0, args.log_position, args.log_token_range)
+    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, args.trial, 10000, None, 1, 0, args.log_position, args.log_token_range)
 
 
 
