@@ -20,7 +20,7 @@ def array_to_conf(coord: np.ndarray) -> Conformer:
     return conf
 
 class LigandStreamer(GeneratorStreamer):
-    def __init__(self, name: str, prompt_token_path: str, new_token_path: str, new_sdf_path: str, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, h_atom: bool, h_coord: bool):
+    def __init__(self, name: str, prompt_token_path: str, new_token_path: str, new_sdf_path: str, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, h_atom: bool, h_coord: bool, center: np.ndarray|None=None):
         super().__init__(name, prompt_token_path, new_token_path, voc_encoder)
 
         self.coord_range = coord_range
@@ -31,6 +31,7 @@ class LigandStreamer(GeneratorStreamer):
             self.smi_token_range = list(range(self.voc_encoder.voc_size))
         self.no_token_range = no_token_range
         self.new_sdf_path = new_sdf_path
+        self.center = center
 
     def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
         prompt_tokens = yield
@@ -52,7 +53,7 @@ class LigandStreamer(GeneratorStreamer):
         # conformer
         if mol is not None:
             n_atom = mol.GetNumAtoms()
-            coord, pos = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, self.no_token_range, False)
+            coord, pos = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, self.no_token_range, False, self.center)
             mol.AddConformer(array_to_conf(coord))
             make_pardir(self.new_sdf_path)
             with Chem.SDWriter(self.new_sdf_path) as w:
@@ -136,8 +137,6 @@ if __name__ == '__main__':
     
     out_dir = f"./generate/ligand/{'finetune' if args.finetune else 'training'}" \
             f"{f'/{args.genname}' if args.genname is not None else ''}/{args.studyname}/{args.opt}"
-
-    os.makedirs(out_dir, exist_ok=True)
 
     if getattr(targs, 'lig_atoms', False):
         def streamer_fn(item, i_trial, voc_encoder):
