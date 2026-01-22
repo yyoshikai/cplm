@@ -14,7 +14,19 @@ from src.model import Streamer, WrapperStreamer
 from src.data.molecule import element_symbols
 from src.data.tokenizer import FloatTokenizer, SmilesTokenizer, VocEncoder
 
-def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool, center: np.ndarray|None) -> Generator[tuple[bool, list[int], list[int]]]:
+def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool, center: np.ndarray|None) -> Generator[tuple[bool, list[int], list[int]], list[int], tuple[np.ndarray|None, int, str|None]]:
+    """
+    Returns
+    -------
+    coordss: np.ndarray|None of 
+        Shape: (n_atom, 3)
+    pos: int
+        next position
+    error: str|None
+        None if no error
+    """
+
+
     coord_tokenizer = FloatTokenizer('', -coord_range, coord_range)
     if no_token_range:
         int_token_range = frac_token_range = list(range(voc_encoder.voc_size))
@@ -37,7 +49,7 @@ def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, v
             try:
                 coord = float(coord_str)
             except Exception:
-                return None, pos
+                return None, pos, 'COORD_NOT_FLOAT'
             if center is not None:
                 coord += center[dim]
             coords.append(coord)
@@ -47,7 +59,7 @@ def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, v
             with open(new_coord_path, 'a') as f:
                 f.write(f"{i_atom},{coords[0]},{coords[1]},{coords[2]}\n")
         coordss.append(coords)
-    return np.array(coordss), pos
+    return np.array(coordss), pos, None
 
 def array_to_conf(coord: np.ndarray) -> Conformer:
     conf = Conformer()
@@ -61,9 +73,8 @@ class GeneratorStreamer(Streamer):
         next(self.put_gen)
     def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
         raise NotImplementedError
-    def put(self, token: list[int]) -> tuple[bool, list[int], list[int]]:
-        return self.put_gen.send(token)
-
+    def put(self, tokens: list[int]) -> tuple[bool, list[int], list[int]]:
+        return self.put_gen.send(tokens)
 
 class TokenWriteStreamer(WrapperStreamer):
     def __init__(self, streamer: Streamer, prompt_token_path: str|None, new_token_path: str|None, voc_encoder: VocEncoder):
@@ -73,20 +84,33 @@ class TokenWriteStreamer(WrapperStreamer):
         self.new_token_path = new_token_path
         self.is_prompt = True
         self.new_token_dir_made = False
-    def put(self, token: list[int]) -> tuple[bool, list[int], list[int]]:
+    def put(self, tokens: list[int]):
         if self.is_prompt:
             if self.prompt_token_path is not None:
                 make_pardir(self.prompt_token_path)
                 with open(self.prompt_token_path, 'w') as f:
-                    f.write(' '.join(self.voc_encoder.decode(token))+'\n')
+                    f.write(' '.join(self.voc_encoder.decode(tokens))+'\n')
         else:
             if self.new_token_path is not None:
                 if not self.new_token_dir_made:
                     make_pardir(self.new_token_path)
                     self.new_token_dir_made = True
                 with open(self.new_token_path, 'a') as f:
-                    f.write(self.voc_encoder.i2voc[token[0]]+' ')
-        return self.streamer.put(token)
+                    f.write(self.voc_encoder.i2voc[tokens[0]]+' ')
+        return self.streamer.put(tokens)
+
+class TokenSaveStreamer(WrapperStreamer):
+    def __init__(self, streamer: Streamer):
+        super().__init__(streamer)
+        self.prompt_tokens = []
+        self.new_tokens = []
+        self.is_prompt = True
+    def put(self, tokens: list[int]):
+        if self.is_prompt:
+            self.prompt_tokens = tokens
+        else:
+            self.new_tokens += tokens
+        return self.streamer.put(tokens)
 
 class TimeLogStreamer(WrapperStreamer):
     logger = getLogger(f"{__qualname__}")
@@ -96,7 +120,7 @@ class TimeLogStreamer(WrapperStreamer):
         self.is_prompt = True
         self.mean_dt = None
         self.n = 0
-    def put(self, token: list[int]) -> tuple[bool, list[int], list[int]]:
+    def put(self, tokens: list[int]) -> tuple[bool, list[int], list[int]]:
         if self.is_prompt:
             self.start = self.init = time()
             self.is_prompt = False
@@ -112,7 +136,7 @@ class TimeLogStreamer(WrapperStreamer):
                 else:
                     est_t = self.mean_dt*(est_n-self.n)
                     self.logger.info(f"[{self.name}]generated {self.n}/{est_n} token in {t:02f}s (estimated to end in {est_t:.02f}s)")
-        return self.streamer.put(token)
+        return self.streamer.put(tokens)
 
 class LigandStreamer(GeneratorStreamer):
     def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, h_atom: bool, h_coord: bool, center: np.ndarray|None=None):
@@ -127,6 +151,7 @@ class LigandStreamer(GeneratorStreamer):
         self.new_sdf_path = new_sdf_path
         self.center = center
         self.mol = None
+        self.error = 'PARSE_NOT_ENDED'
         super().__init__()
 
     def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
@@ -148,13 +173,19 @@ class LigandStreamer(GeneratorStreamer):
         self.mol = Chem.MolFromSmiles(smi, param)
         # conformer
         if self.mol is not None:
-            n_atom = self.mol.GetNumAtoms()
-            coord, pos = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, self.no_token_range, False, self.center)
-            self.mol.AddConformer(array_to_conf(coord))
-            if self.new_sdf_path is not None:
-                make_pardir(self.new_sdf_path)
-                with Chem.SDWriter(self.new_sdf_path) as w:
-                    w.write(self.mol)
+            smi_out = Chem.MolToSmiles(self.mol, canonical=False)
+            if smi_out != smi:
+                self.error = 'SMILES_MISMATCH'
+            else:
+                n_atom = self.mol.GetNumAtoms()
+                coord, pos, error = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, self.no_token_range, False, self.center)
+                self.mol.AddConformer(array_to_conf(coord))
+                if self.new_sdf_path is not None:
+                    make_pardir(self.new_sdf_path)
+                    with Chem.SDWriter(self.new_sdf_path) as w:
+                        w.write(self.mol)
+        else:
+            self.error = 'SMILES'
         yield False, [next(pos_iter)], [self.voc_encoder.voc2i['[END]']]
 
 class AtomLigandStreamer(GeneratorStreamer):
@@ -190,7 +221,7 @@ class AtomLigandStreamer(GeneratorStreamer):
         self.n_generated_atom = len(atoms)
 
         start_point = n_prompt_token+1 if self.atom_order else n_prompt_token+n_atom+1
-        coords, pos = yield from coord_streamer(self.n_generated_atom, start_point, None, self.voc_encoder, self.coord_range, self.no_token_range, self.atom_order)
+        coords, pos, error = yield from coord_streamer(self.n_generated_atom, start_point, None, self.voc_encoder, self.coord_range, self.no_token_range, self.atom_order)
         if coords is not None:
             self.mol = Chem.RWMol()
             try:

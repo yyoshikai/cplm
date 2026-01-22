@@ -37,7 +37,7 @@ class PocketStructureStreamer(GeneratorStreamer):
         else:
             n_atom = np.sum(slice_str(self.pocket.atoms, 1) != 'H')
         start_position = 2 if self.atom_order else len(prompt_tokens)
-        coords, pos = yield from coord_streamer(n_atom, start_position, self.new_coord_path, self.voc_encoder, self.coord_range, self.no_token_range, self.atom_order)
+        coords, pos, error = yield from coord_streamer(n_atom, start_position, self.new_coord_path, self.voc_encoder, self.coord_range, self.no_token_range, self.atom_order)
         yield False, [pos], [self.voc_encoder.voc2i['[END]']]
 
 if __name__ == '__main__':

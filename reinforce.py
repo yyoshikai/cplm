@@ -8,15 +8,15 @@ from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel
 from rdkit.Chem import rdMolDescriptors
-from torch.utils.data import Dataset, DataLoader, StackDataset
+from torch.utils.data import DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.distributions import Categorical
 from torch.distributed.elastic.multiprocessing.errors import record
 from rdkit import Chem
+from openbabel.openbabel import OBMol
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
@@ -24,12 +24,12 @@ from src.utils.path import cleardir
 from src.utils.time import TimerTqdm
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.ddp import dist_all_gather
-from src.evaluate import parse_mol_tokens2
-from src.evaluate import eval_vina, eval_qvina3
-from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks, log_batch
+from src.evaluate import eval_vina, eval_qvina
+from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks
 from src.model import Model
 from src.finetune import get_finetune_data
 from src.data.collator import solve_increasing_fn_left
+from src.generate.streamer import LigandStreamer, TokenWriteStreamer, TokenSaveStreamer
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 @record
@@ -160,27 +160,27 @@ def main():
     ## Scoring function 最大化したいものとする
     match args.target:
         case 'min_vina':
-            def get_score(lig_path: str, rec_path: str, out_dir: str):
+            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
                 score, min_score = eval_vina(lig_path, rec_path, out_dir)
                 return -min_score if min_score is not None else np.nan
             error_score = -50
         case 'vina':
-            def get_score(lig_path: str, rec_path: str, out_dir: str):
+            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
                 score, min_score = eval_vina(lig_path, rec_path, out_dir)
                 return -score if min_score is not None else np.nan
             error_score = -50
         case 'mw_max':
-            def get_score(lig_path: str, rec_path: str, out_dir: str):
+            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
                 mol = Chem.SDMolSupplier(lig_path).__next__()
                 return rdMolDescriptors.CalcExactMolWt(mol) if mol is not None else np.nan
             error_score = 0
         case 'qvina':
-            def get_score(lig_path: str, rec_path: str, out_dir: str):
+            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
                 score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, cpu=args.cpu)
                 return -score if score is not None else np.nan
             error_score = -50
         case 'dummy':
-            def get_score(lig_path: str, rec_path: str, out_dir: str):
+            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
                 return random.random()
             error_score = 0
     if args.error_score is not None:
@@ -237,8 +237,9 @@ def main():
         torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/0.pth")
 
     logger.info("Training started.")
-    for step in step_timer: 
+    for step in step_timer:
         is_starting = step < 5
+        do_save = step in do_save_steps
 
         # get batch
         step_timer.start('get_batch')
@@ -259,71 +260,60 @@ def main():
             # generate sample
             step_timer.start('generate')
             model.eval()
-            streamers = LigandStreamer()
+            ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, fargs.coord_range, voc_encoder, False, fargs.h_atom, fargs.h_coord, None) for _ in range(B)]
+            streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in ligand_streamers]
+            if do_save:
+                streamers = [TokenWriteStreamer(streamer, 
+                        prompt_token_path=f"{result_dir}/generation/{step}/{rank}_{idx}/prompt_token.txt", 
+                        new_token_path=f"{result_dir}/generation/{step}/{rank}_{idx}/new_token.txt", 
+                        voc_encoder=voc_encoder
+                    ) for idx, streamer in enumerate(streamers)]
             with torch.inference_mode():
-                outputs = net_model.generate2(prompt_tokens, positions=positions, streamers=None, max_new_token=args.max_new_token)
+                net_model.generate2(prompt_tokens, positions, streamers, args.max_new_token)
 
-            out_batch = pad_sequence([torch.cat([prompt.to(device), output]) for prompt, output in zip(prompt_tokens, outputs)], batch_first=False, padding_value=voc_encoder.pad_token) # [L, B]
-            Lo, B = out_batch.shape
-            weight = torch.zeros((Lo-1, B), device=device, dtype=torch.float) # [Lo-1, B]
-            for b, (prompt_size, output) in enumerate(zip(prompt_sizes, outputs)):
-                weight[prompt_size-1:prompt_size+len(output)-1, b] = 1.0
-            size_recorder.record(**{f'prompt {b}': len(prompt) for b, prompt in enumerate(prompt_tokens)}, 
-                    **{f'output {b}': len(output) for b, output in enumerate(outputs)})
+            out_batch = pad_sequence([
+                torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens, device=device, dtype=torch.long)
+                for token_streamer in token_streamers
+            ], padding_value=voc_encoder.pad_token)
+            weight = torch.zeros_like(out_batch, dtype=torch.float)[:-1] # [Lo-1, B]
+            sizes = {}
+            for b, token_streamer in enumerate(token_streamers):
+                prompt_size, new_size = len(token_streamer.prompt_tokens), len(token_streamer.new_tokens)
+                weight[prompt_size-1:prompt_size+new_size-1, b] = 1.0
+                sizes[f'prompt {b}'] = prompt_size; sizes[f'output {b}'] = new_size
+            size_recorder.record(**sizes)
 
             ## Log output
-            step_timer.start('log_output')
             if step < log_sample_step:
-                log_batch('train', logger, token_logger, out_batch[1:], weight, voc_encoder, step, 'data_dist' in args.check, get_gpuuse)
-                ## check distribution
                 logger.debug(f"step[{step}]{all_idxs=}")
-                logger.debug(f"step[{step}]{protein_paths=}")
                 logger.debug(f"step[{step}]{centers=}")
-                for b, output in enumerate(outputs):
-                    token_logger.debug(f"step[{step}]output[{b}]={voc_encoder.decode(output.tolist())}")
                     
             # Get score
             step_timer.start('get_score')
-            logger.debug(f"step[{step}] get_score started.")
-            do_save = step in do_save_steps
             errors = []
             with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
                 futures = []
                 valid_scores = []
-                for idx in range(len(outputs)):
+                for idx, ligand_streamer in enumerate(ligand_streamers):
 
                     center = centers[idx].numpy()
                     rotation = rotations[idx].numpy()
                     protein_path = protein_paths[idx]
-                    if do_save:
-                        eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
-                        os.makedirs(eval_dir, exist_ok=True)
-                    else:
-                        eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
-
-                    out_tokens = ['[LIGAND]']+voc_encoder.decode(outputs[idx].tolist())
+                    gen_dir = f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
 
                     if do_save:
-                        info = {'protein_path': protein_path, 'idx': idx, 
-                                'center': center.tolist(), 'rotation': rotation.tolist()}
-                        with open(f"{eval_dir}/info.yaml", 'w') as f:
-                            yaml.dump(info, f)
-                        with open(f"{eval_dir}/tokens.txt", 'w') as f:
-                            f.write(','.join(out_tokens)+'\n')
-                    
-                    error, mol = parse_mol_tokens2(out_tokens, center, rotation)
-                    errors.append(error)
-                    if error != '': continue
-                    
-                    with open(f"{eval_dir}/lig.sdf", 'w') as f:
-                        f.write(Chem.MolToMolBlock(mol))
-                    
-                    lig_path = f"{eval_dir}/lig.sdf"
+                        info = {'idx': idx, 'center': center.tolist(), 'rotation': rotation.tolist()}
+                        with open(f"{gen_dir}/info.yaml", 'w') as f:
+                            yaml.dump(info, f)                    
+                    lig_mol = ligand_streamer.mol
+                    errors.append(ligand_streamer.error or '')
+                    if lig_mol is None: continue
+
                     if args.num_score_workers >= 2:
                         futures.append(e.submit(get_score, 
-                                lig_path=lig_path, rec_path=protein_path, out_dir=eval_dir))
+                                lig_path=lig_path, rec_path=protein_path, out_dir=gen_dir))
                     else:
-                        valid_scores.append(get_score(lig_path=lig_path, rec_path=protein_path, out_dir=eval_dir))
+                        valid_scores.append(get_score(lig_path=lig_path, rec_path=protein_path, out_dir=gen_dir))
                 if args.num_score_workers >= 2:
                     valid_scores = np.array([f.result() for f in futures])
                 else:
@@ -334,7 +324,6 @@ def main():
             scores[errors == ""] = valid_scores
             errors[errors == ""][np.isnan(valid_scores)] = 'VINA'
 
-            logger.debug(f"step[{step}] sync_score started.")
             error_recorder.record(**{str(i): errors[i] for i in range(args.batch_size)})
             scores = torch.tensor(scores, device=device, dtype=torch.float)
             if not args.ignore_error:
@@ -462,8 +451,8 @@ def main():
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
             if args.gc:
                 gc.collect()
-
-        logger.info(f"{step=} finished.")
+        if is_starting:
+            logger.info(f"{step=} finished.")
 
         if is_starting:
             logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
