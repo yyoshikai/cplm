@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from ctypes import c_double
 from typing import Literal
 import numpy as np
-from openbabel.openbabel import OBMol, OBMolAtomIter
+from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
 from torch.utils.data import Dataset
 from .data import WrapDataset
 from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
@@ -95,6 +95,16 @@ class ProteinTokenizer:
     def vocs(self) -> set[str]:
         return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
                 | ({'[XYZ]'} if not self.coord_follow_atom else set())
+
+class Protein2PDBDataset(WrapDataset[str]):
+    def __init__(self, dataset: Dataset[OBMol]):
+        super().__init__(dataset)
+        self.obc = OBConversion()
+        self.obc.SetOutFormat('pdb')
+    def __getitem__(self, idx: int):
+        protein = self.dataset[idx]
+        return self.obc.WriteString(protein)
+
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):

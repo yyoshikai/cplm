@@ -28,24 +28,31 @@ def obmol2rdmol(obmol: OBMol) -> Chem.Mol:
     sdf = obc.WriteString(obmol)
     return Chem.MolFromMolBlock(sdf, removeHs=False)
 
-def eval_vina(ligand: OBMol, protein: OBMol, protein_path: str) -> tuple[float, float]:
+def pdb2obmol(pdb: str) -> OBMol:
+    obc = OBConversion()
+    obc.SetInFormat('pdb')
+    obmol = OBMol()
+    obc.ReadString(obmol, pdb)
+    return obmol
+
+def eval_vina(ligand: OBMol, protein: OBMol, protein_pdbqt_path: str) -> tuple[float, float]:
     obc = OBConversion()
     obc.SetOutFormat('pdbqt')
     
     ligand.AddHydrogens()
     ligand_str = obc.WriteString(ligand)
     protein.AddHydrogens()
-    obc.WriteFile(protein, protein_path)
+    obc.WriteFile(protein, protein_pdbqt_path)
 
     v = Vina(verbosity=0)
-    v.set_receptor(protein_path)
+    v.set_receptor(protein_pdbqt_path)
     v.set_ligand_from_string(ligand_str)
     v.compute_vina_maps()
     score = v.score()[0]
     min_score = v.optimize()[0]
     return score, min_score
 
-def eval_qvina(ligand: Chem.Mol, rec_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False, cpu: int|None = None):
+def eval_qvina(ligand: Chem.Mol, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False, cpu: int|None = None):
     def log(name):
         if pbar is not None:
             pbar.start(name)
@@ -79,7 +86,7 @@ def eval_qvina(ligand: Chem.Mol, rec_path: str, out_dir: str, use_uff=True, cent
         obc.WriteFile(lig_obmol, f"{out_dir}/lig.pdbqt")
         
         log('qvina_prep_rec')
-        prepare_receptor4_func(['-r', rec_path, '-o', f'{out_dir}/rec.pdbqt'])
+        prepare_receptor4_func(['-r', rec_pdb_path, '-o', f'{out_dir}/rec.pdbqt'])
 
         log('qvina_command')
         proc = subprocess.Popen('/bin/bash', shell=False, stdin=subprocess.PIPE, 

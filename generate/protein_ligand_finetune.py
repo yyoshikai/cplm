@@ -39,7 +39,7 @@ if __name__ == '__main__':
     out_dir = ".generate/protein_ligand/finetune"+(f"/{args.genname}" if args.genname is not None else '')+f"/{args.sname}/{args.opt}"
 
     added_vocs = SmilesTokenizer().vocs()
-    _voc_encoder, _raw, prompt_token_data, position_data, _weight, center_data, _rotation, _protein_finetune_data, _ligand_filename_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
+    _voc_encoder, _raw, _protein, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
 
     idx_data, prompt_token_data = index_dataset(prompt_token_data)
     prompt_data = StackDataset(idx_data, prompt_token_data, position_data, center_data)

@@ -158,7 +158,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
         idxs = rng.choice(len(raw_data), size=round(len(raw_data)*sample))
         raw_data = Subset(raw_data, idxs)
         assert len(raw_data) > 0
-    protein, lig, score, protein_filename, ligand_filename = untuple_dataset(raw_data, 5)
+    protein, lig, score = untuple_dataset(raw_data, 3)
 
     ## rotation
     if args.protein:
@@ -168,7 +168,6 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
         lig, protein, *center_rotation \
             = CoordTransformDataset(lig, protein, base_seed=args.seed, normalize_coord=True, random_rotate=random_rotate).untuple()
     center = center_rotation[0]
-    rotation = center_rotation[1] if random_rotate else None
 
 
     # sentence
@@ -177,10 +176,10 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     weights = []
     ## pocket
     if args.protein:
-        protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, atom_order=args.pocket_atom_order, coord_range=args.coord_range)
+        protein_tokens = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, atom_order=args.pocket_atom_order, coord_range=args.coord_range)
     else:
-        protein = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, atom_order=args.pocket_atom_order, coord_range=args.coord_range)
-    sentence += ['[POCKET]', protein, '[END]']
+        protein_tokens = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, atom_order=args.pocket_atom_order, coord_range=args.coord_range)
+    sentence += ['[POCKET]', protein_tokens, '[END]']
     if args.coord_follow_atom:
         assert args.pocket_atom_weight == args.pocket_coord_weight
         weights += [None, args.pocket_coord_weight, 0.0]
@@ -190,7 +189,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     assert prompt_score in ['none', 'data', 'low']
     if prompt_score != 'none':
         if prompt_score == 'low':
-            score = RandomScoreDataset(-12.0, -10.0, len(protein), args.seed)
+            score = RandomScoreDataset(-12.0, -10.0, len(protein_tokens), args.seed)
         score_tokenizer = FloatTokenizer('score', -args.coord_range, args.coord_range)
         score = TokenizeDataset(score, score_tokenizer)
         sentence += ['[SCORE]', score, '[END]']
@@ -218,7 +217,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     else:
         voc_encoder = None
 
-    return voc_encoder, raw_data, token, position, weight, center, rotation, protein_filename, ligand_filename, logs
+    return voc_encoder, raw_data, protein, token, position, weight, center, logs
 
 ## Define functions for batch collation
 def collate(data_list: list[tuple[Tensor, Tensor, Tensor]], pad_token):

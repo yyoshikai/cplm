@@ -59,7 +59,7 @@ class TargetDiffScafCDDataset(TupleDataset[tuple[Pocket, Chem.Mol, float, str, s
         score_env, score_txn = load_lmdb(self.score_lmdb_path)
         score = pickle.loads(score_txn.get(key))
 
-        return pocket, mol, score, protein_path, ligand_path
+        return pocket, mol, score
 
     def __len__(self):
         return len(self.key_idxs)
@@ -117,7 +117,7 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float]]
         score_env, score_txn = load_lmdb(self.score_lmdb_path)
         score = pickle.loads(score_txn.get(key))
 
-        return protein, mol, score, protein_path, ligand_path
+        return protein, mol, score
 
     def __len__(self):
         return len(self.key_idxs)

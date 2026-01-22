@@ -16,7 +16,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.distributions import Categorical
 from torch.distributed.elastic.multiprocessing.errors import record
 from rdkit import Chem
-from openbabel.openbabel import OBMol
+from openbabel.openbabel import OBMol, OBConversion
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
@@ -24,7 +24,8 @@ from src.utils.path import cleardir
 from src.utils.time import TimerTqdm
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.ddp import dist_all_gather
-from src.evaluate import eval_vina, eval_qvina
+from src.evaluate import rdmol2obmol, pdb2obmol, eval_vina, eval_qvina
+from src.data.protein import Protein2PDBDataset
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks
 from src.model import Model
 from src.finetune import get_finetune_data
@@ -149,34 +150,35 @@ def main():
 
     # data
     ## vocs from state_dict
-    _voc_encoder, raw_data, token_data, position_data, weight_data, center_data, rotation_data,\
-            protein_filename_data, ligand_filename_data, data_log \
+    _voc_encoder, raw_data, protein_data, token_data, position_data, weight_data, center_data, data_log \
             = get_finetune_data(fargs, 'train', False, True, voc_encoder.vocs(), 'none')
+    protein_pdb_data = Protein2PDBDataset(protein_data)
     logs += data_log
     index_data, token_data = index_dataset(token_data)
-    train_data = StackDataset(index_data, token_data, position_data, center_data, rotation_data, 
-            protein_filename_data)
+    train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
     
     ## Scoring function 最大化したいものとする
+    obc = OBConversion()
     match args.target:
         case 'min_vina':
             def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
-                score, min_score = eval_vina(lig_path, rec_path, out_dir)
+                score, min_score = eval_vina(rdmol2obmol(lig_rdmol), rec_obmol, f"{out_dir}/protein_h.pdbqt")
                 return -min_score if min_score is not None else np.nan
             error_score = -50
         case 'vina':
             def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
-                score, min_score = eval_vina(lig_path, rec_path, out_dir)
+                score, min_score = eval_vina(rdmol2obmol(lig_rdmol), rec_obmol, f"{out_dir}/protein_h.pdbqt")
                 return -score if min_score is not None else np.nan
             error_score = -50
         case 'mw_max':
             def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
-                mol = Chem.SDMolSupplier(lig_path).__next__()
-                return rdMolDescriptors.CalcExactMolWt(mol) if mol is not None else np.nan
+                return rdMolDescriptors.CalcExactMolWt(lig_rdmol)
             error_score = 0
         case 'qvina':
             def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
-                score = eval_qvina3(lig_path, rec_path, out_dir, timeout=60, cpu=args.cpu)
+                obc.SetOutFormat('pdb')
+                obc.WriteFile(rec_obmol, f"{out_dir}/rec_input.pdb")
+                score = eval_qvina(lig_rdmol, f"{out_dir}/rec_input.pdb", out_dir, timeout=60, cpu=args.cpu)
                 return -score if score is not None else np.nan
             error_score = -50
         case 'dummy':
@@ -252,7 +254,7 @@ def main():
             batched_items = None
         items_box = [None]
         dist.scatter_object_list(items_box, batched_items, src=DATA_RANK['train'])
-        idxs, prompt_tokens, positions, centers, rotations, protein_paths = zip(*items_box[0])
+        idxs, pdbs, prompt_tokens, positions = zip(*items_box[0])
         all_idxs = torch.cat(dist_all_gather(torch.tensor(idxs, dtype=torch.int, device=device)))
         prompt_sizes = [len(token) for token in prompt_tokens]
 
@@ -286,7 +288,6 @@ def main():
             ## Log output
             if step < log_sample_step:
                 logger.debug(f"step[{step}]{all_idxs=}")
-                logger.debug(f"step[{step}]{centers=}")
                     
             # Get score
             step_timer.start('get_score')
@@ -296,24 +297,17 @@ def main():
                 valid_scores = []
                 for idx, ligand_streamer in enumerate(ligand_streamers):
 
-                    center = centers[idx].numpy()
-                    rotation = rotations[idx].numpy()
-                    protein_path = protein_paths[idx]
                     gen_dir = f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
 
-                    if do_save:
-                        info = {'idx': idx, 'center': center.tolist(), 'rotation': rotation.tolist()}
-                        with open(f"{gen_dir}/info.yaml", 'w') as f:
-                            yaml.dump(info, f)                    
                     lig_mol = ligand_streamer.mol
+                    protein = pdb2obmol(pdbs[idx])
                     errors.append(ligand_streamer.error or '')
                     if lig_mol is None: continue
 
                     if args.num_score_workers >= 2:
-                        futures.append(e.submit(get_score, 
-                                lig_path=lig_path, rec_path=protein_path, out_dir=gen_dir))
+                        futures.append(e.submit(get_score, lig_rdmol=lig_mol, rec_obmol=protein, out_dir=gen_dir))
                     else:
-                        valid_scores.append(get_score(lig_path=lig_path, rec_path=protein_path, out_dir=gen_dir))
+                        valid_scores.append(get_score(lig_mol, protein, gen_dir))
                 if args.num_score_workers >= 2:
                     valid_scores = np.array([f.result() for f in futures])
                 else:

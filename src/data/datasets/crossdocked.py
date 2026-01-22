@@ -30,13 +30,9 @@ class CDWholeDataset(TupleDataset[tuple[Pocket, Chem.Mol, float, str, str]]):
         # pocket
         pocket_atoms, pocket_coord = data['pocket_atoms'], data['pocket_coordinate']
         pocket = Pocket(pocket_atoms, pocket_coord)
-        
-        # path
-        ligand_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['lig_name']}"
-        protein_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}"
 
         score = float(data['score'])
-        return pocket, data['lig_mol'], score, protein_path, ligand_path
+        return pocket, data['lig_mol'], score
     
     def __len__(self):
         return len(self.raw_data)
@@ -62,15 +58,11 @@ class CDProteinWholeDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]
     def __getitem__(self, idx):
         data = self.raw_data[idx]
         
-        # path
-        ligand_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['lig_name']}"
-        protein_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}"
-        
         protein = OBMol()
-        self.obc.ReadFile(protein, protein_path)
+        self.obc.ReadFile(protein, f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}")
 
         score = float(data['score'])
-        return protein, data['lig_mol'], score, protein_path, None
+        return protein, data['lig_mol'], score
         # ligand_path: 251113 indexがないのはおかしい気がするので一旦こうする
 
 class CDProteinTestDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]):
@@ -106,7 +98,7 @@ class CDProteinTestDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]
         # protein
         protein = OBMol()
         self.obc.ReadFile(protein, protein_path)
-        return protein, mol, None, protein_path, ligands_path
+        return protein, mol, None
     
     def __len__(self):
         return len(self.split_by_name)
