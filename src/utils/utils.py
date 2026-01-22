@@ -30,6 +30,10 @@ def remove_module(state: dict):
         new_state[key] = value
     return new_state
 
+def setdefault(obj: object, name: str, value: Any):
+    if not hasattr(obj, name):
+        setattr(obj, name, value)
+
 class CompressedArray:
     logger = getLogger(f'{__module__}.{__qualname__}')
     def __init__(self, array: np.ndarray):

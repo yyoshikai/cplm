@@ -12,6 +12,7 @@ from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule
 from rdkit.Chem.rdMolAlign import CalcRMS
 from vina import Vina
 from openbabel import pybel
+from openbabel.openbabel import OBMol, OBConversion
 from AutoDockTools.Utilities24 import prepare_receptor4
 from .prepare_receptor4 import main as prepare_receptor4_func
 from .utils.time import wtqdm
@@ -267,6 +268,7 @@ def eval_vina_dummy(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, 
     else:
         return random.random(), random.random()
 
+
 def eval_vina(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]:
     try:
         os.makedirs(out_dir, exist_ok=True)
@@ -299,6 +301,24 @@ def eval_vina(lig_path: str, rec_path: str, out_dir: str) -> tuple[float, float]
     except Exception as e:
         logger.warning(f"Error in {lig_path=}, {rec_path=}: {e}")
         score = min_score = None
+    return score, min_score
+
+def eval_vina2(ligand: OBMol, protein: OBMol, out_dir: str) -> tuple[float, float]:
+    os.makedirs(out_dir, exist_ok=True)
+    obc = OBConversion()
+    obc.SetOutFormat('pdbqt')
+    
+    ligand.AddHydrogens()
+    ligand_str = obc.WriteString(ligand)
+    protein.AddHydrogens()
+    obc.WriteFile(protein, f"{out_dir}/input_protein_h.pdbqt")
+
+    v = Vina(verbosity=0)
+    v.set_receptor(f"{out_dir}/input_protein_h.pdbqt")
+    v.set_ligand_from_string(ligand_str)
+    v.compute_vina_maps()
+    score = v.score()[0]
+    min_score = v.optimize()[0]
     return score, min_score
 
 

@@ -67,8 +67,7 @@ class CDProteinWholeDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]
         protein_path = f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}"
         
         protein = OBMol()
-        with open(protein_path) as f:
-            self.obc.ReadString(protein, f.read())
+        self.obc.ReadFile(protein, protein_path)
 
         score = float(data['score'])
         return protein, data['lig_mol'], score, protein_path, None
@@ -89,7 +88,7 @@ class CDProteinTestDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]
     def __getitem__(self, idx):
 
         pname, lname = self.split_by_name[idx]
-        # 'BSD_ASPTE_1_130_0/2z3h_A_rec_1wn6_bst_lig_tt_docked_3_pocket10.pdb', 'BSD_ASPTE_1_130_0/2z3h_A_rec_1wn6_bst_lig_tt_docked_3.sdf
+        # 例. 'BSD_ASPTE_1_130_0/2z3h_A_rec_1wn6_bst_lig_tt_docked_3_pocket10.pdb', 'BSD_ASPTE_1_130_0/2z3h_A_rec_1wn6_bst_lig_tt_docked_3.sdf
         pname = pname.split('_rec_')[0] + "_rec.pdb"
         lname = lname.removesuffix('.sdf')
         lname, sdf_idx = lname.rsplit('_', maxsplit=1)
@@ -106,9 +105,7 @@ class CDProteinTestDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]
 
         # protein
         protein = OBMol()
-        with open(protein_path) as f:
-            self.obc.ReadFile(protein, f.read())
-
+        self.obc.ReadFile(protein, protein_path)
         return protein, mol, None, protein_path, ligands_path
     
     def __len__(self):

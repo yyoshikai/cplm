@@ -123,7 +123,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
     return datas, voc_encoder, dnames, logs
 
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
-        added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[OBMol|Pocket]|None=None):
+        added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[OBMol|Pocket]|None=None, encode: bool=True):
     logs = []
 
     # compatibility
@@ -212,9 +212,12 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     weight = RemoveLastDataset(TokenWeightDataset(token, separates, weights, by_n_separate=True))
 
     ## encode token
-    voc_encoder = VocEncoder(vocs)
-    token = TokenEncodeDataset(token, voc_encoder)
-  
+    if encode:
+        voc_encoder = VocEncoder(vocs)
+        token = TokenEncodeDataset(token, voc_encoder)
+    else:
+        voc_encoder = None
+
     return voc_encoder, raw_data, token, position, weight, center, rotation, protein_filename, ligand_filename, logs
 
 ## Define functions for batch collation
@@ -224,3 +227,5 @@ def collate(data_list: list[tuple[Tensor, Tensor, Tensor]], pad_token):
     positions = pad_sequence(positions, padding_value=0)
     weights = pad_sequence(weights, padding_value=0.0)
     return tokens, positions, weights
+
+

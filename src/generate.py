@@ -166,7 +166,7 @@ class UnfinishedSampler:
                 return
 
 
-def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool) -> Generator[tuple[bool, list[int], list[int]]]:
+def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool, center: np.ndarray|None) -> Generator[tuple[bool, list[int], list[int]]]:
     coord_tokenizer = FloatTokenizer('', -coord_range, coord_range)
     if no_token_range:
         int_token_range = frac_token_range = list(range(voc_encoder.voc_size))
@@ -178,9 +178,9 @@ def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, v
         make_pardir(new_coord_path)
         with open(new_coord_path, 'w') as f:
             f.write("idx,x,y,z\n")
-    coords = []
+    coordss = []
     for i_atom in range(n_atom):
-        coord_strs = []
+        coords = []
         for dim in range(3):
             int_token = yield True, [pos], int_token_range
             frac_token = yield True, [pos+1], frac_token_range
@@ -190,15 +190,16 @@ def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, v
                 coord = float(coord_str)
             except Exception:
                 return None, pos
-            coords.append(coord) 
-            coord_strs.append(coord_str)
+            if center is not None:
+                coord += center[dim]
+            coords.append(coord)
         if atom_order:
             pos += 1
         if new_coord_path is not None:
             with open(new_coord_path, 'a') as f:
-                f.write(f"{i_atom},{coord_strs[0]},{coord_strs[1]},{coord_strs[2]}\n")
-    coords = np.array(coords).reshape(-1, 3)
-    return coords, pos
+                f.write(f"{i_atom},{coords[0]},{coords[1]},{coords[2]}\n")
+        coordss.append(coords)
+    return np.array(coordss), pos
 
 class GeneratorStreamer(Streamer):
     logger = getLogger(f"{__qualname__}")

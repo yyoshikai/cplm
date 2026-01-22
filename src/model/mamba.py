@@ -100,6 +100,9 @@ class MambaModel(nn.Module):
             if batch_id in token_range_log_idxs:
                 self.logger.debug(f"{batch_id=}, {input_ids.shape=}, token_range={[self.vocs[t] for t in token_range]}")
             return token_range
+        
+        if max_new_token is None:
+            max_new_token = math.inf
 
         # Left to right padding
         contexts = pad_sequence_left(contexts).T # [B, L]
@@ -205,7 +208,9 @@ class StreamerWrapper(BaseStreamer):
             value.unsqueeze_(-1) # [B, 1(L)]
         for b, streamer in enumerate(self.streamers):
             if self.outs[b] is None or self.outs[b][0]:
-                self.outs[b] = streamer.put(value[b].tolist())
+                v = value[b]
+                v = v[v != 0]
+                self.outs[b] = streamer.put(v.tolist())
 
     def end(self):
         pass

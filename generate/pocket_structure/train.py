@@ -1,11 +1,7 @@
 import sys, os, math
-import itertools as itr
 from argparse import ArgumentParser, Namespace
-from collections.abc import Generator
 import yaml
 import numpy as np
-import pandas as pd
-import openbabel.openbabel as ob
 from torch.utils.data import StackDataset, Subset
 
 from src.utils import slice_str

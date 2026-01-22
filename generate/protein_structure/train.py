@@ -68,7 +68,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
 
         if coords is not None:
             for i_coord, order in enumerate(orders):
-                atom = self.protein.GetAtom(int(order))
+                atom = self.protein.GetAtom(int(order)+1)
                 try:
                     atom.SetVector(float(coords[i_coord, 0]), float(coords[i_coord, 1]), float(coords[i_coord, 2]))
                 except Exception as e:
@@ -128,7 +128,7 @@ if __name__ == '__main__':
             voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=getattr(targs, 'pocket_atom_order', False), h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
         )
     get_token_position_fn = lambda item: item[2]
-    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, args.trial, 10000, None, 1, 0, args.log_position, args.log_token_range)
+    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, args.trial, 10000, None, args.batch_size, 0, args.log_position, args.log_token_range)
 
 
 
