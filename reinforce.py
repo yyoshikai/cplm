@@ -344,7 +344,6 @@ def main():
                     else:
                         eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
 
-                    score = np.nan
                     out_tokens = ['[LIGAND]']+voc_encoder.decode(outputs[idx].tolist())
 
                     if do_save:

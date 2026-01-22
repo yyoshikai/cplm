@@ -12,7 +12,7 @@ from src.utils.path import make_pardir
 from src.data import CacheDataset, index_dataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.protein import ProteinTokenizeDataset
-from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset, FloatTokenizer
+from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
 from src.generate import generate, GeneratorStreamer, coord_streamer
 
 class ProteinStructureStreamer(GeneratorStreamer):
@@ -58,7 +58,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
         if not self.h_coord:
             orders = orders[df['element'][orders] != 'H']
         df['order'] = -1
-        df.loc[orders]['order'] = np.arange(len(orders))
+        df.loc[orders, 'order'] = np.arange(len(orders))
         make_pardir(self.prompt_atom_path)
         df.to_csv(self.prompt_atom_path, index_label='atom_idx')
         self.n_generated_atom = len(orders)
