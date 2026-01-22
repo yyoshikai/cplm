@@ -10,6 +10,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel
+from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import Dataset, DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence

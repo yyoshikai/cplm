@@ -10,7 +10,7 @@ from rdkit.Chem.rdDetermineBonds import DetermineBondOrders
 from rdkit.Geometry import Point3D
 from src.utils import should_show
 from src.utils.path import make_pardir
-from src.model import Streamer
+from src.model import Streamer, WrapperStreamer
 from src.data.molecule import element_symbols
 from src.data.tokenizer import FloatTokenizer, SmilesTokenizer, VocEncoder
 
@@ -56,36 +56,51 @@ def array_to_conf(coord: np.ndarray) -> Conformer:
     return conf
 
 class GeneratorStreamer(Streamer):
-    logger = getLogger(f"{__qualname__}")
-    def __init__(self, name: str, prompt_token_path: str, new_token_path: str, voc_encoder: VocEncoder):
-        self.name = name
-        self.voc_encoder = voc_encoder
-        self.prompt_token_path = prompt_token_path
-        self.new_token_path = new_token_path
-        self.mean_dt = None
-        
+    def __init__(self):
         self.put_gen = self.put_generator()
-        self.is_prompt = True
-        self.new_token_dir_made = False
-        self.n = 0
         next(self.put_gen)
-    def estimated_n_token(self):
-        return None
     def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
         raise NotImplementedError
     def put(self, token: list[int]) -> tuple[bool, list[int], list[int]]:
+        return self.put_gen.send(token)
+
+
+class TokenWriteStreamer(WrapperStreamer):
+    def __init__(self, streamer: Streamer, prompt_token_path: str|None, new_token_path: str|None, voc_encoder: VocEncoder):
+        super().__init__(streamer)
+        self.voc_encoder = voc_encoder
+        self.prompt_token_path = prompt_token_path
+        self.new_token_path = new_token_path
+        self.is_prompt = True
+        self.new_token_dir_made = False
+    def put(self, token: list[int]) -> tuple[bool, list[int], list[int]]:
         if self.is_prompt:
-            os.makedirs(os.path.dirname(self.prompt_token_path), exist_ok=True)
-            with open(self.prompt_token_path, 'w') as f:
-                f.write(' '.join(self.voc_encoder.decode(token))+'\n')
+            if self.prompt_token_path is not None:
+                make_pardir(self.prompt_token_path)
+                with open(self.prompt_token_path, 'w') as f:
+                    f.write(' '.join(self.voc_encoder.decode(token))+'\n')
+        else:
+            if self.new_token_path is not None:
+                if not self.new_token_dir_made:
+                    make_pardir(self.new_token_path)
+                    self.new_token_dir_made = True
+                with open(self.new_token_path, 'a') as f:
+                    f.write(self.voc_encoder.i2voc[token[0]]+' ')
+        return self.streamer.put(token)
+
+class TimeLogStreamer(WrapperStreamer):
+    logger = getLogger(f"{__qualname__}")
+    def __init__(self, streamer: Streamer, name: str):
+        super().__init__(streamer)
+        self.name = name
+        self.is_prompt = True
+        self.mean_dt = None
+        self.n = 0
+    def put(self, token: list[int]) -> tuple[bool, list[int], list[int]]:
+        if self.is_prompt:
             self.start = self.init = time()
             self.is_prompt = False
         else:
-            if not self.new_token_dir_made:
-                os.makedirs(os.path.dirname(self.new_token_path), exist_ok=True)
-                self.new_token_dir_made = True
-            with open(self.new_token_path, 'a') as f:
-                f.write(self.voc_encoder.i2voc[token[0]]+' ')
             dt = (end:=time()) - self.start
             self.mean_dt = dt if self.mean_dt is None else self.mean_dt*0.9+dt*0.1
             self.start = end
@@ -97,12 +112,11 @@ class GeneratorStreamer(Streamer):
                 else:
                     est_t = self.mean_dt*(est_n-self.n)
                     self.logger.info(f"[{self.name}]generated {self.n}/{est_n} token in {t:02f}s (estimated to end in {est_t:.02f}s)")
-        return self.put_gen.send(token)
+        return self.streamer.put(token)
 
 class LigandStreamer(GeneratorStreamer):
-    def __init__(self, name: str, prompt_token_path: str, new_token_path: str, new_sdf_path: str, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, h_atom: bool, h_coord: bool, center: np.ndarray|None=None):
-        super().__init__(name, prompt_token_path, new_token_path, voc_encoder)
-
+    def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, h_atom: bool, h_coord: bool, center: np.ndarray|None=None):
+        self.voc_encoder = voc_encoder
         self.coord_range = coord_range
         smi_tokenizer = SmilesTokenizer()
         smi_vocs = list(smi_tokenizer.vocs())+['[XYZ]']
@@ -112,6 +126,8 @@ class LigandStreamer(GeneratorStreamer):
         self.no_token_range = no_token_range
         self.new_sdf_path = new_sdf_path
         self.center = center
+        self.mol = None
+        super().__init__()
 
     def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
         prompt_tokens = yield
@@ -129,20 +145,22 @@ class LigandStreamer(GeneratorStreamer):
         smi = ''.join(self.voc_encoder.decode(smi_tokens))
         param = Chem.SmilesParserParams()
         param.removeHs = False
-        mol = Chem.MolFromSmiles(smi, param)
+        self.mol = Chem.MolFromSmiles(smi, param)
         # conformer
-        if mol is not None:
-            n_atom = mol.GetNumAtoms()
+        if self.mol is not None:
+            n_atom = self.mol.GetNumAtoms()
             coord, pos = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, self.no_token_range, False, self.center)
-            mol.AddConformer(array_to_conf(coord))
-            make_pardir(self.new_sdf_path)
-            with Chem.SDWriter(self.new_sdf_path) as w:
-                w.write(mol)
+            self.mol.AddConformer(array_to_conf(coord))
+            if self.new_sdf_path is not None:
+                make_pardir(self.new_sdf_path)
+                with Chem.SDWriter(self.new_sdf_path) as w:
+                    w.write(self.mol)
         yield False, [next(pos_iter)], [self.voc_encoder.voc2i['[END]']]
 
 class AtomLigandStreamer(GeneratorStreamer):
-    def __init__(self, name: str, prompt_token_path: str, new_token_path: str, new_sdf_path: str, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):
-        super().__init__(name, prompt_token_path, new_token_path, voc_encoder)
+    def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):
+        super().__init__()
+        self.voc_encoder = voc_encoder
         self.new_sdf_path = new_sdf_path
         self.coord_range = coord_range
         self.no_token_range = no_token_range
@@ -151,6 +169,7 @@ class AtomLigandStreamer(GeneratorStreamer):
         if self.no_token_range:
             self.all_token_range = list(range(voc_encoder.voc_size))
         self.n_generated_atom = None
+        self.mol = None
     def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
         prompt_tokens = yield
         prompt_tokens = self.voc_encoder.decode(prompt_tokens)
@@ -173,15 +192,17 @@ class AtomLigandStreamer(GeneratorStreamer):
         start_point = n_prompt_token+1 if self.atom_order else n_prompt_token+n_atom+1
         coords, pos = yield from coord_streamer(self.n_generated_atom, start_point, None, self.voc_encoder, self.coord_range, self.no_token_range, self.atom_order)
         if coords is not None:
-            mol = Chem.RWMol()
+            self.mol = Chem.RWMol()
             try:
                 for symbol in atoms:
-                    mol.AddAtom(Chem.Atom(symbol))
-                mol.AddConformer(array_to_conf(coords))
-                DetermineBondOrders(mol)
-                make_pardir(self.new_sdf_path)
-                with Chem.SDWriter(self.new_sdf_path) as w:
-                    w.write(mol)
+                    self.mol.AddAtom(Chem.Atom(symbol))
+                self.mol.AddConformer(array_to_conf(coords))
+                DetermineBondOrders(self.mol)
+                if self.new_sdf_path is not None:
+                    make_pardir(self.new_sdf_path)
+                    with Chem.SDWriter(self.new_sdf_path) as w:
+                        w.write(self.mol)
             except Exception as e:
                 self.logger.warning(f"Error while making atom: {e.args[0]}")
+                self.mol = None
         yield False, [pos], [self.voc_encoder.voc2i['[END]']]

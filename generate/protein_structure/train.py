@@ -14,11 +14,12 @@ from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.protein import ProteinTokenizeDataset
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
 from src.generate import generate
-from src.generate.streamer import GeneratorStreamer, coord_streamer
+from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer
 
 class ProteinStructureStreamer(GeneratorStreamer):
-    def __init__(self, name: str, prompt_token_path: str, prompt_pdb_path: str, prompt_atom_path: str, new_token_path, new_pdb_path: str, new_coord_path: str, protein: ob.OBMol, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):
-        super().__init__(name, prompt_token_path, new_token_path, voc_encoder)
+    def __init__(self, prompt_pdb_path: str, prompt_atom_path: str, new_pdb_path: str, new_coord_path: str, protein: ob.OBMol, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):
+        super().__init__()
+        self.voc_encoder = voc_encoder
         self.prompt_pdb_path = prompt_pdb_path
         self.prompt_atom_path = prompt_atom_path
         self.coord_range = coord_range
@@ -117,17 +118,21 @@ if __name__ == '__main__':
     prompt = Subset(prompt, sample_idxs)
 
     def streamer_fn(item, i_trial, voc_encoder):
-        return ProteinStructureStreamer(
-            name=f"{item[0]}][{i_trial}",
-            prompt_token_path=f"{out_dir}/prompt_token/{item[0]}/{i_trial}.txt", 
+        streamer = ProteinStructureStreamer(
             prompt_pdb_path=f"{out_dir}/prompt_pdb/{item[0]}/{i_trial}.pdb", 
             prompt_atom_path=f"{out_dir}/prompt_atoms/{item[0]}/{i_trial}.csv",
-            new_token_path=f"{out_dir}/new_token/{item[0]}/{i_trial}.txt", 
             new_pdb_path=f"{out_dir}/new_pdb/{item[0]}/{i_trial}.pdb", 
             new_coord_path=f"{out_dir}/new_coord_csv/{item[0]}/{i_trial}.csv",
             protein=item[1],
             voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=getattr(targs, 'pocket_atom_order', False), h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
         )
+        streamer = TokenWriteStreamer(streamer, 
+            prompt_token_path=f"{out_dir}/prompt_token/{item[0]}/{i_trial}.txt",
+            new_token_path=f"{out_dir}/new_token/{item[0]}/{i_trial}.txt", 
+            voc_encoder=voc_encoder
+        )
+        streamer = TimeLogStreamer(streamer, name=f"{item[0]}][{i_trial}")
+        return streamer
     get_token_position_fn = lambda item: item[2]
     generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, args.trial, 10000, None, args.batch_size, 0, args.log_position, args.log_token_range)
 

@@ -180,6 +180,13 @@ def align_embedding(module: nn.Module, state_dict, prefix, local_metadata,
 class Streamer:
     def put(self, tokens: list[int]):
         raise NotImplementedError
+    def estimated_n_token(self):
+        return None
+class WrapperStreamer(Streamer):
+    def __init__(self, streamer: Streamer):
+        self.streamer = streamer
+    def estinated_n_token(self):
+        return self.streamer.estimated_n_token()
 
 class Model(nn.Module):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
