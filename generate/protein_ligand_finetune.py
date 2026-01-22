@@ -6,7 +6,7 @@ from src.data import StackDataset, Subset, index_dataset
 from src.data.tokenizer import SmilesTokenizer
 from src.finetune import get_finetune_data
 from src.generate import generate
-from generate.ligand import LigandStreamer, AtomLigandStreamer
+from src.generate.streamer import LigandStreamer, AtomLigandStreamer
 
 if __name__ == '__main__':
     # Argument

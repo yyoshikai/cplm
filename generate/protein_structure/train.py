@@ -13,7 +13,8 @@ from src.data import CacheDataset, index_dataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.protein import ProteinTokenizeDataset
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
-from src.generate import generate, GeneratorStreamer, coord_streamer
+from src.generate import generate
+from src.generate.streamer import GeneratorStreamer, coord_streamer
 
 class ProteinStructureStreamer(GeneratorStreamer):
     def __init__(self, name: str, prompt_token_path: str, prompt_pdb_path: str, prompt_atom_path: str, new_token_path, new_pdb_path: str, new_coord_path: str, protein: ob.OBMol, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):

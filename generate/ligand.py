@@ -9,9 +9,10 @@ from rdkit.Chem import Conformer
 from rdkit.Chem.rdDetermineBonds import DetermineBondOrders
 from rdkit.Geometry import Point3D
 from src.utils.path import make_pardir
-from src.data.tokenizer import VocEncoder, SmilesTokenizer, FloatTokenizer
+from src.data.tokenizer import VocEncoder, SmilesTokenizer
 from src.data.molecule import element_symbols
-from src.generate import generate, GeneratorStreamer, coord_streamer
+from src.generate import generate
+from src.generate.streamer import GeneratorStreamer, coord_streamer
 
 def array_to_conf(coord: np.ndarray) -> Conformer:
     conf = Conformer()

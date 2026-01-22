@@ -10,7 +10,8 @@ from src.data.datasets.unimol import UniMolPocketDataset
 from src.data.protein import PocketTokenizeDataset, Pocket
 from src.data.protein import Pocket
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
-from src.generate import generate, GeneratorStreamer, coord_streamer
+from src.generate import generate
+from src.generate.streamer import GeneratorStreamer, coord_streamer
 
 
 class PocketStructureStreamer(GeneratorStreamer):
