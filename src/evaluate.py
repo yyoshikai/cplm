@@ -15,7 +15,7 @@ WORKDIR = os.environ.get('WORKDIR', "/workspace")
 T = TypeVar('T')
 
 def rdmol2obmol(rdmol: Chem.Mol) -> OBMol:
-    sdf = Chem.MolTOMolBlock(rdmol) # hydrogens remain
+    sdf = Chem.MolToMolBlock(rdmol) # hydrogens remain
     obc = OBConversion()
     obc.SetInFormat('sdf')
     obmol = OBMol()
@@ -26,7 +26,7 @@ def obmol2rdmol(obmol: OBMol) -> Chem.Mol:
     obc = OBConversion()
     obc.SetOutFormat('sdf')
     sdf = obc.WriteString(obmol)
-    return Chem.MolFromMolBlock(sdf)
+    return Chem.MolFromMolBlock(sdf, removeHs=False)
 
 def eval_vina(ligand: OBMol, protein: OBMol, protein_path: str) -> tuple[float, float]:
     obc = OBConversion()

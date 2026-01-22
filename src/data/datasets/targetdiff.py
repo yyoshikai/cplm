@@ -53,7 +53,7 @@ class TargetDiffScafCDDataset(TupleDataset[tuple[Pocket, Chem.Mol, float, str, s
 
         # Molecule
         with open(ligand_path) as f:
-            mol = Chem.MolFromMolBlock(f.read())
+            mol = Chem.MolFromMolBlock(f.read()) # 260122 removeHs=False を入れたほうがよい？
         
         # Score
         score_env, score_txn = load_lmdb(self.score_lmdb_path)
@@ -111,7 +111,7 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float]]
         # Molecule
         ligand_filename = data['ligand_filename']
         with open(ligand_path) as f:
-            mol = Chem.MolFromMolBlock(f.read())
+            mol = Chem.MolFromMolBlock(f.read()) # 260122 removeHs=False を入れたほうがよい？
         
         # Score
         score_env, score_txn = load_lmdb(self.score_lmdb_path)
