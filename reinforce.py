@@ -16,13 +16,14 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.distributions import Categorical
 from torch.distributed.elastic.multiprocessing.errors import record
-
+from rdkit import Chem
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
 from src.utils.path import cleardir
 from src.utils.time import TimerTqdm
 from src.utils.rdkit import ignore_rdkit_warning
+from src.utils.ddp import dist_all_gather
 from src.evaluate import parse_mol_tokens2
 from src.evaluate import eval_vina, eval_qvina3
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks, log_batch
@@ -35,18 +36,12 @@ WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 def main():
     # arguments
     parser = ArgumentParser()
-    def add_env_args(parser: ArgumentParser):
-        parser.add_argument('--seed', type=int, default=0)
-        parser.add_argument('--test', action='store_true')
-        parser.add_argument('--no-commit', action='store_true')
-        parser.add_argument("--deterministic", action='store_true')
-        parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
     ## reward
     parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', 'qvina', 'dummy'], required=True)
     parser.add_argument('--error-score', type=float, default=None)
     parser.add_argument('--ignore-error', action='store_true')
     parser.add_argument('--min-score', type=float, default=-math.inf)
-    parser.add_argument('--max-len', type=int, default=1000)
+    parser.add_argument('--max-new-token', type=int, default=1000)
     parser.add_argument('--reward-scale', choices=['none', 'all_mean', 'sample_mean', 'rank_mean', 'rank_mean_std'], default='none')
     parser.add_argument('--alpha', type=float, default=0.05) # same as BindGPT
     ## Data
@@ -76,20 +71,24 @@ def main():
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--prefetch-factor', type=int)
     parser.add_argument('--num-score-workers', type=int, default=1)
-    parser.add_argument('--cpu', type=int)
     parser.add_argument('--reset-nan-grad', action='store_true')
     parser.add_argument('--gc', action='store_true')
     parser.add_argument('--gpu-size-gb', type=float, required=True)
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
     ## verbosity
     parser.add_argument('--tqdm-generate', action='store_true')
     parser.add_argument('--record-opt', type=int)
     ## test
+    parser.add_argument('--cpu', type=int)
+    parser.add_argument('--test', action='store_true')
+    parser.add_argument('--no-commit', action='store_true')
+    parser.add_argument("--deterministic", action='store_true')
     parser.add_argument('--use-categorical', action='store_true')
     parser.add_argument('--all-autocast', action='store_true')
     parser.add_argument('--fix-pocket', action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
     parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer'])
-    add_env_args(parser)
     args = parser.parse_args()
     ## set default args
     if args.test: args.studyname+='_test'
@@ -128,24 +127,36 @@ def main():
     else:
         assert args.finetune_patience_val is None
 
-    batch_first = False
     log_sample_step = 3
     do_save_steps = [0, 1, 2, 3, 4, 50, 100]+list(range(200, 1000, 200)) \
             +list(range(1000, args.max_opt, 1000))
 
+    # model
+    init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
+    init_model, voc_encoder = get_model(pargs, None, init_state_path, device)
+    net_model = get_model(pargs, voc_encoder, init_state_path, device)
+    if args.all_autocast:
+        init_model.to(torch.bfloat16)
+        net_model.to(torch.bfloat16)
+    model = DistributedDataParallel(net_model)
+    def get_gpuuse(batch_size: int, length: int):
+        if isinstance(model.module, Model):
+            return model.module.get_gpuuse(batch_size, length, True, 'FLASH')
+        else:
+            return model.module.get_gpuuse(batch_size, length, True)
+    if args.max_prompt_len is not None:
+        logger.info(f"Estimated GPU use={get_gpuuse(args.batch_size, args.max_new_token+args.max_prompt_len)/2**30:.03f}")
+
     # data
     ## vocs from state_dict
-    state_dict = torch.load(f"{finetune_dir}/models/{args.finetune_opt}.pth", weights_only=True)
-    vocs = state_dict['vocs' if 'vocs' in state_dict else 'module.vocs'][1:]
-
-    added_vocs = set(vocs)
-    voc_encoder, raw_data, token_data, position_data, weight_data, center_data, rotation_data,\
+    _voc_encoder, raw_data, token_data, position_data, weight_data, center_data, rotation_data,\
             protein_filename_data, ligand_filename_data, data_log \
-            = get_finetune_data(fargs, 'train', False, True, added_vocs, 'none')
+            = get_finetune_data(fargs, 'train', False, True, voc_encoder.vocs(), 'none')
     logs += data_log
     index_data, token_data = index_dataset(token_data)
-    train_data = StackDataset(index_data, token_data, center_data, rotation_data, 
-            protein_filename_data, ligand_filename_data)
+    train_data = StackDataset(index_data, token_data, position_data, center_data, rotation_data, 
+            protein_filename_data)
+    
     ## Scoring function 最大化したいものとする
     match args.target:
         case 'min_vina':
@@ -189,76 +200,18 @@ def main():
     if rank == MAIN_RANK:
         logger.info(f"git hash={get_git_hash()}")
 
-    # model
-    init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
-    init_model = get_model(pargs, voc_encoder, init_state_path, device)
-    init_model.to(device)
-    net_model = get_model(pargs, voc_encoder, init_state_path, device)
-    net_model.to(device)
-    if args.all_autocast:
-        init_model.to(torch.bfloat16)
-        net_model.to(torch.bfloat16)
-    model = DistributedDataParallel(net_model)
-    model.to(device)
-    from src.utils.ddp import dist_broadcast_tensor
-    def get_gpuuse(batch_size: int, length: int):
-        if isinstance(model.module, Model):
-            return model.module.get_gpuuse(batch_size, length, True, 'FLASH')
-        else:
-            return model.module.get_gpuuse(batch_size, length, True)
-    if args.max_prompt_len is not None:
-        logger.info(f"Estimated GPU use={get_gpuuse(args.batch_size, args.max_len+args.max_prompt_len)/2**30:.03f}")
-
     # DataLoader
-    class ReinforceIter:
-        logger = getLogger(f"{__module__}.{__qualname__}")
-        def __init__(self, dataset: Dataset, num_workers:int, prefetch_factor: int, 
-                batch_size: int, batch_first: bool, padding_value: int, repeat_per_sample: int,
-                fix_pocket: bool):
-            self.size = dist.get_world_size()
-            self.rank = dist.get_rank()
-            self.main_rank = DATA_RANK['train']
-            self.batch_size = batch_size
-            self.repeat_per_sample = repeat_per_sample
-            self.batch_first = batch_first
-            self.padding_value = padding_value
-            assert self.batch_size * self.size % self.repeat_per_sample == 0
-            self.fix_pocket = fix_pocket
-
-            if self.rank == self.main_rank:
-                loader = DataLoader(dataset, batch_size=None, 
-                    sampler=InfiniteRandomSampler(dataset, generator=torch.Generator().manual_seed(args.seed)),
-                    num_workers=num_workers, pin_memory=True, prefetch_factor=prefetch_factor)
-                self.iter = loader.__iter__()
-                if args.max_prompt_len is not None:
-                    self.iter = itr.filterfalse(lambda x: len(x[1]) > args.max_prompt_len, self.iter)
-                self.next_item = None
-                self.step = 0
-
-                if self.fix_pocket:
-                    self.fixed_item = self.iter.__next__()
-                    del self.iter
-
-        def __next__(self) -> tuple[Tensor, Tensor, Tensor]:
-            if self.rank == self.main_rank:
-                all_idxs = []
-                all_items = []
-                for _ in range(self.batch_size*self.size // self.repeat_per_sample):
-                    idx_item = self.fixed_item if self.fix_pocket else self.iter.__next__()
-                    all_idxs += [idx_item[0]] * self.repeat_per_sample
-                    all_items += [idx_item[1:]] * self.repeat_per_sample
-                all_idxs = torch.tensor(all_idxs, dtype=torch.int, device=device)
-                batched_items = [all_items[r*self.batch_size:(r+1)*self.batch_size] for r in range(self.size)]
-            else:
-                all_idxs = batched_items = None
-            all_idxs = dist_broadcast_tensor(all_idxs, device, self.main_rank, (self.batch_size*self.size,), torch.int)
-            items_box = [None]
-            dist.scatter_object_list(items_box, batched_items, src=self.main_rank)
-            tokens, centers, rotations, protein_paths, lfnames = zip(*items_box[0])
-            return all_idxs, tokens, centers, rotations, protein_paths, lfnames
-    train_iter = ReinforceIter(train_data, args.num_workers, 
-        args.prefetch_factor, args.batch_size, batch_first, 
-        voc_encoder.pad_token, args.generate_per_sample, args.fix_pocket)
+    assert args.batch_size * ddp_size % args.generate_per_sample == 0
+    if rank == DATA_RANK['train']:
+        loader = DataLoader(train_data, batch_size=None, 
+            sampler=InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed)),
+            num_workers=args.num_workers, pin_memory=True, prefetch_factor=args.prefetch_factor)
+        train_iter = loader.__iter__()
+        if args.max_prompt_len is not None:
+            train_iter = itr.filterfalse(lambda x: len(x[1]) > args.max_prompt_len, train_iter)
+        if args.fix_pocket:
+            train_fixed_item = train_iter.__next__()
+            del train_iter
 
     # optimizer
     optimizer, scheduler = get_optimizer_scheduler(model, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, 'optimizer' in args.check)
@@ -289,22 +242,28 @@ def main():
 
         # get batch
         step_timer.start('get_batch')
-        logger.debug(f"step[{step}] get_batch started.")
-        all_idxs, prompt_tokens, centers, rotations, protein_paths, lfnames= train_iter.__next__()
+        if rank == DATA_RANK['train']:
+            all_items = []
+            for _ in range(args.batch_size*ddp_size // args.generate_per_sample):
+                all_items += [train_fixed_item if args.fix_pocket else train_iter.__next__()] * args.generate_per_sample
+            batched_items = [all_items[r*args.batch_size:(r+1)*args.batch_size] for r in range(ddp_size)]
+        else:
+            batched_items = None
+        items_box = [None]
+        dist.scatter_object_list(items_box, batched_items, src=DATA_RANK['train'])
+        idxs, prompt_tokens, positions, centers, rotations, protein_paths = zip(*items_box[0])
+        all_idxs = torch.cat(dist_all_gather(torch.tensor(idxs, dtype=torch.int, device=device)))
         prompt_sizes = [len(token) for token in prompt_tokens]
-        prompt_batch = pad_sequence(prompt_tokens, False, voc_encoder.pad_token)
-        prompt_batch = prompt_batch.to(device)
-        L, B = prompt_batch.shape
 
         with torch.autocast('cuda', torch.bfloat16) if args.all_autocast else nullcontext():
             # generate sample
             step_timer.start('generate')
-            logger.debug(f"step[{step}] generate started.")
             model.eval()
+            streamers = LigandStreamer()
             with torch.inference_mode():
-                outputs = net_model.generate(prompt_batch, '[END]', args.max_len, voc_encoder.pad_token, args.tqdm_generate) # [B, L]
+                outputs = net_model.generate2(prompt_tokens, positions=positions, streamers=None, max_new_token=args.max_new_token)
 
-            out_batch = pad_sequence([torch.cat([prompt.to(device), output]) for prompt, output in zip(prompt_tokens, outputs)], batch_first, padding_value=voc_encoder.pad_token) # [L, B]
+            out_batch = pad_sequence([torch.cat([prompt.to(device), output]) for prompt, output in zip(prompt_tokens, outputs)], batch_first=False, padding_value=voc_encoder.pad_token) # [L, B]
             Lo, B = out_batch.shape
             weight = torch.zeros((Lo-1, B), device=device, dtype=torch.float) # [Lo-1, B]
             for b, (prompt_size, output) in enumerate(zip(prompt_sizes, outputs)):
@@ -319,7 +278,6 @@ def main():
                 ## check distribution
                 logger.debug(f"step[{step}]{all_idxs=}")
                 logger.debug(f"step[{step}]{protein_paths=}")
-                logger.debug(f"step[{step}]{lfnames=}")
                 logger.debug(f"step[{step}]{centers=}")
                 for b, output in enumerate(outputs):
                     token_logger.debug(f"step[{step}]output[{b}]={voc_encoder.decode(output.tolist())}")
@@ -336,7 +294,6 @@ def main():
 
                     center = centers[idx].numpy()
                     rotation = rotations[idx].numpy()
-                    lfname = lfnames[idx]
                     protein_path = protein_paths[idx]
                     if do_save:
                         eval_dir = f"{result_dir}/eval_vina/{step}/{rank}/{idx}"
@@ -344,11 +301,10 @@ def main():
                     else:
                         eval_dir = f"{result_dir}/eval_vina_tmp/{rank}/{idx}"
 
-                    score = np.nan
                     out_tokens = ['[LIGAND]']+voc_encoder.decode(outputs[idx].tolist())
 
                     if do_save:
-                        info = {'protein_path': protein_path, 'lfname': lfname, 'idx': idx, 
+                        info = {'protein_path': protein_path, 'idx': idx, 
                                 'center': center.tolist(), 'rotation': rotation.tolist()}
                         with open(f"{eval_dir}/info.yaml", 'w') as f:
                             yaml.dump(info, f)
@@ -494,7 +450,7 @@ def main():
         optimizer.step()
         optimizer.zero_grad()
         step += 1
-        step_recorder.record(batch_size=B, max_len=L, lr=scheduler.get_last_lr()[0], 
+        step_recorder.record(batch_size=B, max_len=max(prompt_sizes), lr=scheduler.get_last_lr()[0], 
                 memory=psutil.virtual_memory().used/(2**30), 
                 reward_loss=reward_loss, kl_loss=kl_loss)
         scheduler.step()
