@@ -132,6 +132,20 @@ def main():
     do_save_steps = [0, 1, 2, 3, 4, 50, 100]+list(range(200, 1000, 200)) \
             +list(range(1000, args.max_opt, 1000))
 
+    
+    # Environment
+    result_dir = f"reinforce/results/{args.studyname}"
+    logger, token_logger, rank, device = set_env(result_dir, args, logs, 
+            subdirs=['models'])
+    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
+    for i in range(args.batch_size):
+        os.makedirs(f"{result_dir}/eval_vina_tmp/{rank}/{i}", exist_ok=True)
+    ignore_rdkit_warning()
+    ## check generate_per_sample
+    ddp_size = dist.get_world_size()
+    if rank == MAIN_RANK:
+        logger.info(f"git hash={get_git_hash()}")
+
     # model
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
     init_model, voc_encoder = get_model(pargs, None, init_state_path, device)
@@ -187,20 +201,6 @@ def main():
             error_score = 0
     if args.error_score is not None:
         error_score = args.error_score
-
-    # Environment
-    result_dir = f"reinforce/results/{args.studyname}"
-    logger, token_logger, rank, device = set_env(result_dir, args, logs, 
-            subdirs=['models'])
-    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
-    for i in range(args.batch_size):
-        os.makedirs(f"{result_dir}/eval_vina_tmp/{rank}/{i}", exist_ok=True)
-    ignore_rdkit_warning()
-    ## check generate_per_sample
-    ddp_size = dist.get_world_size()
-
-    if rank == MAIN_RANK:
-        logger.info(f"git hash={get_git_hash()}")
 
     # DataLoader
     assert args.batch_size * ddp_size % args.generate_per_sample == 0
