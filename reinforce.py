@@ -165,7 +165,7 @@ def main():
     # data
     ## vocs from state_dict
     _voc_encoder, raw_data, protein_data, token_data, position_data, weight_data, center_data, data_log \
-            = get_finetune_data(fargs, 'train', False, True, voc_encoder.vocs(), 'none')
+            = get_finetune_data(fargs, 'train', False, True, set(voc_encoder.i2voc[1:]), 'none')
     protein_pdb_data = Protein2PDBDataset(protein_data)
     logs += data_log
     index_data, token_data = index_dataset(token_data)

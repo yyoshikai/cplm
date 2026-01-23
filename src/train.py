@@ -246,7 +246,7 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
-def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device) -> Model | MambaModel | tuple[VocEncoder, Model|MambaModel]:
+def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device) -> Model | MambaModel | tuple[Model|MambaModel, VocEncoder]:
 
     if init_state_path is not None:
         state = remove_module(torch.load(init_state_path, map_location=device, weights_only=True))
