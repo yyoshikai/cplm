@@ -30,7 +30,7 @@ from src.train import set_env, get_model, get_optimizer_scheduler, get_process_r
 from src.model import Model
 from src.finetune import get_finetune_data
 from src.data.collator import solve_increasing_fn_left
-from src.generate.streamer import LigandStreamer, TokenWriteStreamer, TokenSaveStreamer
+from src.generate.streamer import LigandStreamer, TokenWriteStreamer, TokenSaveStreamer, TimeLogStreamer
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 @record
@@ -76,14 +76,13 @@ def main():
     parser.add_argument('--gc', action='store_true')
     parser.add_argument('--gpu-size-gb', type=float, required=True)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
+    parser.add_argument('--commit', action='store_false', dest='no_commit')
     ## verbosity
     parser.add_argument('--tqdm-generate', action='store_true')
     parser.add_argument('--record-opt', type=int)
     ## test
     parser.add_argument('--cpu', type=int)
     parser.add_argument('--test', action='store_true')
-    parser.add_argument('--no-commit', action='store_true')
     parser.add_argument("--deterministic", action='store_true')
     parser.add_argument('--use-categorical', action='store_true')
     parser.add_argument('--all-autocast', action='store_true')
@@ -96,6 +95,7 @@ def main():
     if args.record_opt is None:
         args.record_opt = 1 if args.test else 500
     args.gpu_size = args.gpu_size_gb * (2**30)
+    args.sdp_kernel = 'FLASH'
 
     logs = []
 
@@ -138,8 +138,6 @@ def main():
     logger, token_logger, rank, device = set_env(result_dir, args, logs, 
             subdirs=['models'])
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
-    for i in range(args.batch_size):
-        os.makedirs(f"{result_dir}/eval_vina_tmp/{rank}/{i}", exist_ok=True)
     ignore_rdkit_warning()
     ## check generate_per_sample
     ddp_size = dist.get_world_size()
@@ -210,7 +208,7 @@ def main():
             num_workers=args.num_workers, pin_memory=True, prefetch_factor=args.prefetch_factor)
         train_iter = loader.__iter__()
         if args.max_prompt_len is not None:
-            train_iter = itr.filterfalse(lambda x: len(x[1]) > args.max_prompt_len, train_iter)
+            train_iter = itr.filterfalse(lambda x: len(x[2]) > args.max_prompt_len, train_iter)
         if args.fix_pocket:
             train_fixed_item = train_iter.__next__()
             del train_iter
@@ -245,9 +243,10 @@ def main():
 
         # get batch
         step_timer.start('get_batch')
+
         if rank == DATA_RANK['train']:
             all_items = []
-            for _ in range(args.batch_size*ddp_size // args.generate_per_sample):
+            for si in range(args.batch_size*ddp_size // args.generate_per_sample):
                 all_items += [train_fixed_item if args.fix_pocket else train_iter.__next__()] * args.generate_per_sample
             batched_items = [all_items[r*args.batch_size:(r+1)*args.batch_size] for r in range(ddp_size)]
         else:
@@ -257,10 +256,12 @@ def main():
         idxs, pdbs, prompt_tokens, positions = zip(*items_box[0])
         all_idxs = torch.cat(dist_all_gather(torch.tensor(idxs, dtype=torch.int, device=device)))
         prompt_sizes = [len(token) for token in prompt_tokens]
+        B = len(prompt_tokens)
 
+        step_timer.start('generate')
+        if is_starting: logger.debug(f"step[{step}] generate started.")
         with torch.autocast('cuda', torch.bfloat16) if args.all_autocast else nullcontext():
             # generate sample
-            step_timer.start('generate')
             model.eval()
             ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, fargs.coord_range, voc_encoder, False, fargs.h_atom, fargs.h_coord, None) for _ in range(B)]
             streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in ligand_streamers]
@@ -270,6 +271,8 @@ def main():
                         new_token_path=f"{result_dir}/generation/{step}/{rank}_{idx}/new_token.txt", 
                         voc_encoder=voc_encoder
                     ) for idx, streamer in enumerate(streamers)]
+            if is_starting:
+                streamers = [TimeLogStreamer(streamer, str(b)) for b, streamer in enumerate(streamers)]
             with torch.inference_mode():
                 net_model.generate2(prompt_tokens, positions, streamers, args.max_new_token)
 

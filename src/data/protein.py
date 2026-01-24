@@ -103,7 +103,8 @@ class Protein2PDBDataset(WrapDataset[str]):
         self.obc.SetOutFormat('pdb')
     def __getitem__(self, idx: int):
         protein = self.dataset[idx]
-        return self.obc.WriteString(protein)
+        pdb = self.obc.WriteString(protein)
+        return pdb
 
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。

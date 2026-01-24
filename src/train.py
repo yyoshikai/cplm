@@ -171,7 +171,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
             'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
             'forward_backward_time', 'optimizer'])
-    parser.add_argument('--no-commit', action='store_true')
+    parser.add_argument('--commit', action='store_false', dest='no_commit')
 
 def add_pretrain_args(parser: ArgumentParser):
     """
