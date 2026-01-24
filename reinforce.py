@@ -16,7 +16,6 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.distributions import Categorical
 from torch.distributed.elastic.multiprocessing.errors import record
 from rdkit import Chem
-from openbabel.openbabel import OBMol, OBConversion
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
@@ -30,8 +29,28 @@ from src.train import set_env, get_model, get_optimizer_scheduler, get_process_r
 from src.model import Model
 from src.finetune import get_finetune_data
 from src.data.collator import solve_increasing_fn_left
-from src.generate.streamer import LigandStreamer, TokenWriteStreamer, TokenSaveStreamer, TimeLogStreamer
+from src.generate.streamer import LigandStreamer, TokenWriteStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
+
+## Scoring function 最大化したいものとする
+
+def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int):
+    match target:
+        case 'min_vina':
+            score, min_score = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
+            return -min_score if min_score is not None else np.nan
+        case 'vina':
+            score, min_score = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
+            return -score if min_score is not None else np.nan
+        case 'mw_max':
+            return rdMolDescriptors.CalcExactMolWt(lig_rdmol)
+        case 'qvina':
+            with open(f"{out_dir}/rec_input.pdb", 'w') as f:
+                f.write(rec_pdb)
+            score = eval_qvina(lig_rdmol, f"{out_dir}/rec_input.pdb", out_dir, timeout=60, cpu=cpu)
+            return -score if score is not None else np.nan
+        case 'dummy':
+            return random.random()
 
 @record
 def main():
@@ -101,11 +120,13 @@ def main():
 
     # get finetune info
     finetune_dir = f"finetune/results/{args.finetune_name}"
-    fargs = yaml.safe_load(open(f"{finetune_dir}/args.yaml"))
+    with open(f"{finetune_dir}/args.yaml") as f:
+        fargs = yaml.safe_load(f)
     fargs = Namespace(**fargs)
     pname = fargs.pretrain_name
     pretrain_dir = f"training/results/{pname}"
-    pargs = Namespace(**yaml.safe_load(open(f"{pretrain_dir}/args.yaml")))
+    with open(f"{pretrain_dir}/args.yaml") as f:
+        pargs = Namespace(**yaml.safe_load(f))
 
     ## check finetuning
     assert fargs.no_score
@@ -168,35 +189,9 @@ def main():
     logs += data_log
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
-    
+
     ## Scoring function 最大化したいものとする
-    obc = OBConversion()
-    match args.target:
-        case 'min_vina':
-            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
-                score, min_score = eval_vina(rdmol2obmol(lig_rdmol), rec_obmol, f"{out_dir}/protein_h.pdbqt")
-                return -min_score if min_score is not None else np.nan
-            error_score = -50
-        case 'vina':
-            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
-                score, min_score = eval_vina(rdmol2obmol(lig_rdmol), rec_obmol, f"{out_dir}/protein_h.pdbqt")
-                return -score if min_score is not None else np.nan
-            error_score = -50
-        case 'mw_max':
-            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
-                return rdMolDescriptors.CalcExactMolWt(lig_rdmol)
-            error_score = 0
-        case 'qvina':
-            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
-                obc.SetOutFormat('pdb')
-                obc.WriteFile(rec_obmol, f"{out_dir}/rec_input.pdb")
-                score = eval_qvina(lig_rdmol, f"{out_dir}/rec_input.pdb", out_dir, timeout=60, cpu=args.cpu)
-                return -score if score is not None else np.nan
-            error_score = -50
-        case 'dummy':
-            def get_score(lig_rdmol: Chem.Mol, rec_obmol: OBMol, out_dir: str):
-                return random.random()
-            error_score = 0
+    error_score = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}[args.target]
     if args.error_score is not None:
         error_score = args.error_score
 
@@ -255,6 +250,8 @@ def main():
         dist.scatter_object_list(items_box, batched_items, src=DATA_RANK['train'])
         idxs, pdbs, prompt_tokens, positions = zip(*items_box[0])
         all_idxs = torch.cat(dist_all_gather(torch.tensor(idxs, dtype=torch.int, device=device)))
+        prompt_tokens = [token.to(device) for token in prompt_tokens]
+        positions = [position.tolist() for position in positions]
         prompt_sizes = [len(token) for token in prompt_tokens]
         B = len(prompt_tokens)
 
@@ -263,8 +260,9 @@ def main():
         with torch.autocast('cuda', torch.bfloat16) if args.all_autocast else nullcontext():
             # generate sample
             model.eval()
-            ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, fargs.coord_range, voc_encoder, False, fargs.h_atom, fargs.h_coord, None) for _ in range(B)]
-            streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in ligand_streamers]
+            streamers = ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, fargs.coord_range, voc_encoder, False, not fargs.no_lig_h_atom, not fargs.no_lig_h_coord, None) for idx in range(B)]
+            streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in streamers]
+            streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in streamers]
             if do_save:
                 streamers = [TokenWriteStreamer(streamer, 
                         prompt_token_path=f"{result_dir}/generation/{step}/{rank}_{idx}/prompt_token.txt", 
@@ -272,25 +270,25 @@ def main():
                         voc_encoder=voc_encoder
                     ) for idx, streamer in enumerate(streamers)]
             if is_starting:
-                streamers = [TimeLogStreamer(streamer, str(b)) for b, streamer in enumerate(streamers)]
+                streamers = [TimeLogStreamer(streamer, str(b), 5.0) for b, streamer in enumerate(streamers)]
             with torch.inference_mode():
                 net_model.generate2(prompt_tokens, positions, streamers, args.max_new_token)
 
             out_batch = pad_sequence([
-                torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens, device=device, dtype=torch.long)
+                torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens)
                 for token_streamer in token_streamers
-            ], padding_value=voc_encoder.pad_token)
+            ], padding_value=voc_encoder.pad_token).to(device=device, dtype=torch.long)
             weight = torch.zeros_like(out_batch, dtype=torch.float)[:-1] # [Lo-1, B]
             sizes = {}
             for b, token_streamer in enumerate(token_streamers):
                 prompt_size, new_size = len(token_streamer.prompt_tokens), len(token_streamer.new_tokens)
                 weight[prompt_size-1:prompt_size+new_size-1, b] = 1.0
                 sizes[f'prompt {b}'] = prompt_size; sizes[f'output {b}'] = new_size
+            position_batch = pad_sequence([
+                torch.tensor(position+position_streamer.new_positions) for position, position_streamer
+                in zip(positions, position_streamers)
+            ], padding_value=0).to(device=device, dtype=torch.long)
             size_recorder.record(**sizes)
-
-            ## Log output
-            if step < log_sample_step:
-                logger.debug(f"step[{step}]{all_idxs=}")
                     
             # Get score
             step_timer.start('get_score')
@@ -300,22 +298,20 @@ def main():
                 valid_scores = []
                 for idx, ligand_streamer in enumerate(ligand_streamers):
 
-                    gen_dir = f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
-
                     lig_mol = ligand_streamer.mol
-                    protein = pdb2obmol(pdbs[idx])
-                    errors.append(ligand_streamer.error or '')
-                    if lig_mol is None: continue
-
+                    errors.append('' if ligand_streamer.error is None else ligand_streamer.error)
+                    if ligand_streamer.error is not None: 
+                        continue
+                    out_dir = f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
                     if args.num_score_workers >= 2:
-                        futures.append(e.submit(get_score, lig_rdmol=lig_mol, rec_obmol=protein, out_dir=gen_dir))
+                        futures.append(e.submit(get_score, target=args.target, lig_rdmol=lig_mol, rec_pdb=pdbs[idx], out_dir=out_dir, cpu=args.cpu))
                     else:
-                        valid_scores.append(get_score(lig_mol, protein, gen_dir))
+                        valid_scores.append(get_score(args.target, lig_mol, pdbs[idx], out_dir, args.cpu))
                 if args.num_score_workers >= 2:
                     valid_scores = np.array([f.result() for f in futures])
                 else:
                     valid_scores = np.array(valid_scores)
-
+            print(f"{errors=}, {valid_scores=}", flush=True)
             errors = np.array(errors)
             scores = np.full(len(errors), np.nan)
             scores[errors == ""] = valid_scores
@@ -376,14 +372,15 @@ def main():
                 for mbatch_start in range(0, B, mbatch_size):
                     mslice = slice(mbatch_start, mbatch_start+mbatch_size)
                     out_mbatch = out_batch[:, mslice]
+                    position_mbatch = position_batch[:,mslice]
                     weight_mbatch = weight[:, mslice]
                     scores_mbatch = scores[mslice]
                     with (nullcontext() if args.all_autocast else torch.autocast('cuda', torch.bfloat16)), \
                             sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                         with torch.inference_mode():
-                            init_logits = init_model(out_mbatch[:-1]) # [L, B, N]
+                            init_logits = init_model(out_mbatch[:-1], position_mbatch[:-2]) # [L, B, N]
                             init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
-                        logits = model(out_mbatch[:-1]) # [Lo-1, B, T]
+                        logits = model(out_mbatch[:-1], position_mbatch[:-2]) # [Lo-1, B, T]
                         if args.use_categorical:
                             cat = Categorical(logits=logits) # ~[Lo-1, B]
                             log_probs = cat.log_prob(out_mbatch[1:]) # [Lo-1, B]
@@ -453,7 +450,7 @@ def main():
 
         if is_starting:
             logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
-            torch.cuda.reset_max_memory_allocated()
+            torch.cuda.reset_peak_memory_stats()
 
         if step == log_sample_step:
             logger.info("RDKit logger will be disabled from now on.")

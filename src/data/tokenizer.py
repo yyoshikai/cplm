@@ -163,7 +163,9 @@ class StringTokenizer2(Tokenizer):
     
 class SmilesTokenizer(StringTokenizer):
     def __init__(self):
-        super().__init__(open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt").read().splitlines())
+        with open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt") as f:
+            tokens = f.read().splitlines()
+        super().__init__(tokens)
 
 class FloatTokenizer(Tokenizer):
     

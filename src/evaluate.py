@@ -23,10 +23,16 @@ def rdmol2obmol(rdmol: Chem.Mol) -> OBMol:
     return obmol
 
 def obmol2rdmol(obmol: OBMol) -> Chem.Mol:
+    """
+    MolFromMolBlockだとPropが無視される。
+    
+    """
     obc = OBConversion()
     obc.SetOutFormat('sdf')
     sdf = obc.WriteString(obmol)
-    return Chem.MolFromMolBlock(sdf, removeHs=False)
+    ms = Chem.SDMolSupplier()
+    ms.SetData(sdf, removeHs=False)
+    return next(ms)
 
 def pdb2obmol(pdb: str) -> OBMol:
     obc = OBConversion()
@@ -108,11 +114,12 @@ def eval_qvina(ligand: Chem.Mol, rec_pdb_path: str, out_dir: str, use_uff=True, 
         obc.SetInFormat('pdbqt')
         obc.ReadFile(lig_out_obmol, f"{out_dir}/lig_out.pdbqt")
         lig_out_rdmol = obmol2rdmol(lig_out_obmol)
-        affinity = lig_out_rdmol.GetProp('REMARK').splitlines()[0].split()[2]
+        affinity = float(lig_out_rdmol.GetProp('REMARK').splitlines()[0].split()[2])
         return affinity
-    except:
+    except Exception as e:
         log('qvina_error')
         logger.info(f'[Error] Vina error at {out_dir}')
+        logger.info(f'Error={type(e).__name__}{e.args}')
         if proc is not None:
             logger.info(f"output: ")
             logger.info(proc.stdout.read().decode())
