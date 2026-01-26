@@ -9,6 +9,7 @@ from vina import Vina
 from openbabel.openbabel import OBMol, OBConversion
 from .prepare_receptor4 import main as prepare_receptor4_func
 from .utils.time import wtqdm
+from .utils.path import make_pardir
 logger = getLogger(__name__)
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 
@@ -41,13 +42,44 @@ def pdb2obmol(pdb: str) -> OBMol:
     obc.ReadString(obmol, pdb)
     return obmol
 
-def eval_vina(ligand: OBMol, protein: OBMol, protein_pdbqt_path: str) -> tuple[float, float]:
+def sdf2obmol(sdf: str) -> OBMol:
+    obc = OBConversion()
+    obc.SetInFormat('sdf')
+    obmol = OBMol()
+    obc.ReadString(obmol, sdf)
+    return obmol
+
+def obmol2pdb(obmol: OBMol) -> str:
+    obc = OBConversion()
+    obc.SetOutFormat('pdb')
+    return obc.WriteString(obmol)
+
+def sdf_path2obmol(sdf_path: str) -> OBMol:
+    with open(sdf_path) as f:
+        return sdf2obmol(f.read())
+
+def eval_vina(ligand: OBMol|str, protein: OBMol|str, protein_pdbqt_path: str) -> tuple[float, float]:
+    """
+    cf.ProcessPoolExecutorに投げられるよう, strも受け付ける。
+
+    Parameters
+    ----------
+    ligand: OBMol|str
+        OBMol object or SDF string
+    protein: OBMol|str
+        OBMol object or PDB string
+    """
+    if isinstance(ligand, str):
+        ligand = sdf2obmol(ligand)
+    if isinstance(protein, str):
+        protein = pdb2obmol(protein)
+
     obc = OBConversion()
     obc.SetOutFormat('pdbqt')
-    
     ligand.AddHydrogens()
     ligand_str = obc.WriteString(ligand)
     protein.AddHydrogens()
+    make_pardir(protein_pdbqt_path)
     obc.WriteFile(protein, protein_pdbqt_path)
 
     v = Vina(verbosity=0)
@@ -58,7 +90,14 @@ def eval_vina(ligand: OBMol, protein: OBMol, protein_pdbqt_path: str) -> tuple[f
     min_score = v.optimize()[0]
     return score, min_score
 
-def eval_qvina(ligand: Chem.Mol, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False, cpu: int|None = None):
+def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False, cpu: int|None = None):
+    """
+    
+    
+    """
+    if isinstance(ligand, str):
+        ligand = Chem.MolFromMolBlock(ligand)
+
     def log(name):
         if pbar is not None:
             pbar.start(name)

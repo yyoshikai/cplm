@@ -195,7 +195,7 @@ class Streamer:
 class WrapperStreamer(Streamer):
     def __init__(self, streamer: Streamer):
         self.streamer = streamer
-    def estinated_n_token(self):
+    def estimated_n_token(self):
         return self.streamer.estimated_n_token()
 
 class Model(nn.Module):

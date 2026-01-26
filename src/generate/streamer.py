@@ -1,5 +1,6 @@
 import os
 import itertools as itr
+import concurrent.futures as cf
 from time import time
 from collections.abc import Generator
 from logging import getLogger
@@ -8,11 +9,13 @@ from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Chem.rdDetermineBonds import DetermineBondOrders
 from rdkit.Geometry import Point3D
+from openbabel.openbabel import OBMol, OBConversion
 from src.utils import should_show
 from src.utils.path import make_pardir
 from src.model import Streamer, WrapperStreamer
 from src.data.molecule import element_symbols
 from src.data.tokenizer import FloatTokenizer, SmilesTokenizer, VocEncoder
+from src.evaluate import eval_vina, eval_qvina, obmol2pdb
 
 def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool, center: np.ndarray|None) -> Generator[tuple[bool, list[int], list[int]], list[int], tuple[np.ndarray|None, int, str|None]]:
     """
@@ -25,7 +28,6 @@ def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, v
     error: str|None
         None if no error
     """
-
 
     coord_tokenizer = FloatTokenizer('', -coord_range, coord_range)
     if no_token_range:
@@ -248,3 +250,45 @@ class AtomLigandStreamer(GeneratorStreamer):
                 self.logger.warning(f"Error while making atom: {e.args[0]}")
                 self.mol = None
         yield False, [pos], [self.voc_encoder.voc2i['[END]']]
+
+class EvaluateStreamer(WrapperStreamer):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, streamer: LigandStreamer|AtomLigandStreamer, e: cf.ProcessPoolExecutor, protein: OBMol, protein_pdbqt_path: str, qvina_out_dir: str, qvina_cpu: int):
+        super().__init__(streamer)
+        self.protein = protein
+        self.protein_pdbqt_path = protein_pdbqt_path
+        self.qvina_out_dir = qvina_out_dir
+        self.vina_future = self.qvina_future = None
+        self.vina = self.min_vina = self.qvina = None
+        self.e = e
+        self.qvina_cpu = qvina_cpu
+    def put(self, tokens: list[int]):
+        is_remain, positions, token_range = self.streamer.put(tokens)
+        if not is_remain:
+            self.logger.debug("Evaluating vina...")
+            sdf_path = self.streamer.new_sdf_path
+            if os.path.exists(sdf_path):
+                with open(sdf_path) as f:
+                    lig_sdf = f.read()
+                protein_pdb = obmol2pdb(self.protein)
+                os.makedirs(self.qvina_out_dir, exist_ok=True)
+                with open(f"{self.qvina_out_dir}/rec.pdb", 'w') as f:
+                    f.write(protein_pdb)
+                self.vina_future = self.e.submit(eval_vina, 
+                    ligand=lig_sdf, 
+                    protein=protein_pdb, 
+                    protein_pdbqt_path=self.protein_pdbqt_path
+                )
+                self.qvina_future = self.e.submit(eval_qvina, 
+                    ligand=lig_sdf, 
+                    rec_pdb_path=f"{self.qvina_out_dir}/rec.pdb", 
+                    out_dir=self.qvina_out_dir,
+                    cpu=self.qvina_cpu
+                )
+        return is_remain, positions, token_range
+    def result(self):
+        if self.vina_future is not None:
+            self.vina, self.min_vina = self.vina_future.result()
+        if self.qvina_future is not None:
+            self.qvina = self.qvina_future.result()
+

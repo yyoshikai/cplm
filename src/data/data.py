@@ -200,6 +200,9 @@ def is_main_worker() -> bool:
     worker_info = get_worker_info()
     return worker_info is None or worker_info.id == 0
 
+def aggregate(value: T_co, fn: Callable[[T_co, T_co], T_co], )
+    
+    
 class WorkerAggregator(Generic[T_co]):
     logger = getLogger(f'{__module__}.{__qualname__}')
     def __init__(self, init_value: T_co, aggregate_fn: Callable[[T_co, T_co], T_co]):

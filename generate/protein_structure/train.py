@@ -66,7 +66,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
         self.n_generated_atom = len(orders)
 
         start_position = 2 if self.atom_order else len(prompt_tokens)
-        coords, pos, error = yield from coord_streamer(len(orders), start_position, self.new_coord_path, self.voc_encoder, self.coord_range, self.no_token_range, self.atom_order)
+        coords, pos, error = yield from coord_streamer(len(orders), start_position, self.new_coord_path, self.voc_encoder, self.coord_range, self.no_token_range, self.atom_order, center=None)
 
         if coords is not None:
             for i_coord, order in enumerate(orders):

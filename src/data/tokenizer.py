@@ -1,5 +1,5 @@
 import itertools, re, math
-from collections.abc import Iterable
+from collections.abc import Iterable, Callable
 from collections import defaultdict
 from logging import getLogger
 from typing import TypeVar
@@ -67,6 +67,7 @@ class Tokenizer:
     
     def vocs(self) -> set[str]:
         raise NotImplementedError
+    
 
 class ProteinAtomTokenizer(Tokenizer):
     unk_logger = getLogger(f"unk.{__module__}.{__qualname__}")
