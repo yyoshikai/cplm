@@ -19,7 +19,7 @@ from rdkit import Chem
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
-from src.utils.path import cleardir
+from src.utils.path import cleardir, make_pardir
 from src.utils.time import TimerTqdm
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.ddp import dist_all_gather
@@ -303,6 +303,7 @@ def main():
                     if ligand_streamer.error is not None: 
                         continue
                     out_dir = f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
+                    os.makedirs(out_dir, exist_ok=True)
                     if args.num_score_workers >= 2:
                         futures.append(e.submit(get_score, target=args.target, lig_rdmol=lig_mol, rec_pdb=pdbs[idx], out_dir=out_dir, cpu=args.cpu))
                     else:
@@ -311,7 +312,6 @@ def main():
                     valid_scores = np.array([f.result() for f in futures])
                 else:
                     valid_scores = np.array(valid_scores)
-            print(f"{errors=}, {valid_scores=}", flush=True)
             errors = np.array(errors)
             scores = np.full(len(errors), np.nan)
             scores[errors == ""] = valid_scores

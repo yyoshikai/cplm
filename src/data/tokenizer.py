@@ -93,11 +93,6 @@ class ProteinAtomTokenizer(Tokenizer):
 
         # Log unknown tokens
         if (self.n_tokenized-len(atoms)).bit_length() < self.n_tokenized.bit_length():
-            self.unk_count_agg.add(self.unk_count)
-            self.n_tokenized_agg.add(self.n_tokenized)
-            self.unk_count.clear()
-            self.n_tokenized = 0
-
             if is_main_worker():
                 if len(self.unk_count) == 0:
                     self.unk_logger.info(f"No unknown atoms in {self.n_tokenized} atoms.")
@@ -187,8 +182,7 @@ class FloatTokenizer(Tokenizer):
         self.n_tokenized += 1
         self.n_tokenized_total += 1
         if should_show(self.n_tokenized_total, math.inf):
-            if n is not None:
-                self.unk_logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
+            self.unk_logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
         x = self.float_format.format(x)
         xi = x[:-4]
         xf = x[-4:]
