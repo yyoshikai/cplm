@@ -268,7 +268,7 @@ def main():
             streamers = ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, fargs.coord_range, voc_encoder, False, not fargs.no_lig_h_atom, not fargs.no_lig_h_coord, None) for idx in range(B)]
             streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in streamers]
             streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in streamers]
-            if do_save:
+            if False:
                 streamers = [TokenWriteStreamer(streamer, 
                         prompt_token_path=f"{result_dir}/generation/{step}/{rank}_{idx}/prompt_token.txt", 
                         new_token_path=f"{result_dir}/generation/{step}/{rank}_{idx}/new_token.txt", 
