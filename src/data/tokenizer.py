@@ -9,7 +9,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from .data import WorkerAggregator, is_main_worker, WrapDataset, TupleDataset, WrapTupleDataset
+from .data import is_main_worker, WrapDataset, TupleDataset, WrapTupleDataset
 from ..utils import should_show
 from ..utils.path import WORKDIR
 
@@ -78,12 +78,6 @@ class ProteinAtomTokenizer(Tokenizer):
         # Process-specific attributes
         self.n_tokenized = 0
         self.unk_count = defaultdict(int)
-        def agg_count(x: defaultdict[str, int], y: defaultdict[str, int]):
-            for k, v in y.items():
-                x[k] += v
-            return x
-        self.unk_count_agg = WorkerAggregator(defaultdict(int), agg_count)
-        self.n_tokenized_agg = WorkerAggregator(0, lambda x, y: x+y)
 
     def tokenize(self, atoms: list[str]):
         tokens = []
@@ -105,13 +99,11 @@ class ProteinAtomTokenizer(Tokenizer):
             self.n_tokenized = 0
 
             if is_main_worker():
-                unk_count = self.unk_count_agg.get()
-                n_tokenized = self.n_tokenized_agg.get()
-                if len(unk_count) == 0:
-                    self.unk_logger.info(f"No unknown atoms in {n_tokenized} atoms.")
+                if len(self.unk_count) == 0:
+                    self.unk_logger.info(f"No unknown atoms in {self.n_tokenized} atoms.")
                 else:
-                    self.unk_logger.info(f"Unknown atoms in {n_tokenized} atoms:")
-                    for atom, n in sorted(unk_count.items(), key=lambda x: x[1], reverse=True):
+                    self.unk_logger.info(f"Unknown atoms in {self.n_tokenized} atoms:")
+                    for atom, n in sorted(self.unk_count.items(), key=lambda x: x[1], reverse=True):
                         self.unk_logger.info(f"  {atom}: {n}")
         
         return tokens
@@ -180,8 +172,6 @@ class FloatTokenizer(Tokenizer):
         self.n_tokenized = 0
         self.n_over = 0
         self.n_under = 0
-        self.n_agg = WorkerAggregator((0, 0, 0), 
-                lambda x, y: tuple(x0+y0 for x0, y0 in zip(x, y)))
 
         self.float_format = "{:.0"+str(self.decimal)+"f}"
         self.unk_logger = getLogger(f"unk.src.data.tokenizer.FloatTokenizer.{self.name}")
@@ -197,13 +187,8 @@ class FloatTokenizer(Tokenizer):
         self.n_tokenized += 1
         self.n_tokenized_total += 1
         if should_show(self.n_tokenized_total, math.inf):
-            self.n_agg.add((self.n_tokenized, self.n_over, self.n_under))
-            self.n_tokenized = self.n_over = self.n_under = 0
-
-            n = self.n_agg.get()
             if n is not None:
-                n_tokenized, n_over, n_under = n
-                self.unk_logger.info(f"{n_over}/{n_tokenized} are over vmax, {n_under}/{n_tokenized} are under vmin")
+                self.unk_logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
         x = self.float_format.format(x)
         xi = x[:-4]
         xf = x[-4:]

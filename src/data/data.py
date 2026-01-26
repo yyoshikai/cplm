@@ -200,37 +200,6 @@ def is_main_worker() -> bool:
     worker_info = get_worker_info()
     return worker_info is None or worker_info.id == 0
 
-def aggregate(value: T_co, fn: Callable[[T_co, T_co], T_co], )
-    
-    
-class WorkerAggregator(Generic[T_co]):
-    logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, init_value: T_co, aggregate_fn: Callable[[T_co, T_co], T_co]):
-        
-        # This value is maintained only in main process
-        self.value = init_value
-        self.aggregate_fn = aggregate_fn
-        self.queue = mp.Queue()
-
-    def add(self, value: T_co) -> None:
-        if is_main_worker():
-            self.value = self.aggregate_fn(self.value, value)
-        else:
-            self.queue.put(value)
-
-
-    def get(self) -> Optional[T_co]:
-        if is_main_worker():
-            while True:
-                try:
-                    q_value = self.queue.get(block=False)
-                    self.value = self.aggregate_fn(self.value, q_value)
-                except queue.Empty:
-                    break
-            return self.value
-        return None
-
-
 class RevealIterator(Iterable[T]):
     logger = getLogger(f'dexs.{__module__}.{__qualname__}')
     def __init__(self, iterable: Iterable[T], name):
