@@ -238,7 +238,8 @@ def main():
 
         # get batch
         step_timer.start('get_batch')
-
+        if is_starting:
+            logger.debug("get_batch started.")
         if rank == DATA_RANK['train']:
             all_items = []
             for si in range(args.batch_size*ddp_size // args.generate_per_sample):
@@ -247,7 +248,11 @@ def main():
         else:
             batched_items = None
         items_box = [None]
+        if is_starting:
+            logger.debug("scatter_object_list started.")
         dist.scatter_object_list(items_box, batched_items, src=DATA_RANK['train'])
+        if is_starting:
+            logger.debug("scatter_object_list ended.")
         idxs, pdbs, prompt_tokens, positions = zip(*items_box[0])
         all_idxs = torch.cat(dist_all_gather(torch.tensor(idxs, dtype=torch.int, device=device)))
         prompt_tokens = [token.to(device) for token in prompt_tokens]
