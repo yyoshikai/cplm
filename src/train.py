@@ -177,7 +177,6 @@ def add_pretrain_args(parser: ArgumentParser):
     """
     finetune時にpretrain時のものを使うもの (変えてはいけないもの)
     """
-    # process
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
     # pocket-heavy-coordはデフォルトで入れるようにした。
     parser.add_argument("--lig-randomize", action='store_true')
