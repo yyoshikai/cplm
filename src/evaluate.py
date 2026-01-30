@@ -102,8 +102,16 @@ def eval_vina(ligand: OBMol|str, protein: OBMol|str, protein_pdbqt_path: str) ->
 
 def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False, cpu: int|None = None):
     """
-    
-    
+    Returns
+    -------
+    affinity: float|None
+        If Error, None was returned.
+    error: None|'timeout'|tuple[e, str, str]
+        if no error, Exception was returned.
+    stdout: str|None
+        stdout of qvina command
+    stderr: str|None
+        stderr of qvina command
     """
     if isinstance(ligand, str):
         ligand = Chem.MolFromMolBlock(ligand)
@@ -113,9 +121,8 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
             pbar.start(name)
         if verbose:
             print(f"---{name}---", flush=True)
-    logger = getLogger('eval_qvina')
     log('qvina_prep_mol1')
-    proc = None
+    stdout = stderr = None
     obc = OBConversion()
     try:
         out_dir = os.path.realpath(out_dir)
@@ -156,7 +163,9 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
         while proc.poll() is None:
             if timeout is not None and time()-start > timeout:
                 print(f"qvina subprocess reached timeout({timeout})", flush=True)
-                return None
+                return None, 'timeout', stdout, stderr
+        stdout = proc.stdout.read().decode()
+        stderr = proc.stderr.read().decode()
         
         log('qvina_parse')
         lig_out_obmol = OBMol()
@@ -164,14 +173,6 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
         obc.ReadFile(lig_out_obmol, f"{out_dir}/lig_out.pdbqt")
         lig_out_rdmol = obmol2rdmol(lig_out_obmol)
         affinity = float(lig_out_rdmol.GetProp('REMARK').splitlines()[0].split()[2])
-        return affinity
+        return affinity, None, stdout, stderr
     except Exception as e:
-        log('qvina_error')
-        logger.info(f'[Error] Vina error at {out_dir}')
-        logger.info(f'Error={type(e).__name__}{e.args}')
-        if proc is not None:
-            logger.info(f"output: ")
-            logger.info(proc.stdout.read().decode())
-            logger.info(f"stderr:")
-            logger.info(proc.stderr.read().decode())
-        return None
+        return affinity, e, stdout, stderr

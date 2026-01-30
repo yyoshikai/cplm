@@ -1,14 +1,12 @@
 """
 251028 前処理のコードは消したので, 古いcommit(04fa7c93等)を参照してください。
 """
-import os, gzip
+import gzip
 from typing import Literal
-from time import time
 
-import pandas as pd
 import torch
 from openbabel.openbabel import OBMol, OBConversion
-from prody import parsePDB, confProDy, addMissingAtoms
+from prody import confProDy
 from ..lmdb import PickleLMDBDataset, IntLMDBDataset
 from ..data import TupleDataset
 from rdkit import Chem

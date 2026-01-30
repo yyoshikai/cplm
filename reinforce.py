@@ -47,7 +47,7 @@ def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int)
         case 'qvina':
             with open(f"{out_dir}/rec_input.pdb", 'w') as f:
                 f.write(rec_pdb)
-            score = eval_qvina(lig_rdmol, f"{out_dir}/rec_input.pdb", out_dir, timeout=60, cpu=cpu)
+            score = eval_qvina(lig_rdmol, f"{out_dir}/rec_input.pdb", out_dir, timeout=60, cpu=cpu)[0]
             return -score if score is not None else np.nan
         case 'dummy':
             return random.random()

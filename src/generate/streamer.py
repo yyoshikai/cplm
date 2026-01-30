@@ -291,5 +291,10 @@ class EvaluateStreamer(WrapperStreamer):
         if self.vina_future is not None:
             self.vina, self.min_vina = self.vina_future.result()
         if self.qvina_future is not None:
-            self.qvina = self.qvina_future.result()
+            self.qvina, e, stdout, stderr = self.qvina_future.result()
+            if isinstance(e, Exception):
+                with open(f"{self.qvina_out_dir}/stdout.txt", 'w') as f:
+                    f.write(stdout)
+                with open(f"{self.qvina_out_dir}/stderr.txt", 'w') as f:
+                    f.write(stderr)
 
