@@ -63,7 +63,6 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
             elif isinstance(item, Pocket):
                 coord = item.coord
             elif isinstance(item, OBMol):
-                coord = item.GetCoordinates()
                 coord = get_coord_from_mol(item)
             else:
                 raise ValueError

@@ -10,6 +10,7 @@ from openbabel.openbabel import OBMol, OBConversion
 from .prepare_receptor4 import main as prepare_receptor4_func
 from .utils.time import wtqdm
 from .utils.path import make_pardir
+from .data.protein import get_coord_from_mol
 logger = getLogger(__name__)
 WORKDIR = os.environ.get('WORKDIR', "/workspace")
 
@@ -71,16 +72,25 @@ def eval_vina(ligand: OBMol|str, protein: OBMol|str, protein_pdbqt_path: str) ->
     """
     if isinstance(ligand, str):
         ligand = sdf2obmol(ligand)
-    if isinstance(protein, str):
-        protein = pdb2obmol(protein)
-
     obc = OBConversion()
     obc.SetOutFormat('pdbqt')
     ligand.AddHydrogens()
     ligand_str = obc.WriteString(ligand)
-    protein.AddHydrogens()
+    lig_center = get_coord_from_mol(ligand).mean(axis=0)
+
     make_pardir(protein_pdbqt_path)
+    """
+    if isinstance(protein, str):
+        protein = pdb2obmol(protein)
+    protein.AddHydrogens()
+    obc.AddOption('c', obc.OUTOPTIONS)
     obc.WriteFile(protein, protein_pdbqt_path)
+    obc.CloseOutFile()
+    """
+    from openbabel import pybel
+    rec = pybel.readstring('pdb', protein)
+    rec.addh()
+    rec.write('pdbqt', protein_pdbqt_path, overwrite=True, opt={'r': None, 'c': None})
 
     v = Vina(verbosity=0)
     v.set_receptor(protein_pdbqt_path)
