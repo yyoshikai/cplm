@@ -253,14 +253,14 @@ class AtomLigandStreamer(GeneratorStreamer):
 
 class EvaluateStreamer(WrapperStreamer):
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, streamer: LigandStreamer|AtomLigandStreamer, e: cf.ProcessPoolExecutor, protein: OBMol, protein_pdbqt_path: str, vina_error_path: str|None, qvina_out_dir: str, qvina_cpu: int):
+    def __init__(self, streamer: LigandStreamer|AtomLigandStreamer, e: cf.ProcessPoolExecutor, rec: OBMol, rec_pdbqt_path: str, vina_error_path: str|None, qvina_out_dir: str, qvina_cpu: int):
         """
         
         
         """
         super().__init__(streamer)
-        self.protein = protein
-        self.protein_pdbqt_path = protein_pdbqt_path
+        self.rec = rec
+        self.rec_pdbqt_path = rec_pdbqt_path
         self.vina_error_path = vina_error_path
         self.qvina_out_dir = qvina_out_dir
         self.vina_future = self.qvina_future = None
@@ -275,14 +275,14 @@ class EvaluateStreamer(WrapperStreamer):
             if os.path.exists(sdf_path):
                 with open(sdf_path) as f:
                     lig_sdf = f.read()
-                protein_pdb = obmol2pdb(self.protein)
+                rec_pdb = obmol2pdb(self.rec)
                 os.makedirs(self.qvina_out_dir, exist_ok=True)
                 with open(f"{self.qvina_out_dir}/rec.pdb", 'w') as f:
-                    f.write(protein_pdb)
+                    f.write(rec_pdb)
                 self.vina_future = self.e.submit(eval_vina, 
                     ligand=lig_sdf, 
-                    protein=protein_pdb, 
-                    protein_pdbqt_path=self.protein_pdbqt_path
+                    rec=rec_pdb, 
+                    rec_pdbqt_path=self.rec_pdbqt_path
                 )
                 self.qvina_future = self.e.submit(eval_qvina, 
                     ligand=lig_sdf, 

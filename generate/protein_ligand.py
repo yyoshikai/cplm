@@ -73,8 +73,8 @@ if __name__ == '__main__':
                     coord_range=fargs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, h_atom=fargs.pocket_h_atom, h_coord=fargs.pocket_h_coord
                 )
                 streamer = EvaluateStreamer(streamer, e, 
-                    protein=protein,
-                    protein_pdbqt_path=f"{out_dir}/protein_pdbqt/{idx}/{i_trial}.pdbqt", 
+                    rec=protein,
+                    rec_pdbqt_path=f"{out_dir}/protein_pdbqt/{idx}/{i_trial}.pdbqt", 
                     qvina_out_dir=f"{out_dir}/qvina_out/{idx}/{i_trial}",
                     qvina_cpu=1
                 )
