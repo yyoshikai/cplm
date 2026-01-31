@@ -1,4 +1,4 @@
-import os
+import sys, os, traceback
 import itertools as itr
 import concurrent.futures as cf
 from time import time
@@ -254,10 +254,6 @@ class AtomLigandStreamer(GeneratorStreamer):
 class EvaluateStreamer(WrapperStreamer):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, streamer: LigandStreamer|AtomLigandStreamer, e: cf.ProcessPoolExecutor, rec: OBMol, rec_pdbqt_path: str, vina_error_path: str|None, qvina_out_dir: str, qvina_cpu: int):
-        """
-        
-        
-        """
         super().__init__(streamer)
         self.rec = rec
         self.rec_pdbqt_path = rec_pdbqt_path
@@ -294,8 +290,11 @@ class EvaluateStreamer(WrapperStreamer):
     def result(self):
         if self.vina_future is not None:
             self.vina, self.min_vina, e = self.vina_future.result()
-            if e is not None:
-                
+            if e is not None and self.vina_error_path is not None:
+                with open(self.vina_error_path, 'w') as f:
+                    tb = traceback.extract_tb(sys.exc_info()[2])
+                    f.write(''.join(traceback.format_list(tb)))
+                    f.write(f"{type(e).__name__}: {str(e)}")
         if self.qvina_future is not None:
             self.qvina, e, stdout, stderr = self.qvina_future.result()
             if isinstance(e, Exception):
