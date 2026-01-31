@@ -16,6 +16,7 @@ if __name__ == '__main__':
     ## training
     parser.add_argument("--sname", required=True)
     parser.add_argument("--opt", required=True, type=int)
+    parser.add_argument("--reinforce", action='store_true')
     ## generation
     parser.add_argument("--genname")
     parser.add_argument("--n", type=int)
@@ -34,12 +35,21 @@ if __name__ == '__main__':
     
     # finetuning / training args
     ## finetuning
-    finetune_dir = f"finetune/results/{args.sname}"
-    fargs = yaml.safe_load(open(f"{finetune_dir}/args.yaml"))
-    fargs = Namespace(**fargs)
+    if args.reinforce:
+        reinforce_dir = f"reinforce/results/{args.sname}"
+        rargs = Namespace(**yaml.safe_load(open(f"{reinforce_dir}/args.yaml")))
+        finetune_dir = f"finetune/results/{rargs.finetune_name}"
+        model_path = f"{reinforce_dir}/models/{args.opt}"
+    else:
+        finetune_dir = f"finetune/results/{args.sname}"
+        model_path = f"{finetune_dir}/models/{args.opt}"
+    fargs = Namespace(**yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
     setdefault(fargs, 'lig_atoms', False)
 
-    out_dir = "./generate/protein_ligand/finetune"+(f"/{args.genname}" if args.genname is not None else '')+f"/{args.sname}/{args.opt}"
+    out_dir = ("./generate/protein_ligand/"
+            +("reinforce" if args.reinforce else "finetune")
+            +(f"/{args.genname}" if args.genname is not None else '')
+            +f"/{args.sname}/{args.opt}")
 
     added_vocs = SmilesTokenizer().vocs()
     _voc_encoder, _raw, protein_data, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
@@ -74,7 +84,7 @@ if __name__ == '__main__':
                     voc_encoder=voc_encoder
                 )
                 return streamer
-        streamerss = generate(out_dir, fargs, f"{finetune_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, log_position=args.log_position, log_token_range=args.log_token_range)
+        streamerss = generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, log_position=args.log_position, log_token_range=args.log_token_range)
         for streamers in streamerss:
             for streamer in streamers:
                 streamer.streamer.result()

@@ -70,44 +70,43 @@ def eval_vina(ligand: OBMol|str, protein: OBMol|str, protein_pdbqt_path: str) ->
     protein: OBMol|str
         OBMol object or PDB string
     """
-    if isinstance(ligand, str):
-        ligand = sdf2obmol(ligand)
-    obc = OBConversion()
-    obc.SetOutFormat('pdbqt')
-    ligand.AddHydrogens()
-    ligand_str = obc.WriteString(ligand)
-    lig_center = get_coord_from_mol(ligand).mean(axis=0)
+    score = min_score = error = None
+    try:
+        if isinstance(ligand, str):
+            ligand = sdf2obmol(ligand)
+        obc = OBConversion()
+        obc.SetOutFormat('pdbqt')
+        obc.AddOption('c', obc.OUTOPTIONS)
+        ligand.AddHydrogens()
+        ligand_str = obc.WriteString(ligand)
+        lig_center = get_coord_from_mol(ligand).mean(axis=0)
 
-    make_pardir(protein_pdbqt_path)
-    """
-    if isinstance(protein, str):
-        protein = pdb2obmol(protein)
-    protein.AddHydrogens()
-    obc.AddOption('c', obc.OUTOPTIONS)
-    obc.WriteFile(protein, protein_pdbqt_path)
-    obc.CloseOutFile()
-    """
-    from openbabel import pybel
-    rec = pybel.readstring('pdb', protein)
-    rec.addh()
-    rec.write('pdbqt', protein_pdbqt_path, overwrite=True, opt={'r': None, 'c': None})
+        make_pardir(protein_pdbqt_path)
+        if isinstance(protein, str):
+            protein = pdb2obmol(protein)
+        protein.AddHydrogens()
+        obc.AddOption('r', obc.OUTOPTIONS)
+        obc.WriteFile(protein, protein_pdbqt_path)
+        obc.CloseOutFile()
 
-    v = Vina(verbosity=0)
-    v.set_receptor(protein_pdbqt_path)
-    v.set_ligand_from_string(ligand_str)
-    v.compute_vina_maps()
-    score = v.score()[0]
-    min_score = v.optimize()[0]
-    return score, min_score
+        v = Vina(verbosity=0)
+        v.set_receptor(protein_pdbqt_path)
+        v.set_ligand_from_string(ligand_str)
+        v.compute_vina_maps(lig_center.tolist(), [20, 20, 20])
+        score = v.score()[0]
+        min_score = v.optimize()[0]
+    except Exception as e:
+        error = e
+    return score, min_score, error
 
 def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False, cpu: int|None = None):
     """
     Returns
     -------
     affinity: float|None
-        If Error, None was returned.
+        If Error, None is returned.
     error: None|'timeout'|tuple[e, str, str]
-        if no error, Exception was returned.
+        if no error, None is returned.
     stdout: str|None
         stdout of qvina command
     stderr: str|None

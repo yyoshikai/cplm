@@ -274,7 +274,6 @@ class EvaluateStreamer(WrapperStreamer):
                 os.makedirs(self.qvina_out_dir, exist_ok=True)
                 with open(f"{self.qvina_out_dir}/rec.pdb", 'w') as f:
                     f.write(protein_pdb)
-                print(f"{self.protein_pdbqt_path=}", flush=True)
                 self.vina_future = self.e.submit(eval_vina, 
                     ligand=lig_sdf, 
                     protein=protein_pdb, 
