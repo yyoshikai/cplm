@@ -253,10 +253,15 @@ class AtomLigandStreamer(GeneratorStreamer):
 
 class EvaluateStreamer(WrapperStreamer):
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, streamer: LigandStreamer|AtomLigandStreamer, e: cf.ProcessPoolExecutor, protein: OBMol, protein_pdbqt_path: str, qvina_out_dir: str, qvina_cpu: int):
+    def __init__(self, streamer: LigandStreamer|AtomLigandStreamer, e: cf.ProcessPoolExecutor, protein: OBMol, protein_pdbqt_path: str, vina_error_path: str|None, qvina_out_dir: str, qvina_cpu: int):
+        """
+        
+        
+        """
         super().__init__(streamer)
         self.protein = protein
         self.protein_pdbqt_path = protein_pdbqt_path
+        self.vina_error_path = vina_error_path
         self.qvina_out_dir = qvina_out_dir
         self.vina_future = self.qvina_future = None
         self.vina = self.min_vina = self.qvina = None
@@ -288,7 +293,9 @@ class EvaluateStreamer(WrapperStreamer):
         return is_remain, positions, token_range
     def result(self):
         if self.vina_future is not None:
-            self.vina, self.min_vina = self.vina_future.result()
+            self.vina, self.min_vina, e = self.vina_future.result()
+            if e is not None:
+                
         if self.qvina_future is not None:
             self.qvina, e, stdout, stderr = self.qvina_future.result()
             if isinstance(e, Exception):

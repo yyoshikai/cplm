@@ -37,10 +37,10 @@ WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int):
     match target:
         case 'min_vina':
-            score, min_score = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
+            score, min_score, error = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
             return -min_score if min_score is not None else np.nan
         case 'vina':
-            score, min_score = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
+            score, min_score, error = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
             return -score if min_score is not None else np.nan
         case 'mw_max':
             return rdMolDescriptors.CalcExactMolWt(lig_rdmol)
