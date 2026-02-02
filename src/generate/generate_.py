@@ -10,7 +10,6 @@ from src.utils.random import set_random_seed
 from src.utils.logger import add_file_handler, get_logger, set_third_party_logger
 from src.utils.path import cleardir
 from src.utils.rdkit import ignore_rdkit_warning
-from src.model import Streamer
 from src.data.tokenizer import VocEncoder
 from src.train import get_model
 

@@ -178,20 +178,21 @@ def align_embedding(module: nn.Module, state_dict, prefix, local_metadata,
     del state_dict[prefix+'vocs']
 
 class Streamer:
-    def put(self, tokens: list[int]) -> tuple[bool, list[int], list[int]]:
+    def put(self, tokens: list[int]) -> tuple[bool, int, list[int]]:
         """
         Returns
         -------
         is_remain: bool
             If True, next token must be generated. If False, self.put() must not be called any more.
-        positions: list[int]
-            next position of length 1
+        position: int
+            next position
         token_range: list[int]
             Next token range.
         """
         raise NotImplementedError
     def estimated_n_token(self):
         return None
+
 class WrapperStreamer(Streamer):
     def __init__(self, streamer: Streamer):
         self.streamer = streamer
@@ -381,7 +382,7 @@ class Model(nn.Module):
                         for layer_cache in cache]
 
             # make position
-            sin, cos = self.get_pos_buffer([position[0] for position in positions]) # [B, Dh], [B, Dh]
+            sin, cos = self.get_pos_buffer(positions) # [B, Dh], [B, Dh]
             sin, cos = sin.unsqueeze(1), cos.unsqueeze(1) # [B, 1, Dh], # [B, 1, Dh]
             src_mask = torch.cat([src_mask, torch.zeros((len(src_mask), 1), device=device)], dim=-1)
 

@@ -39,10 +39,10 @@ if __name__ == '__main__':
         reinforce_dir = f"reinforce/results/{args.sname}"
         rargs = Namespace(**yaml.safe_load(open(f"{reinforce_dir}/args.yaml")))
         finetune_dir = f"finetune/results/{rargs.finetune_name}"
-        model_path = f"{reinforce_dir}/models/{args.opt}"
+        model_path = f"{reinforce_dir}/models/{args.opt}.pth"
     else:
         finetune_dir = f"finetune/results/{args.sname}"
-        model_path = f"{finetune_dir}/models/{args.opt}"
+        model_path = f"{finetune_dir}/models/{args.opt}.pth"
     fargs = Namespace(**yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
     setdefault(fargs, 'lig_atoms', False)
 
@@ -52,7 +52,7 @@ if __name__ == '__main__':
             +f"/{args.sname}/{args.opt}")
 
     added_vocs = SmilesTokenizer().vocs()
-    _voc_encoder, _raw, protein_data, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
+    _voc_encoder, _raw, protein_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
 
     idx_data, prompt_token_data = index_dataset(prompt_token_data)
     prompt_data = StackDataset(idx_data, protein_data, prompt_token_data, position_data)

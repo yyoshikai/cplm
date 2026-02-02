@@ -4,7 +4,7 @@ import concurrent.futures as cf
 from time import time
 from collections.abc import Generator
 from logging import getLogger
-import numpy as np
+import numpy as np, pandas as pd
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Chem.rdDetermineBonds import DetermineBondOrders
@@ -44,8 +44,8 @@ def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, v
     for i_atom in range(n_atom):
         coords = []
         for dim in range(3):
-            int_token = yield True, [pos], int_token_range
-            frac_token = yield True, [pos+1], frac_token_range
+            int_token = yield True, pos, int_token_range
+            frac_token = yield True, pos+1, frac_token_range
             pos += 2
             coord_str = ''.join(voc_encoder.decode(int_token+frac_token))
             try:
@@ -79,28 +79,31 @@ class GeneratorStreamer(Streamer):
         return self.put_gen.send(tokens)
 
 class TokenWriteStreamer(WrapperStreamer):
-    def __init__(self, streamer: Streamer, prompt_token_path: str|None, new_token_path: str|None, voc_encoder: VocEncoder):
+    def __init__(self, streamer: Streamer, voc_encoder: VocEncoder, prompt_position: list[int], prompt_csv_path: str, new_csv_path: str):
         super().__init__(streamer)
         self.voc_encoder = voc_encoder
-        self.prompt_token_path = prompt_token_path
-        self.new_token_path = new_token_path
+        self.prompt_position = prompt_position
+        self.prompt_csv_path = prompt_csv_path
+        self.new_csv_path = new_csv_path
         self.is_prompt = True
-        self.new_token_dir_made = False
+
     def put(self, tokens: list[int]):
+        tokens = self.voc_encoder.decode(tokens)
         if self.is_prompt:
-            if self.prompt_token_path is not None:
-                make_pardir(self.prompt_token_path)
-                with open(self.prompt_token_path, 'a') as f:
-                    f.write(' '.join(self.voc_encoder.decode(tokens))+'\n')
-            self.is_prompt = False
+            assert len(tokens) == len(self.prompt_position)
+            pd.DataFrame({'position': self.prompt_position, 'token': tokens}).to_csv(self.prompt_csv_path, index=False)
+            self.prompt_position = None
+            with open(self.new_csv_path, 'w') as f:
+                f.write("position,token\n")
         else:
-            if self.new_token_path is not None:
-                if not self.new_token_dir_made:
-                    make_pardir(self.new_token_path)
-                    self.new_token_dir_made = True
-                with open(self.new_token_path, 'a') as f:
-                    f.write(self.voc_encoder.i2voc[tokens[0]]+' ')
-        return self.streamer.put(tokens)
+            assert len(tokens) == 1
+            with open(self.new_csv_path, 'a') as f:
+                f.write(f"{tokens[0]}\n")
+        
+        is_remain, position, token_range = self.streamer.put(tokens)
+        with open(self.new_csv_path, 'a') as f:
+            f.write(f"{position},")
+        return is_remain, position, token_range
 
 class TokenSaveStreamer(WrapperStreamer):
     def __init__(self, streamer: Streamer):
@@ -174,7 +177,7 @@ class LigandStreamer(GeneratorStreamer):
         # smiles
         smi_tokens = []
         while True:
-            tokens = yield True, [next(pos_iter)], self.smi_token_range
+            tokens = yield True, next(pos_iter), self.smi_token_range
             assert len(tokens) == 1
             token = tokens[0]
             if token == self.voc_encoder.voc2i['[XYZ]']: break
@@ -199,7 +202,7 @@ class LigandStreamer(GeneratorStreamer):
                             w.write(self.mol)
         else:
             self.error = 'SMILES'
-        yield False, [next(pos_iter)], [self.voc_encoder.voc2i['[END]']]
+        yield False, next(pos_iter), [self.voc_encoder.voc2i['[END]']]
 
 class AtomLigandStreamer(GeneratorStreamer):
     def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):
@@ -224,11 +227,11 @@ class AtomLigandStreamer(GeneratorStreamer):
         while True:
             n_atom = len(atoms)
             pos = n_prompt_token+n_atom*7 if self.atom_order else n_prompt_token+n_atom
-            tokens = yield True, [pos], (self.all_token_range if self.no_token_range else self.atom_token_range)
+            tokens = yield True, pos, (self.all_token_range if self.no_token_range else self.atom_token_range)
             token = tokens[0]
             if token == self.voc_encoder.voc2i['[XYZ]']: break
             if token not in self.atom_token_range:
-                yield False, [n_prompt_token+n_atom+1], [self.voc_encoder.voc2i['[END]']]
+                yield False, n_prompt_token+n_atom+1, [self.voc_encoder.voc2i['[END]']]
                 return
             atoms.append(token)
         self.n_generated_atom = len(atoms)
@@ -249,7 +252,7 @@ class AtomLigandStreamer(GeneratorStreamer):
             except Exception as e:
                 self.logger.warning(f"Error while making atom: {e.args[0]}")
                 self.mol = None
-        yield False, [pos], [self.voc_encoder.voc2i['[END]']]
+        yield False, pos, [self.voc_encoder.voc2i['[END]']]
 
 class EvaluateStreamer(WrapperStreamer):
     logger = getLogger(f"{__module__}.{__qualname__}")

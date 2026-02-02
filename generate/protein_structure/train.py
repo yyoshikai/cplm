@@ -80,7 +80,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
                 self.protein.DeleteHydrogens()
             make_pardir(self.new_pdb_path)
             obc.WriteFile(self.protein, self.new_pdb_path)
-        yield False, [pos], [self.voc_encoder.voc2i['[END]']]
+        yield False, pos, [self.voc_encoder.voc2i['[END]']]
 
 if __name__ == '__main__':
     parser = ArgumentParser()

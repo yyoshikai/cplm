@@ -133,7 +133,8 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
         'lig_coord_follow_atom': False, 
         'lig_atoms': False, 
         'targetdiff': True, 
-        'pocket_atom_order': False, 'lig_atom_order': False
+        'pocket_atom_order': False, 
+        'lig_atom_order': False
     }
     for name, value in default_args.items():
         if not hasattr(args, name):
@@ -217,7 +218,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     else:
         voc_encoder = None
 
-    return voc_encoder, raw_data, protein, token, position, weight, center, logs
+    return voc_encoder, raw_data, protein, lig, token, position, weight, center, logs
 
 ## Define functions for batch collation
 def collate(data_list: list[tuple[Tensor, Tensor, Tensor]], pad_token):
