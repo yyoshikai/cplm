@@ -88,11 +88,14 @@ class TokenWriteStreamer(WrapperStreamer):
         self.is_prompt = True
 
     def put(self, tokens: list[int]):
+        token_ids = tokens
         tokens = self.voc_encoder.decode(tokens)
         if self.is_prompt:
             assert len(tokens) == len(self.prompt_position)
+            make_pardir(self.prompt_csv_path)
             pd.DataFrame({'position': self.prompt_position, 'token': tokens}).to_csv(self.prompt_csv_path, index=False)
             self.prompt_position = None
+            make_pardir(self.new_csv_path)
             with open(self.new_csv_path, 'w') as f:
                 f.write("position,token\n")
         else:
@@ -100,9 +103,10 @@ class TokenWriteStreamer(WrapperStreamer):
             with open(self.new_csv_path, 'a') as f:
                 f.write(f"{tokens[0]}\n")
         
-        is_remain, position, token_range = self.streamer.put(tokens)
+        is_remain, position, token_range = self.streamer.put(token_ids)
         with open(self.new_csv_path, 'a') as f:
             f.write(f"{position},")
+        self.is_prompt = False
         return is_remain, position, token_range
 
 class TokenSaveStreamer(WrapperStreamer):
@@ -122,9 +126,9 @@ class PositionSaveStreamer(WrapperStreamer):
         super().__init__(streamer)
         self.new_positions = []
     def put(self, tokens: list[int]):
-        is_remain, positions, token_range = self.streamer.put(tokens)
-        self.new_positions += positions
-        return is_remain, positions, token_range
+        is_remain, position, token_range = self.streamer.put(tokens)
+        self.new_positions.append(position)
+        return is_remain, position, token_range
 
 class TimeLogStreamer(WrapperStreamer):
     logger = getLogger(f"{__qualname__}")

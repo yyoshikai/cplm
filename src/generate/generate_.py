@@ -51,7 +51,6 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
 
     streamerss = [[] for _ in range(len(prompt_data))]
     for step, raw_data_idxs in enumerate(batch_sampler):
-        print(f"{raw_data_idxs=}", flush=True)
         raw_items = list(DataLoader(Subset(prompt_data, raw_data_idxs), shuffle=False, num_workers=0, batch_size=None)) # min(len(raw_data_idxs), 28)
         streamers = []
         token_positions = []

@@ -118,18 +118,19 @@ if __name__ == '__main__':
     prompt = Subset(prompt, sample_idxs)
 
     def streamer_fn(item, i_trial, voc_encoder):
+        idx, protein, (token, position) = item
         streamer = ProteinStructureStreamer(
             prompt_pdb_path=f"{out_dir}/prompt_pdb/{item[0]}/{i_trial}.pdb", 
             prompt_atom_path=f"{out_dir}/prompt_atoms/{item[0]}/{i_trial}.csv",
             new_pdb_path=f"{out_dir}/new_pdb/{item[0]}/{i_trial}.pdb", 
             new_coord_path=f"{out_dir}/new_coord_csv/{item[0]}/{i_trial}.csv",
-            protein=item[1],
+            protein=protein,
             voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=getattr(targs, 'pocket_atom_order', False), h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
         )
-        streamer = TokenWriteStreamer(streamer, 
-            prompt_token_path=f"{out_dir}/prompt_token/{item[0]}/{i_trial}.txt",
-            new_token_path=f"{out_dir}/new_token/{item[0]}/{i_trial}.txt", 
-            voc_encoder=voc_encoder
+        streamer = TokenWriteStreamer(streamer, voc_encoder,
+            prompt_position=position,
+            prompt_csv_path=f"{out_dir}/prompt_token/{item[0]}/{i_trial}.csv",
+            new_csv_path=f"{out_dir}/new_token/{item[0]}/{i_trial}.csv", 
         )
         streamer = TimeLogStreamer(streamer, name=f"{item[0]}][{i_trial}")
         return streamer

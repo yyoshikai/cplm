@@ -78,10 +78,10 @@ if __name__ == '__main__':
                     qvina_out_dir=f"{out_dir}/qvina_out/{idx}/{i_trial}",
                     qvina_cpu=1
                 )
-                streamer = TokenWriteStreamer(streamer, 
-                    prompt_token_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.txt",
-                    new_token_path=f"{out_dir}/new_token/{idx}/{i_trial}/.txt",
-                    voc_encoder=voc_encoder
+                streamer = TokenWriteStreamer(streamer, voc_encoder,
+                    prompt_position=position,
+                    prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv",
+                    new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}/.csv",
                 )
                 return streamer
         streamerss = generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, log_position=args.log_position, log_token_range=args.log_token_range)

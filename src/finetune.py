@@ -123,7 +123,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
     return datas, voc_encoder, dnames, logs
 
 def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
-        added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[OBMol|Pocket]|None=None, encode: bool=True):
+        added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[OBMol|Pocket]|None=None, encode: bool=True, tensor_position: bool=True):
     logs = []
 
     # compatibility
@@ -200,13 +200,14 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
     sentence.append('[LIGAND]')
     weights.append(args.lig_smiles_weight)
     if add_ligand:
-        lig = MolTokenizeDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize, coord_range=args.coord_range, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms, atom_order=args.lig_atom_order)
-        sentence += [lig, '[END]']
+        lig_tokens = MolTokenizeDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize, coord_range=args.coord_range, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms, atom_order=args.lig_atom_order)
+        sentence += [lig_tokens, '[END]']
         weights += [args.lig_coord_weight, 0.0]
     sentence = SentenceDataset(*sentence)
     vocs = sentence.vocs() | added_vocs
     token, position = sentence.untuple()
-    position = TensorDataset(position, torch.long)
+    if tensor_position:
+        position = TensorDataset(position, torch.long)
 
     ## weight
     weight = RemoveLastDataset(TokenWeightDataset(token, separates, weights, by_n_separate=True))

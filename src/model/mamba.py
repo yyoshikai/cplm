@@ -222,8 +222,5 @@ class StreamerCriteria(StoppingCriteria):
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> torch.BoolTensor:
         return ~torch.tensor([out is None or out[0] for out in self.wrapper.outs], device=input_ids.device, dtype=torch.bool)
 
-
-
-
 def pad_sequence_left(sequences: list[Tensor], padding_value: float=0) -> Tensor:
     return pad_sequence([s.flip(0) for s in sequences], padding_value=padding_value).flip(0).contiguous()

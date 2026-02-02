@@ -48,8 +48,8 @@ if __name__ == '__main__':
             )
         streamer = TokenWriteStreamer(streamer, voc_encoder,
             prompt_position=[0],
-            prompt_token_path=f"{out_dir}/prompt_token/{item}.txt",
-            new_token_path=f"{out_dir}/new_token/{item}.txt",
+            prompt_csv_path=f"{out_dir}/prompt_token/{item}.csv",
+            new_csv_path=f"{out_dir}/new_token/{item}.csv",
             voc_encoder=voc_encoder
         )
         return streamer

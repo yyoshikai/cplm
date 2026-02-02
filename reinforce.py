@@ -107,7 +107,7 @@ def main():
     parser.add_argument('--all-autocast', action='store_true')
     parser.add_argument('--fix-pocket', action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
-    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer'])
+    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens'])
     args = parser.parse_args()
     ## set default args
     if args.test: args.studyname+='_test'
@@ -268,15 +268,15 @@ def main():
             streamers = ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, fargs.coord_range, voc_encoder, False, not fargs.no_lig_h_atom, not fargs.no_lig_h_coord, None) for idx in range(B)]
             streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in streamers]
             streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in streamers]
-            if False:
-                streamers = [TokenWriteStreamer(streamer, 
-                        prompt_token_path=f"{result_dir}/generation/{step}/{rank}_{idx}/prompt_token.txt", 
-                        new_token_path=f"{result_dir}/generation/{step}/{rank}_{idx}/new_token.txt", 
-                        voc_encoder=voc_encoder
+            if is_starting and 'tokens' in args.check:
+                streamers = [TokenWriteStreamer(streamer, voc_encoder, 
+                        prompt_position=positions[idx],
+                        prompt_csv_path=f"{result_dir}/generation/prompt_token/step{step}/rank{rank}/{idx}.csv", 
+                        new_csv_path=f"{result_dir}/generation/new_token/step{step}/rank{rank}/{idx}.csv"
                     ) for idx, streamer in enumerate(streamers)]
             if is_starting:
                 streamers = [TimeLogStreamer(streamer, str(b), 5.0) for b, streamer in enumerate(streamers)]
-            with torch.inference_mode():
+            with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
                 net_model.generate2(prompt_tokens, positions, streamers, args.max_new_token)
 
             out_batch = pad_sequence([

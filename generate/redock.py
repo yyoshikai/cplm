@@ -5,12 +5,13 @@ PoseBustersデータセットで評価
 """
 import yaml, math
 import numpy as np
+import torch
 from argparse import Namespace, ArgumentParser
 from rdkit import Chem
 
 from src.utils import setdefault
 from src.utils.path import make_pardir
-from src.data import StackDataset, index_dataset, untuple_dataset
+from src.data import StackDataset, index_dataset
 from src.data.tokenizer import SentenceDataset, VocEncoder
 from src.data.molecule import RandomScoreDataset
 from src.data.datasets.posebusters import PosebustersV2ProteinDataset, PosebustersV2LigandDataset
@@ -32,7 +33,11 @@ class LigandCoordStreamer(GeneratorStreamer):
 
     def put_generator(self):
         prompt_tokens = yield
-        prompt_tokens = self.voc_encoder.decode(prompt_tokens)
+        try:
+            prompt_tokens = self.voc_encoder.decode(prompt_tokens)
+        except Exception as e:
+            print(f"{prompt_tokens=}", flush=True)
+            raise e
         assert prompt_tokens[-1] == '[XYZ]'
         n_atom = self.mol.GetNumAtoms()
         coord, pos, self.error = yield from coord_streamer(n_atom, len(prompt_tokens), None, self.voc_encoder, self.coord_range, self.no_token_range, False, self.center)
@@ -80,7 +85,7 @@ if __name__ == '__main__':
     fargs = Namespace(**yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
     setdefault(fargs, 'lig_atoms', False)
 
-    out_dir = ("./generate/protein_ligand/"
+    out_dir = ("./generate/redock/"
             +("reinforce" if args.reinforce else "finetune")
             +(f"/{args.genname}" if args.genname is not None else '')
             +f"/{args.sname}/{args.opt}")
@@ -91,16 +96,18 @@ if __name__ == '__main__':
     lig =PosebustersV2LigandDataset()
     score = RandomScoreDataset(-12, -10, len(protein), args.seed)
     raw_data = StackDataset(protein, lig, score)
-    _voc_encoder, _raw, protein_data, lig_data, token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=True, random_rotate=False, added_vocs=set(), prompt_score='none' if fargs.no_score else 'low', raw_data=raw_data, encode=False)
+    _voc_encoder, _raw, protein_data, lig_data, token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=True, random_rotate=False, added_vocs=set(), prompt_score='none' if fargs.no_score else 'low', raw_data=raw_data, encode=False, tensor_position=False)
     token_position_data = StackDataset(token_data, position_data)
     token_position_data, _ = TokenRSplitDataset(token_position_data, '[XYZ]').untuple()
     token_position_data = SentenceDataset(token_position_data, '[XYZ]')
     token_data, position_data = token_position_data.untuple()
+
+
     idx_data, token_data = index_dataset(token_data)
     prompt_data = StackDataset(idx_data, lig_data, token_data, position_data)
 
     def streamer_fn(item, i_trial: int, voc_encoder):
-        idx, lig, token, position = prompt_data
+        idx, lig, token, position = item
         streamer = LigandCoordStreamer(
             lig, 
             new_sdf_path=f"{out_dir}/new_sdf/{idx}/{i_trial}.sdf", 
@@ -108,10 +115,10 @@ if __name__ == '__main__':
             voc_encoder=voc_encoder, 
             no_token_range=args.no_token_range
         )
-        streamer = TokenWriteStreamer(
-            prompt_token_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.txt",
-            new_token_path=f"{out_dir}/new_token/{idx}/{i_trial}/.txt",
-            voc_encoder=voc_encoder
+        streamer = TokenWriteStreamer(streamer, voc_encoder,
+            prompt_position=position,
+            prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv",
+            new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}/.csv",
         )
         return streamer
     get_token_position_fn = lambda item: (item[2], item[3])
