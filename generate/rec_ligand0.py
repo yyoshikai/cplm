@@ -1,7 +1,7 @@
 import sys, os, yaml, math
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
-import numpy as np, pandas as pd
+import numpy as np
 from src.utils import setdefault
 from src.utils.path import mwrite
 from src.data import StackDataset, Subset, index_dataset
@@ -20,7 +20,7 @@ if __name__ == '__main__':
     parser.add_argument("--opt", required=True, type=int)
     parser.add_argument("--reinforce", action='store_true')
     ## generation
-    parser.add_argument("--genname")
+    parser.add_argument("--gname")
     parser.add_argument("--n", type=int)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--sample-seed", type=int, default=0)
@@ -48,16 +48,20 @@ if __name__ == '__main__':
     fargs = Namespace(**yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
     setdefault(fargs, 'lig_atoms', False)
 
-    out_dir = ("./generate/protein_ligand/"
+    out_dir = ("./generate/rec_ligand/"
             +("reinforce" if args.reinforce else "finetune")
-            +(f"/{args.genname}" if args.genname is not None else '')
+            +(f"/{args.gname}" if args.gname is not None else '')
             +f"/{args.sname}/{args.opt}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    with open(f"{out_dir}/args.yaml", 'w') as f:
+        yaml.dump(vars(args), f)
 
     added_vocs = SmilesTokenizer().vocs()
-    _voc_encoder, _raw, protein_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
+    _voc_encoder, _raw, rec_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
 
     idx_data, prompt_token_data = index_dataset(prompt_token_data)
-    prompt_data = StackDataset(idx_data, protein_data, prompt_token_data, position_data)
+    prompt_data = StackDataset(idx_data, rec_data, prompt_token_data, position_data)
     if args.n is not None and args.n < len(prompt_data):
         sample_idxs = np.random.default_rng(args.sample_seed).choice(len(prompt_data), args.n, replace=False)
         prompt_data = Subset(prompt_data, sample_idxs)
