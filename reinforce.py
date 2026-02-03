@@ -362,7 +362,8 @@ def main():
                 logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
             # Forward Get prob & reward loss
-            logger.debug(f"step[{step}] forward & backward started.")
+            if is_starting:
+                logger.debug(f"step[{step}] forward & backward started.")
             step_timer.start('forward_backward')
             model.train()
             La, B = out_batch.shape
@@ -430,7 +431,8 @@ def main():
                 optimizer.zero_grad()
 
         # Optimizer's step
-        logger.debug(f"step[{step}] optim started")
+        if is_starting:
+            logger.debug(f"step[{step}] optim started")
         step_timer.start('optim')
         if args.clip_grad_value is not None:
             torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
@@ -450,8 +452,7 @@ def main():
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
             if args.gc:
                 gc.collect()
-        if is_starting:
-            logger.info(f"{step=} finished.")
+        logger.info(f"{step=} finished.")
 
         if is_starting:
             logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")

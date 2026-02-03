@@ -6,13 +6,12 @@ from time import time
 from rdkit import Chem
 from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule
 from vina import Vina
+from openbabel import openbabel as ob
 from openbabel.openbabel import OBMol, OBConversion
 from .prepare_receptor4 import main as prepare_receptor4_func
-from .utils.time import wtqdm
-from .utils.path import make_pardir
+from .utils.path import make_pardir, WORKDIR
 from .data.protein import get_coord_from_mol
 logger = getLogger(__name__)
-WORKDIR = os.environ.get('WORKDIR', "/workspace")
 
 T = TypeVar('T')
 
@@ -99,7 +98,7 @@ def eval_vina(ligand: OBMol|str, rec: OBMol|str, rec_pdbqt_path: str) -> tuple[f
         error = e
     return score, min_score, error
 
-def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, pbar: Optional[wtqdm] = None, verbose: bool=False, cpu: int|None = None):
+def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, cpu: int|None = None):
     """
     Returns
     -------
@@ -115,12 +114,6 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
     if isinstance(ligand, str):
         ligand = Chem.MolFromMolBlock(ligand)
 
-    def log(name):
-        if pbar is not None:
-            pbar.start(name)
-        if verbose:
-            print(f"---{name}---", flush=True)
-    log('qvina_prep_mol1')
     stdout = stderr = None
     obc = OBConversion()
     try:
@@ -129,7 +122,6 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
 
         mol = Chem.AddHs(ligand, addCoords=True)
         if use_uff:
-            log('qvina_uff')
             try:
                 not_converge = 10
                 while not_converge > 0:
@@ -141,15 +133,12 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
         if center is None:
             center = (pos.max(0) + pos.min(0)) / 2
         
-        log('qvina_prep_mol2')
         lig_obmol = rdmol2obmol(mol)
         obc.SetOutFormat('pdbqt')
         obc.WriteFile(lig_obmol, f"{out_dir}/lig.pdbqt")
         
-        log('qvina_prep_rec')
         prepare_receptor4_func(['-r', rec_pdb_path, '-o', f'{out_dir}/rec.pdbqt'])
 
-        log('qvina_command')
         proc = subprocess.Popen('/bin/bash', shell=False, stdin=subprocess.PIPE, 
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/bin/qvina02")
@@ -166,12 +155,14 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
         stdout = proc.stdout.read().decode()
         stderr = proc.stderr.read().decode()
         
-        log('qvina_parse')
         lig_out_obmol = OBMol()
         obc.SetInFormat('pdbqt')
         obc.ReadFile(lig_out_obmol, f"{out_dir}/lig_out.pdbqt")
-        lig_out_rdmol = obmol2rdmol(lig_out_obmol)
-        affinity = float(lig_out_rdmol.GetProp('REMARK').splitlines()[0].split()[2])
+        affinity = float(ob.toPairData(lig_out_obmol.GetData('REMARK')).GetValue().split()[2])
+        
+
+        # lig_out_rdmol = obmol2rdmol(lig_out_obmol)
+        # affinity = float(lig_out_rdmol.GetProp('REMARK').splitlines()[0].split()[2])
         return affinity, None, stdout, stderr
     except Exception as e:
         return affinity, e, stdout, stderr
