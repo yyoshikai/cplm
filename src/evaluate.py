@@ -59,7 +59,7 @@ def sdf_path2obmol(sdf_path: str) -> OBMol:
     with open(sdf_path) as f:
         return sdf2obmol(f.read())
 
-def eval_vina(ligand: OBMol|str, protein: OBMol|str, protein_pdbqt_path: str) -> tuple[float, float]:
+def eval_vina(ligand: OBMol|str, rec: OBMol|str, rec_pdbqt_path: str) -> tuple[float, float]:
     """
     cf.ProcessPoolExecutorに投げられるよう, strも受け付ける。
 
@@ -81,16 +81,16 @@ def eval_vina(ligand: OBMol|str, protein: OBMol|str, protein_pdbqt_path: str) ->
         ligand_str = obc.WriteString(ligand)
         lig_center = get_coord_from_mol(ligand).mean(axis=0)
 
-        make_pardir(protein_pdbqt_path)
-        if isinstance(protein, str):
-            protein = pdb2obmol(protein)
-        protein.AddHydrogens()
+        make_pardir(rec_pdbqt_path)
+        if isinstance(rec, str):
+            rec = pdb2obmol(rec)
+        rec.AddHydrogens()
         obc.AddOption('r', obc.OUTOPTIONS)
-        obc.WriteFile(protein, protein_pdbqt_path)
+        obc.WriteFile(rec, rec_pdbqt_path)
         obc.CloseOutFile()
 
         v = Vina(verbosity=0)
-        v.set_receptor(protein_pdbqt_path)
+        v.set_receptor(rec_pdbqt_path)
         v.set_ligand_from_string(ligand_str)
         v.compute_vina_maps(lig_center.tolist(), [20, 20, 20])
         score = v.score()[0]

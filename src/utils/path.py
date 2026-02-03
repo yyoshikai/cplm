@@ -68,3 +68,8 @@ def subs_vars(config, vars):
 
 def make_pardir(path: str):
     return os.makedirs(os.path.dirname(path), exist_ok=True)
+
+def mwrite(path: str, string: str):
+    make_pardir(path)
+    with open(path, 'w') as f:
+        f.write(string)

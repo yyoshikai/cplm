@@ -3,11 +3,13 @@ import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 import numpy as np, pandas as pd
 from src.utils import setdefault
+from src.utils.path import mwrite
 from src.data import StackDataset, Subset, index_dataset
 from src.data.tokenizer import SmilesTokenizer
 from src.finetune import get_finetune_data
 from src.generate import generate
-from src.generate.streamer import LigandStreamer, AtomLigandStreamer, TokenWriteStreamer, EvaluateStreamer
+from src.generate.streamer import LigandStreamer, TokenWriteStreamer
+from src.evaluate import obmol2pdb
 
 
 if __name__ == '__main__':
@@ -67,33 +69,16 @@ if __name__ == '__main__':
             raise NotImplementedError
         else:
             def streamer_fn(item, i_trial, voc_encoder):
-                idx, protein, prompt_token, position = item
+                idx, rec, prompt_token, position = item
+                mwrite(f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb", obmol2pdb(rec))
                 streamer = LigandStreamer(
                     new_sdf_path=f"{out_dir}/new_sdf/{idx}/{i_trial}.sdf", 
                     coord_range=fargs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, h_atom=fargs.pocket_h_atom, h_coord=fargs.pocket_h_coord
                 )
-                streamer = EvaluateStreamer(streamer, e, 
-                    rec=protein,
-                    rec_pdbqt_path=f"{out_dir}/protein_pdbqt/{idx}/{i_trial}.pdbqt", 
-                    qvina_out_dir=f"{out_dir}/qvina_out/{idx}/{i_trial}",
-                    qvina_cpu=1
-                )
                 streamer = TokenWriteStreamer(streamer, voc_encoder,
                     prompt_position=position,
                     prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv",
-                    new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}/.csv",
+                    new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}.csv",
                 )
                 return streamer
-        streamerss = generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, log_position=args.log_position, log_token_range=args.log_token_range)
-        for streamers in streamerss:
-            for streamer in streamers:
-                streamer.streamer.result()
-
-    data = {}
-    for idx, streamers in enumerate(streamerss):
-        for i_trial, streamer in enumerate(streamers):
-            streamer = streamer.streamer
-            data[idx, i_trial] = streamer.vina, streamer.min_vina, streamer.qvina
-    df = pd.DataFrame(data, index=['vina', 'min_vina', 'qvina']).T
-    for col in df.columns:
-        df[col].unstack().to_csv(f"{out_dir}/{col}_score.csv", index_label='idx')
+        generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, log_position=args.log_position, log_token_range=args.log_token_range)
