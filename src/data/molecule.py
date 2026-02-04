@@ -43,11 +43,7 @@ class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
             rng.shuffle(idxs)
             mol = Chem.RenumberAtoms(mol, idxs.tolist())
         smi = Chem.MolToSmiles(mol, canonical=not self.randomize)
-        try:
-            atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
-        except Exception as e:
-            print(f"{mol=}", flush=True)
-            raise e
+        atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
         
         coords = mol.GetConformer().GetPositions()
         symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]

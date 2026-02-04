@@ -1,7 +1,7 @@
 from argparse import ArgumentParser, Namespace
 import yaml
 from src.generate import generate
-from src.generate.streamer import LigandStreamer, AtomLigandStreamer, TokenWriteStreamer, TimeLogStreamer
+from src.generate.streamer import LigandStreamer, AtomLigandStreamer, TokenWriteStreamer, RangeWriteStreamer
 
 if __name__ == '__main__':
     # arguments
@@ -18,9 +18,8 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-new-token", type=int, default=1000)
     parser.add_argument("--no-token-range", action='store_true')
-    ## tests
-    parser.add_argument("--log-position", action='store_true')
-    parser.add_argument("--log-token-range", action='store_true')
+    ## check
+    parser.add_argument("--check-token-range", action='store_true')
     args = parser.parse_args()
     sname = args.studyname
 
@@ -52,9 +51,13 @@ if __name__ == '__main__':
             new_csv_path=f"{out_dir}/new_token/{item}.csv",
             voc_encoder=voc_encoder
         )
+        if args.check_token_range and (item*5//args.n) > ((item-1)*5//args.n):
+            streamer = RangeWriteStreamer(streamer, voc_encoder,
+            range_path=f"{out_dir}/token_range/{item}.txt"
+        )
         return streamer
     get_token_position_fn = lambda item: (['[LIGAND]'], [0])
 
     prompt_data = list(range(args.n))
-    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, 1, 1, args.max_new_token, args.batch_size, args.seed, args.log_position, args.log_token_range)
+    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, 1, 1, args.max_new_token, args.batch_size, args.seed)
 

@@ -11,7 +11,7 @@ from rdkit.Chem.rdDetermineBonds import DetermineBondOrders
 from rdkit.Geometry import Point3D
 from openbabel.openbabel import OBMol, OBConversion
 from src.utils import should_show
-from src.utils.path import make_pardir
+from src.utils.path import make_pardir, mwrite
 from src.model import Streamer, WrapperStreamer
 from src.data.molecule import element_symbols
 from src.data.tokenizer import FloatTokenizer, SmilesTokenizer, VocEncoder
@@ -86,7 +86,6 @@ class TokenWriteStreamer(WrapperStreamer):
         self.prompt_csv_path = prompt_csv_path
         self.new_csv_path = new_csv_path
         self.is_prompt = True
-
     def put(self, tokens: list[int]):
         token_ids = tokens
         tokens = self.voc_encoder.decode(tokens)
@@ -107,6 +106,21 @@ class TokenWriteStreamer(WrapperStreamer):
         with open(self.new_csv_path, 'a') as f:
             f.write(f"{position},")
         self.is_prompt = False
+        return is_remain, position, token_range
+    
+class RangeWriteStreamer(WrapperStreamer):
+    def __init__(self, streamer: Streamer, voc_encoder: VocEncoder, range_path: str):
+        super().__init__(streamer)
+        self.voc_encoder = voc_encoder
+        self.range_path = range_path
+        self.is_init = True
+    def put(self, tokens: list[int]):
+        is_remain, position, token_range = self.streamer.put(tokens)
+        if self.is_init:
+            mwrite(self.range_path, "token_range\n")
+            self.is_init = False
+        with open(self.range_path, 'a') as f:
+            f.write(','.join(self.voc_encoder.decode(token_range))+'\n')
         return is_remain, position, token_range
 
 class TokenSaveStreamer(WrapperStreamer):

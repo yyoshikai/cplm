@@ -11,7 +11,7 @@ from src.data.protein import PocketTokenizeDataset, Pocket
 from src.data.protein import Pocket
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
 from src.generate import generate
-from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer
+from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer, RangeWriteStreamer
 
 
 class PocketStructureStreamer(GeneratorStreamer):
@@ -55,9 +55,8 @@ if __name__ == '__main__':
     parser.add_argument("--n", type=int, default=100)
     parser.add_argument("--sample-seed", type=int, default=0)
     parser.add_argument("--trial", type=int, default=5)
-    ## tests
-    parser.add_argument("--log-position", action='store_true')
-    parser.add_argument("--log-token-range", action='store_true')
+    ## check
+    parser.add_argument("--check-token-range", action='store_true')
     args = parser.parse_args()
 
     train_dir = f"./training/results/{args.studyname}"
@@ -78,20 +77,25 @@ if __name__ == '__main__':
     if args.n < len(prompt):
         sample_idxs = np.random.default_rng(args.sample_seed).choice(len(prompt), args.n, replace=False)
         prompt = Subset(prompt, sample_idxs)
+    N = len(prompt)
 
     def streamer_fn(item, i_trial: int, voc_encoder: VocEncoder):
         idx, pocket, (token, position) = item
         streamer = PocketStructureStreamer(
-            new_coord_path=f"{out_dir}/new_coord_csv/{item[0]}/{i_trial}.csv",
+            new_coord_path=f"{out_dir}/new_coord_csv/{idx}/{i_trial}.csv",
             pocket=item[1],
             coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=getattr(targs, 'pocket_atom_order', False), h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
         )
         streamer = TokenWriteStreamer(streamer, voc_encoder,
             prompt_position=position,
-            prompt_csv_path=f"{out_dir}/prompt_token/{item[0]}/{i_trial}.csv", 
-            new_csv_path=f"{out_dir}/new_token/{item[0]}/{i_trial}.csv",
+            prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv", 
+            new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}.csv",
         )
-        streamer = TimeLogStreamer(streamer, name=f"{item[0]}][{i_trial}")
+        if args.check_token_range and (idx*5//N) == i_trial > ((idx-1)*5//N):
+            streamer = RangeWriteStreamer(streamer, voc_encoder,
+            range_path=f"{out_dir}/token_range/{idx}_{i_trial}.txt"
+        )
+        streamer = TimeLogStreamer(streamer, name=f"{idx}][{i_trial}")
         return streamer
     get_token_position_fn = lambda item: item[2]
-    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, args.trial, 10000, None, 1, 0, args.log_position, args.log_token_range)
+    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, args.trial, 10000, None, 1, 0)

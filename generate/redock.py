@@ -17,7 +17,7 @@ from src.data.molecule import RandomScoreDataset
 from src.data.datasets.posebusters import PosebustersV2ProteinDataset, PosebustersV2LigandDataset
 from src.finetune import get_finetune_data
 from src.data.tokenizer import TokenRSplitDataset
-from src.generate.streamer import GeneratorStreamer, coord_streamer, array_to_conf, TokenWriteStreamer
+from src.generate.streamer import GeneratorStreamer, coord_streamer, array_to_conf, TokenWriteStreamer, RangeWriteStreamer
 from src.generate import generate
 
 class LigandCoordStreamer(GeneratorStreamer):
@@ -70,6 +70,8 @@ if __name__ == '__main__':
     parser.add_argument("--log-position", action='store_true')
     parser.add_argument("--log-token-range", action='store_true')
     parser.add_argument("--max-workers", type=int)
+    ## check
+    parser.add_argument("--check-token-range", action='store_true')
     args = parser.parse_args()
 
     # finetuning / training args
@@ -105,6 +107,7 @@ if __name__ == '__main__':
 
     idx_data, token_data = index_dataset(token_data)
     prompt_data = StackDataset(idx_data, lig_data, token_data, position_data)
+    N = len(prompt_data)
 
     def streamer_fn(item, i_trial: int, voc_encoder):
         idx, lig, token, position = item
@@ -118,7 +121,11 @@ if __name__ == '__main__':
         streamer = TokenWriteStreamer(streamer, voc_encoder,
             prompt_position=position,
             prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv",
-            new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}/.csv",
+            new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}.csv",
+        )
+        if args.check_token_range and (idx*5//N) == i_trial > ((idx-1)*5//N):
+            streamer = RangeWriteStreamer(streamer, voc_encoder,
+            range_path=f"{out_dir}/token_range/{idx}_{i_trial}.txt"
         )
         return streamer
     get_token_position_fn = lambda item: (item[2], item[3])

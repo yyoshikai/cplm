@@ -8,7 +8,7 @@ from src.data import StackDataset, Subset, index_dataset
 from src.data.tokenizer import SmilesTokenizer
 from src.finetune import get_finetune_data
 from src.generate import generate
-from src.generate.streamer import LigandStreamer, TokenWriteStreamer
+from src.generate.streamer import LigandStreamer, TokenWriteStreamer, RangeWriteStreamer
 from src.evaluate import obmol2pdb
 
 
@@ -31,6 +31,8 @@ if __name__ == '__main__':
     parser.add_argument("--log-position", action='store_true')
     parser.add_argument("--log-token-range", action='store_true')
     parser.add_argument("--max-workers", type=int)
+    ## check
+    parser.add_argument("--check-token-range", action='store_true')
     args = parser.parse_args()
 
     logs = []
@@ -65,6 +67,7 @@ if __name__ == '__main__':
     if args.n is not None and args.n < len(prompt_data):
         sample_idxs = np.random.default_rng(args.sample_seed).choice(len(prompt_data), args.n, replace=False)
         prompt_data = Subset(prompt_data, sample_idxs)
+    N = len(prompt_data)
 
     get_token_position_fn = lambda item: (item[2], item[3])
 
@@ -83,6 +86,10 @@ if __name__ == '__main__':
                     prompt_position=position,
                     prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv",
                     new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}.csv",
+                )
+                if args.check_token_range and (idx*5//N) == i_trial > ((idx-1)*5//N):
+                    streamer = RangeWriteStreamer(streamer, voc_encoder,
+                    range_path=f"{out_dir}/token_range/{idx}_{i_trial}.txt"
                 )
                 return streamer
         generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, log_position=args.log_position, log_token_range=args.log_token_range)
