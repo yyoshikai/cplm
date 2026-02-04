@@ -122,7 +122,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             in zip(token_datas, position_datas, weight_datas)]
     return datas, voc_encoder, dnames, logs
 
-def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rotate: bool, 
+def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bool, random_rotate: bool, 
         added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[OBMol|Pocket]|None=None, encode: bool=True, tensor_position: bool=True):
     logs = []
 
@@ -153,7 +153,7 @@ def get_finetune_data(args: Namespace, split: str, add_ligand: bool, random_rota
                 raw_data = CDProteinDataset(split)
             else:
                 raw_data = CDDataset(split)
-    if (sample := getattr(args, f'{split}_sample', 1.0)) != 1.0:
+    if sample != 1.0:
         assert sample < 1.0
         rng = np.random.default_rng(args.seed)
         idxs = rng.choice(len(raw_data), size=round(len(raw_data)*sample))

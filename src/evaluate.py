@@ -98,6 +98,15 @@ def eval_vina(ligand: OBMol|str, rec: OBMol|str, rec_pdbqt_path: str) -> tuple[f
         error = e
     return score, min_score, error
 
+def parse_qvina_out(path: str) -> float:
+    obc = OBConversion()
+    obc.SetInFormat('pdbqt')
+    lig_out_obmol = OBMol()
+    obc.ReadFile(lig_out_obmol, path)
+    affinity = float(ob.toPairData(lig_out_obmol.GetData('REMARK')).GetValue().split()[2])
+    return affinity
+
+
 def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, cpu: int|None = None):
     """
     Returns
@@ -114,7 +123,7 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
     if isinstance(ligand, str):
         ligand = Chem.MolFromMolBlock(ligand)
 
-    stdout = stderr = None
+    stdout = stderr = affinity = None
     obc = OBConversion()
     try:
         out_dir = os.path.realpath(out_dir)
@@ -155,14 +164,7 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
         stdout = proc.stdout.read().decode()
         stderr = proc.stderr.read().decode()
         
-        lig_out_obmol = OBMol()
-        obc.SetInFormat('pdbqt')
-        obc.ReadFile(lig_out_obmol, f"{out_dir}/lig_out.pdbqt")
-        affinity = float(ob.toPairData(lig_out_obmol.GetData('REMARK')).GetValue().split()[2])
-        
-
-        # lig_out_rdmol = obmol2rdmol(lig_out_obmol)
-        # affinity = float(lig_out_rdmol.GetProp('REMARK').splitlines()[0].split()[2])
+        affinity = parse_qvina_out(f"{out_dir}/lig_out.pdbqt")
         return affinity, None, stdout, stderr
     except Exception as e:
         return affinity, e, stdout, stderr

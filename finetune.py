@@ -38,7 +38,7 @@ if args.seed is None:
 split2datas = {}
 for split in ['valid', 'train']:
     voc_encoder, raw_data, _protein, _lig, token_data, position_data, weight_data, _center, data_logs \
-        = get_finetune_data(args, split, True, True, set(), prompt_score='none' if args.no_score else 'data')
+        = get_finetune_data(args, split, getattr(args, f'{split}_sample'), True, True, set(), prompt_score='none' if args.no_score else 'data')
     logs += data_logs
     logs.append(f"    {split} data: {len(token_data):,}/{len(raw_data):,}")
     data_names = [type(raw_data).__name__]

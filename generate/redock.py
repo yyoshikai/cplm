@@ -96,7 +96,7 @@ if __name__ == '__main__':
     lig =PosebustersV2LigandDataset()
     score = RandomScoreDataset(-12, -10, len(protein), args.seed)
     raw_data = StackDataset(protein, lig, score)
-    _voc_encoder, _raw, protein_data, lig_data, token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=True, random_rotate=False, added_vocs=set(), prompt_score='none' if fargs.no_score else 'low', raw_data=raw_data, encode=False, tensor_position=False)
+    _voc_encoder, _raw, protein_data, lig_data, token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=True, random_rotate=False, added_vocs=set(), prompt_score='none' if fargs.no_score else 'low', raw_data=raw_data, encode=False, tensor_position=False)
     token_position_data = StackDataset(token_data, position_data)
     token_position_data, _ = TokenRSplitDataset(token_position_data, '[XYZ]').untuple()
     token_position_data = SentenceDataset(token_position_data, '[XYZ]')

@@ -58,7 +58,7 @@ if __name__ == '__main__':
         yaml.dump(vars(args), f)
 
     added_vocs = SmilesTokenizer().vocs()
-    _voc_encoder, _raw, rec_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
+    _voc_encoder, _raw, rec_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
 
     idx_data, prompt_token_data = index_dataset(prompt_token_data)
     prompt_data = StackDataset(idx_data, rec_data, prompt_token_data, position_data)

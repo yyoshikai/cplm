@@ -3,6 +3,7 @@ from argparse import Namespace
 from collections.abc import Callable
 from inspect import getfullargspec
 from typing import TypeVar
+import yaml
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset, BatchSampler
@@ -37,13 +38,10 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
     add_file_handler(logger, f"{out_dir}/generate.log")
     ignore_rdkit_warning()
     set_third_party_logger()
-    args = {name: eval(name) for name in getfullargspec(generate)[0][2:]}
-    logger.debug("args:")
-    for name, value in args.items():
-        logger.debug(f"    {name}: {value}")
-    with open(f"{out_dir}/args.yaml", 'w') as f:
-        yaml.dump(args, f)
 
+    logger.debug("args:")
+    for name in getfullargspec(generate)[0][2:]: # yamlに保存しようとするとfnとかがエラーになる
+        logger.debug(f"    {name}: {eval(name)}")
     # model
     model, voc_encoder = get_model(targs, voc_encoder=None, init_state_path=init_state_path, device=device)
 
