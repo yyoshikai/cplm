@@ -77,7 +77,7 @@ class MambaModel(nn.Module):
             return x
 
     @torch.inference_mode()
-    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None, position_log_idxs: list[int]=[], token_range_log_idxs: list[int]=[]):
+    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None):
         """
         contexts: list[Tensor(L, torch.long)]
         positions: list[Tensor(L, torch.long)]
@@ -96,10 +96,7 @@ class MambaModel(nn.Module):
         criteria.append(StreamerCriteria(wrapper))
 
         def prefix_allowed_tokens_fn(batch_id: int, input_ids: Tensor):
-            token_range = wrapper.outs[batch_id][2]
-            if batch_id in token_range_log_idxs:
-                self.logger.debug(f"{batch_id=}, {input_ids.shape=}, token_range={[self.vocs[t] for t in token_range]}")
-            return token_range
+            return wrapper.outs[batch_id][2]
         
         if max_new_token is None:
             max_new_token = math.inf

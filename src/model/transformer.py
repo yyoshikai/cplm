@@ -303,7 +303,7 @@ class Model(nn.Module):
         return output
 
     @torch.inference_mode()
-    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None, position_log_idxs: list[int]=[], token_range_log_idxs: list[int]=[]):
+    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None):
         """
         contexts: list[Tensor(L, torch.long)]
         positions: list[Tensor(L, torch.long)]
@@ -313,8 +313,6 @@ class Model(nn.Module):
         B = len(contexts)
         context_sizes = [len(context) for context in contexts]
         device = contexts[0].device
-        do_position_logs = [idx in position_log_idxs for idx in range(len(contexts))]
-        do_token_range_logs = [idx in token_range_log_idxs for idx in range(len(contexts))]
 
         # check shape
         assert len(streamers) == B
@@ -331,10 +329,6 @@ class Model(nn.Module):
             is_continue, next_position, next_token_range = streamers[b].put(contexts[b].tolist()) # [L], list[int]
             is_continues.append(is_continue)
             if not is_continue: continue
-            if do_position_logs[b]:
-                self.logger.debug(f"position[{b}][0]={positions[b]}")
-            if do_token_range_logs[b]:
-                self.logger.debug(f"next_token_range[{b}][0]={[self.vocs[v] for v in next_token_range]}")
             sin, cos = self.get_pos_buffer(positions[b]) # [L, Dh], [L, Dh]
             x = contexts[b].unsqueeze(-1) # [L, 1(B)]
             x = self.embedding(x)
@@ -363,15 +357,11 @@ class Model(nn.Module):
             ])
             if not any(is_continues):
                 break
-            for idx in np.where(do_position_logs)[0]:
-                self.logger.debug(f"position[{idx}][{i_gen}]={positions[idx]}")
-            for idx in np.where(do_token_range_logs)[0]:
-                self.logger.debug(f"next_token_range[{idx}][{i_gen}]={[self.vocs[v] for v in next_token_ranges[idx]]}")
 
             # remove finished sample
             if not all(is_continues):
-                cur_inputs, positions, next_positions, next_token_ranges, streamers, do_position_logs, do_token_range_logs \
-                    = zip(*itr.compress(zip(cur_inputs, positions, next_positions, next_token_ranges, streamers, do_position_logs, do_token_range_logs), is_continues))
+                cur_inputs, positions, next_positions, next_token_ranges, streamers \
+                    = zip(*itr.compress(zip(cur_inputs, positions, next_positions, next_token_ranges, streamers), is_continues))
                 is_continues = torch.tensor(is_continues, device=device)
                 ## src_mask
                 src_mask = src_mask[is_continues]

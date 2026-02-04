@@ -1,4 +1,3 @@
-
 from argparse import Namespace
 from collections.abc import Callable
 from inspect import getfullargspec
@@ -65,7 +64,7 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
             ns_sample[data_idx] += 1
         tokens, positions = zip(*token_positions)
         tokens = [torch.tensor(voc_encoder.encode(token), dtype=torch.long, device=device) for token in tokens]
-        model.generate2(tokens, positions, streamers, max_new_token, position_log_idxs=[len(tokens)-1] if log_position and step == 0 else [], token_range_log_idxs=[len(tokens)-1] if log_token_range and step == 0 else [])
+        model.generate2(tokens, positions, streamers, max_new_token)
     logger.info(f"{out_dir} finished!")
     return streamerss
 
