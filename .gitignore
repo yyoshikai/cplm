@@ -16,6 +16,7 @@ tmp
 !/generate/protein_structure/*.py
 !/generate/pocket_structure/*.py
 !/generate/*.py
+!/generate/rec_ligand/eval.py
 
 # system
 __pycache__/
