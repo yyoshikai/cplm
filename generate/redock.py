@@ -3,7 +3,7 @@ PoseBustersデータセットで評価
 
 
 """
-import yaml, math
+import yaml, math, logging
 import numpy as np
 import torch
 from argparse import Namespace, ArgumentParser
@@ -17,6 +17,7 @@ from src.data.molecule import RandomScoreDataset
 from src.data.datasets.posebusters import PosebustersV2ProteinDataset, PosebustersV2LigandDataset
 from src.finetune import get_finetune_data
 from src.data.tokenizer import TokenRSplitDataset
+from src.train import get_max_opt
 from src.evaluate import obmol2pdb
 from src.generate.streamer import GeneratorStreamer, coord_streamer, array_to_conf, TokenWriteStreamer, RangeWriteStreamer
 from src.generate import generate
@@ -57,7 +58,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     ## training
     parser.add_argument("--sname", required=True)
-    parser.add_argument("--opt", required=True, type=int)
+    parser.add_argument("--opt", type=int)
     parser.add_argument("--reinforce", action='store_true')
     ## generation
     parser.add_argument("--genname")
@@ -72,19 +73,24 @@ if __name__ == '__main__':
     ## check
     parser.add_argument("--check-token-range", action='store_true')
     args = parser.parse_args()
+    
+    logs = []
 
     # finetuning / training args
     ## finetuning
     if args.reinforce:
-        reinforce_dir = f"reinforce/results/{args.sname}"
+        reinforce_dir = train_dir = f"reinforce/results/{args.sname}"
         rargs = Namespace(**yaml.safe_load(open(f"{reinforce_dir}/args.yaml")))
         finetune_dir = f"finetune/results/{rargs.finetune_name}"
-        model_path = f"{reinforce_dir}/models/{args.opt}.pth"
     else:
-        finetune_dir = f"finetune/results/{args.sname}"
-        model_path = f"{finetune_dir}/models/{args.opt}.pth"
+        finetune_dir = train_dir = f"finetune/results/{args.sname}"
     fargs = Namespace(**yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
     setdefault(fargs, 'lig_atoms', False)
+
+    if args.opt is None:
+        args.opt = get_max_opt(train_dir)
+        logs.append((f"args.opt was set to {args.opt}", logging.INFO))
+    model_path = f"{train_dir}/models/{args.opt}.pth"
 
     out_dir = ("./generate/redock/"
             +("reinforce" if args.reinforce else "finetune")
@@ -98,6 +104,7 @@ if __name__ == '__main__':
     score = RandomScoreDataset(-12, -10, len(protein), args.seed)
     raw_data = StackDataset(protein, lig, score)
     _voc_encoder, _raw, rec_data, lig_data, token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=True, random_rotate=False, added_vocs=set(), prompt_score='none' if fargs.no_score else 'low', raw_data=raw_data, encode=False, tensor_position=False)
+    logs += data_logs
     token_position_data = StackDataset(token_data, position_data)
     token_position_data, _ = TokenRSplitDataset(token_position_data, '[XYZ]').untuple()
     token_position_data = SentenceDataset(token_position_data, '[XYZ]')
@@ -129,5 +136,4 @@ if __name__ == '__main__':
         )
         return streamer
     get_token_position_fn = lambda item: (item[3], item[4])
-    generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed)
-
+    generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, logs=logs)

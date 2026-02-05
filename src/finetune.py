@@ -137,7 +137,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     }
     for name, value in default_args.items():
         if not hasattr(args, name):
-            logs.append((f"args.{name} was not set and defaults to {value}.", logging.WARNING))
+            logs.append((f"args.{name} was not set and defaults to {value}.", logging.INFO))
             setattr(args, name, value)
 
     # raw data

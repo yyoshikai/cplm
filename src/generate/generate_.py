@@ -11,7 +11,7 @@ from src.utils.logger import add_file_handler, get_logger, set_third_party_logge
 from src.utils.path import cleardir
 from src.utils.rdkit import ignore_rdkit_warning
 from src.data.tokenizer import VocEncoder
-from src.train import get_model
+from src.train import get_model, log_logs
 
 T = TypeVar('T')
 T_Streamer = TypeVar('T_Streamer')
@@ -23,7 +23,8 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
         max_prompt_len: int,
         max_new_token: int|None,
         batch_size: int,
-        seed: int) -> list[list[T_Streamer]]:
+        seed: int, 
+        logs: list[tuple[str, int]|str]=[]) -> list[list[T_Streamer]]:
 
     # Environment
     set_random_seed(seed)
@@ -35,6 +36,8 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
     add_file_handler(logger, f"{out_dir}/generate.log")
     ignore_rdkit_warning()
     set_third_party_logger()
+
+    log_logs(logger, logs)
 
     logger.debug("args:")
     for name in getfullargspec(generate)[0][2:]: # yamlに保存しようとするとfnとかがエラーになる

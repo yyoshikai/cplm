@@ -94,6 +94,14 @@ def _set_sdp_kernel(sdp_kernel: str|None):
         torch.backends.cuda.enable_math_sdp(sdp_kernel in ['MATH', 'ALL'])
         torch.backends.cuda.enable_mem_efficient_sdp(sdp_kernel in ['EFFICIENT', 'ALL'])
 
+def get_max_opt(result_dir: str) -> int:
+    logger = getLogger('get_last_opt')
+    paths = sorted(glob(f"{result_dir}/models/*.pth"))
+    opts = [int(os.path.basename(path).split('.')[0]) for path in paths]
+    max_opt = max(opts)
+    logger.info(f"{max_opt=}")
+    return max_opt
+
 def _get_train_logger(result_dir):
 
     # ddp info
@@ -270,6 +278,14 @@ def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: st
         return model, voc_encoder
     else:
         return model
+    
+def log_logs(logger: Logger, logs: list[str|tuple[str, int]]):
+    for log in logs:
+        if isinstance(log, str):
+            logger.info(log, **NO_DUP)
+        else:
+            msg, level = log
+            logger.log(level, msg, **NO_DUP)
 
 def log_batch(prefix: str, logger: Logger, token_logger: Logger, target_batch: Tensor, weight_batch: Tensor, voc_encoder: VocEncoder, step: int, check_data_dist: bool, gpuuse_getter: Callable[[int, int], float]):
 
@@ -339,13 +355,7 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
 
     ## Log args
     logger.info(f"[Logs in preparation]", **NO_DUP)
-    for log in preparation_logs:
-        if isinstance(log, tuple):
-            msg, level = log
-            logger.log(level, msg, **NO_DUP)
-        else:
-            logger.info(log, **NO_DUP)
-        
+    log_logs(logger, preparation_logs)
     logger.info('')
 
     return logger, token_logger, rank, device
