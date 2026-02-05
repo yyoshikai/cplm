@@ -23,9 +23,7 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
         max_prompt_len: int,
         max_new_token: int|None,
         batch_size: int,
-        seed: int, 
-        log_position: bool, 
-        log_token_range: bool) -> list[list[T_Streamer]]:
+        seed: int) -> list[list[T_Streamer]]:
 
     # Environment
     set_random_seed(seed)

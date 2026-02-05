@@ -68,8 +68,6 @@ if __name__ == '__main__':
     parser.add_argument("--no-token-range", action='store_true')
     ## environment
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--log-position", action='store_true')
-    parser.add_argument("--log-token-range", action='store_true')
     parser.add_argument("--max-workers", type=int)
     ## check
     parser.add_argument("--check-token-range", action='store_true')
@@ -131,5 +129,5 @@ if __name__ == '__main__':
         )
         return streamer
     get_token_position_fn = lambda item: (item[3], item[4])
-    generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, log_position=args.log_position, log_token_range=args.log_token_range)
+    generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed)
 

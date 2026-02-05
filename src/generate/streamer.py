@@ -98,7 +98,9 @@ class TokenWriteStreamer(WrapperStreamer):
             with open(self.new_csv_path, 'w') as f:
                 f.write("position,token\n")
         else:
-            assert len(tokens) == 1
+            if len(tokens) == 0: # generation is ended
+                return False, 0, [self.voc_encoder.pad_token]
+            assert len(tokens) == 1, str(tokens)
             with open(self.new_csv_path, 'a') as f:
                 f.write(f"{tokens[0]}\n")
         
