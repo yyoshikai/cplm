@@ -120,7 +120,7 @@ class RangeWriteStreamer(WrapperStreamer):
             mwrite(self.range_path, "token_range\n")
             self.is_init = False
         with open(self.range_path, 'a') as f:
-            f.write(','.join(self.voc_encoder.decode(token_range))+'\n')
+            f.write(','.join(self.voc_encoder.i2voc[t] for t in token_range)+'\n')
         return is_remain, position, token_range
 
 class TokenSaveStreamer(WrapperStreamer):

@@ -26,7 +26,7 @@ from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
 from src.data.tokenizer import FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
 from src.data.collator import DDPStringCollateLoader
-from src.data.molecule import MolTokenizeDataset
+from src.data.molecule import MolProcessDataset, MolTokenizeDataset
 from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch, NO_DUP
 
 # Environment
@@ -98,7 +98,8 @@ def get_downstream_data(split, is_valid, voc_encoder=None):
 
     # tokenize
     sentence = []
-    mol = MolTokenizeDataset(mol, args.seed, h_atom=not targs.no_lig_h_atom, h_coord=not targs.no_lig_h_coord, randomize=targs.lig_randomize, coord_range=targs.coord_range, coord_follow_atom=getattr(targs, 'lig_coord_follow_atom', False), atoms=getattr('lig_atoms', False), atom_order=getattr('atom_order', False))
+    mol = MolProcessDataset(mol, args.seed, not targs.no_lig_h_atom, targs.lig_randomize)
+    mol = MolTokenizeDataset(mol, coord_follow_atom=getattr(targs, 'lig_coord_follow_atom', False), atoms=getattr(targs, 'lig_atoms', False), atom_order=getattr(targs, 'atom_order', False), coord_range=targs.coord_range, no_h_coord=targs.no_lig_h_coord)
     sentence += ['[LIGAND]', mol, '[END]']
     if is_valid:
         sentence += ['[SCORE]']

@@ -10,13 +10,14 @@ from argparse import Namespace, ArgumentParser
 from rdkit import Chem
 
 from src.utils import setdefault
-from src.utils.path import make_pardir
+from src.utils.path import make_pardir, mwrite
 from src.data import StackDataset, index_dataset
 from src.data.tokenizer import SentenceDataset, VocEncoder
 from src.data.molecule import RandomScoreDataset
 from src.data.datasets.posebusters import PosebustersV2ProteinDataset, PosebustersV2LigandDataset
 from src.finetune import get_finetune_data
 from src.data.tokenizer import TokenRSplitDataset
+from src.evaluate import obmol2pdb
 from src.generate.streamer import GeneratorStreamer, coord_streamer, array_to_conf, TokenWriteStreamer, RangeWriteStreamer
 from src.generate import generate
 
@@ -98,7 +99,7 @@ if __name__ == '__main__':
     lig =PosebustersV2LigandDataset()
     score = RandomScoreDataset(-12, -10, len(protein), args.seed)
     raw_data = StackDataset(protein, lig, score)
-    _voc_encoder, _raw, protein_data, lig_data, token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=True, random_rotate=False, added_vocs=set(), prompt_score='none' if fargs.no_score else 'low', raw_data=raw_data, encode=False, tensor_position=False)
+    _voc_encoder, _raw, rec_data, lig_data, token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=True, random_rotate=False, added_vocs=set(), prompt_score='none' if fargs.no_score else 'low', raw_data=raw_data, encode=False, tensor_position=False)
     token_position_data = StackDataset(token_data, position_data)
     token_position_data, _ = TokenRSplitDataset(token_position_data, '[XYZ]').untuple()
     token_position_data = SentenceDataset(token_position_data, '[XYZ]')
@@ -106,11 +107,12 @@ if __name__ == '__main__':
 
 
     idx_data, token_data = index_dataset(token_data)
-    prompt_data = StackDataset(idx_data, lig_data, token_data, position_data)
+    prompt_data = StackDataset(idx_data, lig_data, rec_data, token_data, position_data)
     N = len(prompt_data)
 
     def streamer_fn(item, i_trial: int, voc_encoder):
-        idx, lig, token, position = item
+        idx, lig, rec, token, position = item
+        mwrite(f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb", obmol2pdb(rec))
         streamer = LigandCoordStreamer(
             lig, 
             new_sdf_path=f"{out_dir}/new_sdf/{idx}/{i_trial}.sdf", 
@@ -128,6 +130,6 @@ if __name__ == '__main__':
             range_path=f"{out_dir}/token_range/{idx}_{i_trial}.txt"
         )
         return streamer
-    get_token_position_fn = lambda item: (item[2], item[3])
+    get_token_position_fn = lambda item: (item[3], item[4])
     generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, log_position=args.log_position, log_token_range=args.log_token_range)
 

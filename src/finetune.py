@@ -15,7 +15,7 @@ from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDatas
 from .data.datasets.crossdocked import CDDataset, CDProteinDataset
 from .data.datasets.pdb import PDBUniMolRandomDataset
 from .data.protein import Pocket, PocketTokenizeDataset, ProteinTokenizeDataset
-from .data.molecule import MolTokenizeDataset, RandomScoreDataset, RandomClassDataset
+from .data.molecule import MolProcessDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset
 from .data.coord import CoordTransformDataset
 
 def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
@@ -59,11 +59,10 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
         ### Molecules
         if cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset]:
             mol = data
+            mol = MolProcessDataset(mol, args.seed+d_seed, not args.no_lig_h_atom, args.lig_randomize)
             mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, 
                 normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-            mol = MolTokenizeDataset(mol, args.seed+d_seed, 
-                h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, 
-                randomize=args.lig_randomize, coord_range=args.coord_range, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms, atom_order=args.lig_atom_order)
+            mol = MolTokenizeDataset(mol, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms, atom_order=args.lig_atom_order, coord_range=args.coord_range, no_h_coord=args.no_lig_h_coord)
             
             ### sentence
             sentence = ['[LIGAND]', mol, '[END]']
@@ -199,8 +198,9 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     ## ligand
     sentence.append('[LIGAND]')
     weights.append(args.lig_smiles_weight)
+    lig = MolProcessDataset(lig, args.seed, not args.no_lig_h_atom, args.lig_randomize)
     if add_ligand:
-        lig_tokens = MolTokenizeDataset(lig, args.seed, h_atom=not args.no_lig_h_atom, h_coord=not args.no_lig_h_coord, randomize=args.lig_randomize, coord_range=args.coord_range, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms, atom_order=args.lig_atom_order)
+        lig_tokens = MolTokenizeDataset(lig, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms, atom_order=args.lig_atom_order, coord_range=args.coord_range, no_h_coord=args.no_lig_h_coord)
         sentence += [lig_tokens, '[END]']
         weights += [args.lig_coord_weight, 0.0]
     sentence = SentenceDataset(*sentence)
