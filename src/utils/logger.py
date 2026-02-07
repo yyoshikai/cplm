@@ -9,6 +9,8 @@ DEFAULT_DATEFMT = "%y%m%d %H:%M:%S"
 
 INFO_WORKER = 25
 
+NO_DUP = {'extra': {'no_dup': True}}
+
 log_name2level = {
     'debug': logging.DEBUG,
     'info': logging.INFO,

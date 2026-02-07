@@ -2,7 +2,7 @@ import argparse
 
 import yaml
 from src.train import train, add_train_args, update_pretrain_args, set_default_args
-from src.finetune import get_finetune_data
+from src.train.data import get_finetune_data
 from src.data import StackDataset
 
 logs = []

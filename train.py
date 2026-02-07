@@ -1,7 +1,7 @@
 import argparse
 from src.data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
-from src.finetune import get_train_data
+from src.train.data import get_train_data
 from src.train import train, add_pretrain_args, add_train_args, set_default_args
 
 # arguments

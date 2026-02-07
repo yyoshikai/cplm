@@ -2,7 +2,7 @@ from argparse import ArgumentParser, Namespace
 import yaml
 from addict import Dict
 from src.train import train, add_train_args, update_pretrain_args, set_default_args
-from src.finetune import get_train_data
+from src.train.data import get_train_data
 from src.data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 

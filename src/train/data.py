@@ -8,15 +8,15 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from openbabel.openbabel import OBMol
-from .data import RepeatDataset, Subset, StackDataset, TensorDataset, untuple_dataset
-from .data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
-from .data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
-from .data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
-from .data.datasets.crossdocked import CDDataset, CDProteinDataset
-from .data.datasets.pdb import PDBUniMolRandomDataset
-from .data.protein import Pocket, PocketTokenizeDataset, ProteinTokenizeDataset
-from .data.molecule import MolProcessDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset
-from .data.coord import CoordTransformDataset
+from ..data import RepeatDataset, Subset, StackDataset, TensorDataset, untuple_dataset
+from ..data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
+from ..data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
+from ..data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
+from ..data.datasets.crossdocked import CDDataset, CDProteinDataset
+from ..data.datasets.pdb import PDBUniMolRandomDataset
+from ..data.protein import Pocket, PocketTokenizeDataset, ProteinTokenizeDataset
+from ..data.molecule import MolProcessDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset
+from ..data.coord import CoordTransformDataset
 
 def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
     logs = []

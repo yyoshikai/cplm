@@ -8,7 +8,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
 sys.path.append(f"{os.environ.get('WORKDIR', '/workspace')}/cplm")
-from src.finetune import get_train_data
+from src.train.data import get_train_data
 from src.train import init_ddp, get_model, validate, CrossEntropyLoss
 from src.utils.logger import get_logger, add_file_handler
 

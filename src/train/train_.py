@@ -24,19 +24,20 @@ from transformers.trainer_pt_utils import get_parameter_names
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from schedulefree import RAdamScheduleFree
 
-from .data import RevealIterator
-from .data.tokenizer import VocEncoder
-from .data.collator import DDPStringCollateLoader, InfiniteLoader
-from .model import Model, MambaModel
-from .utils import git_commit, get_git_hash, reveal_data, should_show
-from .utils.logger import add_stream_handler, add_file_handler, set_third_party_logger
-from .utils.model import get_num_params, get_model_size
-from .utils.path import cleardir
-from .utils.ddp import reduce_float
-from .utils.random import ddp_set_random_seed, set_deterministic
-from .utils.time import TimerTqdm, EndEstimator
-from .utils import IterateRecorder, remove_module
-from .finetune import collate
+from ..data import RevealIterator
+from ..data.tokenizer import VocEncoder
+from ..data.collator import DDPStringCollateLoader, InfiniteLoader
+from ..model import Model, MambaModel
+from ..utils import git_commit, get_git_hash, reveal_data, should_show
+from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, set_third_party_logger
+from ..utils.model import get_num_params, get_model_size
+from ..utils.path import cleardir
+from ..utils.ddp import reduce_float
+from ..utils.random import ddp_set_random_seed, set_deterministic
+from ..utils.time import EndEstimator
+from ..utils import IterateRecorder, remove_module
+from .data import collate
+from .looper import Loopers, TimeLogLooper, TimeWriteLooper, LogLooper
 
 def init_ddp():
     dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
@@ -46,7 +47,6 @@ def init_ddp():
         if torch.cuda.is_available() else torch.device('cpu')
     return rank, size, device
 
-NO_DUP = {'extra': {'no_dup': True}}
 def get_process_ranks() -> tuple[int, int, dict[str, int]]:
     MAIN_RANK = 1
     SAVE_RANK = 0
@@ -502,7 +502,11 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
     
     # Times
-    step_timer = TimerTqdm(itr.count(), time_path=f"{result_dir}/steps/times/{rank}.csv", file_interval=10000, log_interval=10000, desc='step', disable_bar=True)
+    train_looper = Loopers([
+        LogLooper(logger, 10000, 5, 'step', 'trianing'), 
+        TimeLogLooper(logger, 'step', 10000), 
+        TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 10000)
+    ])
     if args.end_limit is not None and rank == MAIN_RANK:
         end_estimator = EndEstimator(args.end_limit, args.max_opt, args.studyname)
 
@@ -527,7 +531,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     ## collated data loader
     train_loader = DDPStringCollateLoader(train_loader, partial(collate, pad_token=voc_encoder.pad_token), get_gpuuse, 
             args.gpu_size, device, 100000, DATA_RANK['train'], 
-            f"{result_dir}/data/train_large_items.csv", step_timer if 'data_loading' in args.check else None)
+            f"{result_dir}/data/train_large_items.csv", train_looper if 'data_loading' in args.check else None)
     train_iter = train_loader.__iter__()
 
     # criterion
@@ -565,16 +569,14 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", 1000)
 
     train_start = time()
-    logger.info("Training started.", **NO_DUP)
-    for step in step_timer:
+    train_looper.start_loops()
+    for step in itr.count():
         is_starting = step < 5
 
         # evaluate & save
-        if opt == next_eval_opt:
-            step_timer.start('evaluation')
-            
-            # validation 
-            logger.info(f"Validation at {opt=}...", **NO_DUP)
+        if opt == next_eval_opt:            
+            # validation
+            train_looper.put('evaluation')
             if args.schedule_free: optimizer.eval()
             process_weights, process_losses, total_weights, total_losses = validate(valid_datas, data_names, voc_encoder,
                 model, criterion, 
@@ -623,14 +625,14 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         if is_starting:
             torch.cuda.reset_peak_memory_stats(device)
         ## get batch
-        step_timer.start('get_batch')
+        train_looper.put('get_batch')
         token_batch, position_batch, weight_batch = train_iter.__next__()
         target = token_batch[1:]
         max_len, batch_size = token_batch.shape
         worker_step_weight = weight_batch.sum().item()
 
         ## Log target for final check
-        step_timer.start('log_target')
+        train_looper.put('log_target')
         if is_starting:
             token_logger.debug(f"Train step {step} data:")
             log_batch('train', logger, token_logger, target, weight_batch, 
@@ -644,7 +646,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         ## forward
         if check_random_state: 
             logger.debug(f"step[{step}] random_state={torch.cuda.get_rng_state()}")
-        step_timer.start('forward')
+        train_looper.put('forward')
         with nullcontext() if do_opt or args.sync_every_step else model.no_sync():
             with torch.autocast('cuda', torch.bfloat16):
                 pred = model(token_batch[:-1], position_batch[:-1])
@@ -653,7 +655,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
 
             if check_fb_time:
                 torch.cuda.synchronize()
-            step_timer.start('backward')
+            train_looper.put('backward')
             loss.backward()
             if check_fb_time:
                 torch.cuda.synchronize()
@@ -666,7 +668,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 worker_weight=worker_step_weight, worker_loss=worker_step_loss)
 
         ## check nan
-        step_timer.start('check_nan')
+        train_looper.put('check_nan')
         if args.reset_nan_grad:
             grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
             if not grad_is_finite:
@@ -689,7 +691,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 optimizer.zero_grad()
         
         ## Log gpuuse
-        step_timer.start('log')
+        train_looper.put('log')
         if is_starting:
             logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
 
@@ -699,8 +701,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             logger.debug(f"step[{step}] grad[{name}]={param.grad.ravel()[:5]}")
 
         ## End starting
-        if step+1 == 5: 
-            step_timer.log_interval = 10000
+        if step+1 == 5:
             if check_data_dist:
                 if rank == DATA_RANK['train']:
                     train_reveal_loader.enabled = False
@@ -710,10 +711,9 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             logger.info(f"[Finish]{step+1:>6} step t={time()-train_start:>9.02f}", **NO_DUP)
         
         # opt
-        step_timer.start('optim_init')
         if do_opt:
             ## optimizer
-            step_timer.start('optim')
+            train_looper.put('optim')
             if args.clip_grad_value is not None:
                 torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
@@ -744,11 +744,10 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             if rank == MAIN_RANK and args.end_limit is not None and opt % 10 == 0 \
                     and should_show(opt // 10, args.eval_opt // 10):
                 end_estimator.check(opt)
-                
-
+        train_looper.end_loop()
     opt_recorder.flush()
     step_recorder.flush()
     val_recorder.flush()
-    logger.info("Training finished!")
+    train_looper.end_loops()
 
     # dist.destroy_process_group()

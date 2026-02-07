@@ -21,13 +21,14 @@ from src.utils import IterateRecorder, should_show
 from src.utils.ddp import dist_broadcast_object, dist_send_tensor, dist_recv_tensor
 from src.utils.random import ddp_set_random_seed
 from src.utils.rdkit import ignore_rdkit_warning
+from src.utils.logger import NO_DUP
 from src.data import KeyDataset, CacheDataset, StackDataset, TensorDataset
 from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
 from src.data.tokenizer import FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
 from src.data.collator import DDPStringCollateLoader
 from src.data.molecule import MolProcessDataset, MolTokenizeDataset
-from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch, NO_DUP
+from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch
 
 # Environment
 logs = []

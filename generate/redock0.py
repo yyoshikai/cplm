@@ -14,7 +14,7 @@ from src.data import StackDataset, index_dataset
 from src.data.tokenizer import SentenceDataset, VocEncoder
 from src.data.molecule import RandomScoreDataset
 from src.data.datasets.posebusters import PosebustersV2ProteinDataset, PosebustersV2LigandDataset
-from src.finetune import get_finetune_data
+from src.train.data import get_finetune_data
 from src.data.tokenizer import TokenRSplitDataset
 from src.train import get_max_opt
 from src.chem import array_to_conf, obmol2pdb

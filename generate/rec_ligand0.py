@@ -6,10 +6,10 @@ from src.utils import setdefault
 from src.utils.path import mwrite
 from src.data import StackDataset, Subset, index_dataset
 from src.data.tokenizer import SmilesTokenizer
-from src.finetune import get_finetune_data
+from src.train.data import get_finetune_data
 from src.generate import generate
 from src.generate.streamer import LigandStreamer, TokenWriteStreamer, RangeWriteStreamer
-from src.evaluate import obmol2pdb
+from src.chem import obmol2pdb
 
 
 if __name__ == '__main__':

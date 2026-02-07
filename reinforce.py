@@ -20,7 +20,6 @@ from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
 from src.utils.path import cleardir
-from src.utils.time import TimerTqdm
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.ddp import dist_all_gather
 from src.chem import rdmol2obmol, pdb2obmol
@@ -28,8 +27,9 @@ from src.evaluate import eval_vina, eval_qvina
 from src.data.protein import Protein2PDBDataset
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks
 from src.model import Model
-from src.finetune import get_finetune_data
 from src.data.collator import solve_increasing_fn_left
+from src.train.data import get_finetune_data
+from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper
 from src.generate.streamer import LigandStreamer, TokenWriteStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
@@ -210,12 +210,18 @@ def main():
     optimizer, scheduler = get_optimizer_scheduler(model, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, 'optimizer' in args.check)
     optimizer.zero_grad()
 
+    
+
     ## records
     step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", args.record_opt)
     error_recorder = IterateRecorder(f"{result_dir}/errors/{rank}.csv", args.record_opt)
     score_recorder = IterateRecorder(f"{result_dir}/scores/{rank}.csv", args.record_opt)
     size_recorder = IterateRecorder(f"{result_dir}/size/{rank}.csv",  args.record_opt)
-    step_timer = TimerTqdm(range(args.max_opt), time_path=f"{result_dir}/steps/times/{rank}.csv", file_interval=100, log_interval=100, disable_bar=True)
+    train_looper = Loopers([
+        LogLooper(logger, 'training', 'step', 1000, 5),
+        TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 100),
+        TimeLogLooper(logger, 'step', 1000), 
+    ])
 
     # save at step 0
     if rank == SAVE_RANK:
@@ -223,15 +229,13 @@ def main():
         cleardir(f"{result_dir}/optimizers")
         torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/0.pth")
 
-    logger.info("Training started.")
-    for step in step_timer:
+    train_looper.start_loops()
+    for step in range(args.max_opt):
         is_starting = step < 5
         do_save = step in do_save_steps
 
         # get batch
-        step_timer.start('get_batch')
-        if is_starting:
-            logger.debug("get_batch started.")
+        train_looper.put('get_batch')
         if rank == DATA_RANK['train']:
             all_items = []
             for si in range(args.batch_size*ddp_size // args.generate_per_sample):
@@ -253,8 +257,7 @@ def main():
         B = len(prompt_tokens)
 
         # generate sample
-        step_timer.start('generate')
-        if is_starting: logger.debug(f"step[{step}] generate started.")
+        train_looper.put('generate')
         model.eval()
         streamers = ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, fargs.coord_range, voc_encoder, False, not fargs.no_lig_h_atom, not fargs.no_lig_h_coord, None) for idx in range(B)]
         streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in streamers]
@@ -287,7 +290,7 @@ def main():
         size_recorder.record(**sizes)
                 
         # Get score
-        step_timer.start('get_score')
+        train_looper.put('get_score')
         errors = []
         with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
             futures = []
@@ -343,9 +346,7 @@ def main():
             logger.info(f"step {step} scores={scores.cpu().tolist()}")
 
         # Forward Get prob & reward loss
-        if is_starting:
-            logger.debug(f"step[{step}] forward & backward started.")
-        step_timer.start('forward_backward')
+        train_looper.put('forward_backward')
         model.train()
         La, B = out_batch.shape
         mbatch_size = solve_increasing_fn_left(lambda bsz: get_gpuuse(bsz, La)-args.gpu_size, 16)
@@ -386,7 +387,7 @@ def main():
                 kl_loss += kl_loss_mbatch.item()
 
         # Optimizer's step
-        step_timer.start('optim')
+        train_looper.put('optim')
         if args.clip_grad_value is not None:
             torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
@@ -403,7 +404,6 @@ def main():
                 torch.save(model.state_dict(), f"{result_dir}/models/{step}.pth")
                 cleardir(f"{result_dir}/optimizers")
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
-        logger.info(f"{step=} finished.")
 
         if is_starting:
             logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
@@ -413,10 +413,10 @@ def main():
             logger.info("RDKit logger will be disabled from now on.")
             getLogger('rdkit').propagate = False
 
+        train_looper.end_loop()
+    train_looper.end_loops()
     step_recorder.flush()
     error_recorder.flush()
-
-    logger.info("Training finished!")
     dist.destroy_process_group()
 
 if __name__ == '__main__':
