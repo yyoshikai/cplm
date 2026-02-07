@@ -17,6 +17,7 @@ tmp
 !/generate/pocket_structure/*.py
 !/generate/*.py
 !/generate/rec_ligand/eval.py
+!/generate/redock/eval.py
 
 # system
 __pycache__/
