@@ -142,7 +142,6 @@ class StringCollateIterator(Iterable[list[T_in]]):
         return solve_increasing_fn_left(lambda bsz: self.gpuuse_getter(bsz, length)-self.gpu_size, 16)
 
 
-
 class DDPStringCollateLoader(Iterable[T_out]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, loader: Optional[Iterable[T_in]], collator: Callable[[T_in], T_out], gpuuse_getter: Callable[[int, int], float], gpu_size: float, device: torch.device, log_large_freq: int|float, main_rank: int=0, 

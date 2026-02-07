@@ -355,6 +355,7 @@ def main():
             logger.info(f"{mbatch_size=}")
         reward_loss = 0
         kl_loss = 0
+        value_loss = 0.0
         with model.join():
             for mbatch_start in range(0, B, mbatch_size):
                 mslice = slice(mbatch_start, mbatch_start+mbatch_size)
@@ -366,7 +367,7 @@ def main():
                     with torch.inference_mode():
                         init_logits = init_model(out_mbatch[:-1], position_mbatch[:-2]) # [L, B, N]
                         init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
-                    logits = model(out_mbatch[:-1], position_mbatch[:-2]) # [Lo-1, B, T]
+                    logits, states = model(out_mbatch[:-1], position_mbatch[:-2], out_state=True) # [Lo-1, B, T]
                     values = model.value_head(states)
                     log_probs_all = F.log_softmax(logits, dim=-1) # [Lo-1, B, N]
                     log_probs = torch.gather(log_probs_all, dim=-1, index=out_mbatch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
