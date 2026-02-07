@@ -78,7 +78,7 @@ def main():
     parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
     parser.add_argument('--clip-grad-value', type=float, default=None)
     parser.add_argument('--clip-grad-norm', type=float, default=1.0) # same as BindGPT
-    parser.add_argument('--loss-scale')
+    parser.add_argument('--loss-scale', type=float, default=1.0)
     ## scheduler
     parser.add_argument('--lr', type=float, default=1.4e-5) # same as BindGPT
     parser.add_argument('--scheduler', default='constant') # same as BindGPT
@@ -209,11 +209,6 @@ def main():
     # optimizer
     optimizer, scheduler = get_optimizer_scheduler(model, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, 'optimizer' in args.check)
     optimizer.zero_grad()
-    match args.loss_scale:
-        case None:
-            loss_scale = 1.0
-        case _:
-            loss_scale = float(args.loss_scale)
 
     ## records
     step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", args.record_opt)
@@ -360,7 +355,6 @@ def main():
             logger.info(f"{mbatch_size=}")
         reward_loss = 0
         kl_loss = 0
-        value_loss = 0.0
         with model.join():
             for mbatch_start in range(0, B, mbatch_size):
                 mslice = slice(mbatch_start, mbatch_start+mbatch_size)
@@ -372,7 +366,7 @@ def main():
                     with torch.inference_mode():
                         init_logits = init_model(out_mbatch[:-1], position_mbatch[:-2]) # [L, B, N]
                         init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
-                    logits, states = model(out_mbatch[:-1], position_mbatch[:-2], out_state=True) # [Lo-1, B, T]
+                    logits = model(out_mbatch[:-1], position_mbatch[:-2]) # [Lo-1, B, T]
                     values = model.value_head(states)
                     log_probs_all = F.log_softmax(logits, dim=-1) # [Lo-1, B, N]
                     log_probs = torch.gather(log_probs_all, dim=-1, index=out_mbatch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
@@ -385,7 +379,7 @@ def main():
                     kl_loss_mbatch = kl_loss_mbatch.sum(dim=-1) # [Lo-1, B]
                     kl_loss_mbatch = torch.sum(kl_loss_mbatch*weight_mbatch)
                     
-                    loss = (reward_loss_mbatch + kl_loss_mbatch * args.alpha) * loss_scale
+                    loss = (reward_loss_mbatch + kl_loss_mbatch * args.alpha) * args.loss_scale
                 loss.backward()
                 reward_loss += reward_loss_mbatch.item()
                 kl_loss += kl_loss_mbatch.item()
