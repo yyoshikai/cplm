@@ -2,7 +2,6 @@ from argparse import Namespace
 from collections.abc import Callable
 from inspect import getfullargspec
 from typing import TypeVar
-import yaml
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset, BatchSampler
@@ -63,6 +62,7 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
                 streamers.append(streamer)
                 streamerss[data_idx].append(streamer)
             ns_sample[data_idx] += 1
+        if len(token_positions) == 0: continue
         tokens, positions = zip(*token_positions)
         tokens = [torch.tensor(voc_encoder.encode(token), dtype=torch.long, device=device) for token in tokens]
         model.generate2(tokens, positions, streamers, max_new_token)

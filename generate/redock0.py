@@ -5,7 +5,6 @@ PoseBustersデータセットで評価
 """
 import yaml, math, logging
 import numpy as np
-import torch
 from argparse import Namespace, ArgumentParser
 from rdkit import Chem
 
@@ -18,8 +17,8 @@ from src.data.datasets.posebusters import PosebustersV2ProteinDataset, Posebuste
 from src.finetune import get_finetune_data
 from src.data.tokenizer import TokenRSplitDataset
 from src.train import get_max_opt
-from src.evaluate import obmol2pdb
-from src.generate.streamer import GeneratorStreamer, coord_streamer, array_to_conf, TokenWriteStreamer, RangeWriteStreamer
+from src.chem import array_to_conf, obmol2pdb
+from src.generate.streamer import GeneratorStreamer, coord_streamer, TokenWriteStreamer, RangeWriteStreamer
 from src.generate import generate
 
 class LigandCoordStreamer(GeneratorStreamer):
@@ -67,6 +66,7 @@ if __name__ == '__main__':
     parser.add_argument("--sample-seed", type=int, default=0)
     parser.add_argument("--trial", type=int, default=5)
     parser.add_argument("--no-token-range", action='store_true')
+    parser.add_argument("--max-prompt-len", type=int, default=math.inf)
     ## environment
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-workers", type=int)
@@ -136,4 +136,4 @@ if __name__ == '__main__':
         )
         return streamer
     get_token_position_fn = lambda item: (item[3], item[4])
-    generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed, logs=logs)
+    generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=args.max_prompt_len, max_new_token=None, batch_size=args.batch_size, seed=args.seed, logs=logs)

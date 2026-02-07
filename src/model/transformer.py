@@ -267,7 +267,7 @@ class Model(nn.Module):
         cos = torch.tensor(np.cos(position_enc)).to(self.embedding.weight)
         return sin, cos
             
-    def forward(self, src: Tensor, position: Tensor,
+    def forward(self, src: Tensor, position: Tensor, out_state: bool=False,
             get_mem: bool=False, offset: list[float]=None, mem_path: str=None, out_pos_buffer: bool=False):
         """
         src: [L, B]
@@ -291,16 +291,19 @@ class Model(nn.Module):
             self.logger.debug(f"make_pos_buffer call={self.n_make_pos_buffer}/{self.n_forward}")
         for layer in self.layers:
             x, _ = layer(x, sin, cos, is_causal=True)
-        x = self.predictor(self.norm(x))
+        x = self.norm(x)
+        state = x
+        x = self.predictor(x)
 
         # get_mem
         output = (x, )
+        if out_state:
+            output += (state,)
         if get_mem:
             output += tuple(get_mems(src.device, offset, mem_path))
         if out_pos_buffer:
             output += (sin, cos, )
-        if len(output) == 1: output = output[0]
-        return output
+        return output[0] if len(output) == 1 else output
 
     @torch.inference_mode()
     def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None):

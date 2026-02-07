@@ -6,8 +6,9 @@ from torch.utils.data import Dataset
 from rdkit import Chem
 from rdkit.Geometry import Point3D
 from openbabel.openbabel import OBMol, OBMolAtomIter
+from ..chem import get_coord_from_mol, set_conf
 from .data import WrapDataset, WrapTupleDataset, get_rng
-from .protein import Pocket, get_coord_from_mol
+from .protein import Pocket
 
 class Scaler:
     def __init__(self, from_a: float, from_b: float, to_a: float, to_b: float):
@@ -92,9 +93,7 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
         for item, coord in zip(items, coords):
             if isinstance(item, Chem.Mol):
                 # confへの代入のみで元の分子も変更されることを確認 @tests/test.ipynb
-                conf = item.GetConformer()
-                for i in range(len(coord)):
-                    conf.SetAtomPosition(i, Point3D(*coord[i]))
+                set_conf(item.GetConformer(), coord)
             elif isinstance(item, Pocket):
                 item.coord = coord
             else:

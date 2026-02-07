@@ -6,16 +6,16 @@ from collections.abc import Generator
 from logging import getLogger
 import numpy as np, pandas as pd
 from rdkit import Chem
-from rdkit.Chem import Conformer
 from rdkit.Chem.rdDetermineBonds import DetermineBondOrders
-from rdkit.Geometry import Point3D
-from openbabel.openbabel import OBMol, OBConversion
-from src.utils import should_show
-from src.utils.path import make_pardir, mwrite
-from src.model import Streamer, WrapperStreamer
-from src.data.molecule import element_symbols
-from src.data.tokenizer import FloatTokenizer, SmilesTokenizer, VocEncoder
-from src.evaluate import eval_vina, eval_qvina, obmol2pdb
+from openbabel.openbabel import OBMol
+from ..utils import should_show
+from ..utils.path import make_pardir, mwrite
+from ..model import Streamer, WrapperStreamer
+from ..data.molecule import element_symbols
+from ..data.tokenizer import FloatTokenizer, SmilesTokenizer, VocEncoder
+from ..chem import obmol2pdb
+from ..evaluate import eval_vina, eval_qvina
+from ..chem import array_to_conf
 
 def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool, center: np.ndarray|None) -> Generator[tuple[bool, list[int], list[int]], list[int], tuple[np.ndarray|None, int, str|None]]:
     """
@@ -62,12 +62,6 @@ def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, v
                 f.write(f"{i_atom},{coords[0]},{coords[1]},{coords[2]}\n")
         coordss.append(coords)
     return np.array(coordss), pos, None
-
-def array_to_conf(coord: np.ndarray) -> Conformer:
-    conf = Conformer()
-    for i in range(len(coord)):
-        conf.SetAtomPosition(i, Point3D(*coord[i].tolist()))
-    return conf
 
 class GeneratorStreamer(Streamer):
     def __init__(self):

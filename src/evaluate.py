@@ -10,53 +10,10 @@ from openbabel import openbabel as ob
 from openbabel.openbabel import OBMol, OBConversion
 from .prepare_receptor4 import main as prepare_receptor4_func
 from .utils.path import make_pardir, WORKDIR
-from .data.protein import get_coord_from_mol
+from .chem import sdf2obmol, pdb2obmol, rdmol2obmol, get_coord_from_mol
 logger = getLogger(__name__)
 
 T = TypeVar('T')
-
-def rdmol2obmol(rdmol: Chem.Mol) -> OBMol:
-    sdf = Chem.MolToMolBlock(rdmol) # hydrogens remain
-    obc = OBConversion()
-    obc.SetInFormat('sdf')
-    obmol = OBMol()
-    obc.ReadString(obmol, sdf)
-    return obmol
-
-def obmol2rdmol(obmol: OBMol) -> Chem.Mol:
-    """
-    MolFromMolBlockだとPropが無視される。
-    
-    """
-    obc = OBConversion()
-    obc.SetOutFormat('sdf')
-    sdf = obc.WriteString(obmol)
-    ms = Chem.SDMolSupplier()
-    ms.SetData(sdf, removeHs=False)
-    return next(ms)
-
-def pdb2obmol(pdb: str) -> OBMol:
-    obc = OBConversion()
-    obc.SetInFormat('pdb')
-    obmol = OBMol()
-    obc.ReadString(obmol, pdb)
-    return obmol
-
-def sdf2obmol(sdf: str) -> OBMol:
-    obc = OBConversion()
-    obc.SetInFormat('sdf')
-    obmol = OBMol()
-    obc.ReadString(obmol, sdf)
-    return obmol
-
-def obmol2pdb(obmol: OBMol) -> str:
-    obc = OBConversion()
-    obc.SetOutFormat('pdb')
-    return obc.WriteString(obmol)
-
-def sdf_path2obmol(sdf_path: str) -> OBMol:
-    with open(sdf_path) as f:
-        return sdf2obmol(f.read())
 
 def eval_vina(ligand: OBMol|str, rec: OBMol|str, rec_pdbqt_path: str) -> tuple[float, float]:
     """

@@ -1,12 +1,11 @@
 from dataclasses import dataclass
-from ctypes import c_double
-from typing import Literal
 import numpy as np
 from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
 from torch.utils.data import Dataset
+from ..utils import slice_str
+from ..chem import get_coord_from_mol
 from .data import WrapDataset
 from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
-from ..utils import slice_str
 
 
 @dataclass
@@ -26,10 +25,6 @@ def pocket2pdb(pocket: Pocket, out_path: str):
             if atom == 'H': continue
             f.write(f"ATOM  {ia:5}  {atom:<3} UNK A   1    {coord[0]:8.03f}{coord[1]:8.03f}{coord[1]:8.03f}  1.00 40.00           {atom[0]}  \n")
 
-
-def get_coord_from_mol(mol: OBMol) -> np.ndarray:
-    coord = mol.GetCoordinates()
-    return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
 
 class ProteinTokenizer:
     def __init__(self, *, heavy_atom, heavy_coord, h_atom, h_coord, coord_follow_atom, coord_range, atom_order):

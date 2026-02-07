@@ -54,7 +54,7 @@ class MambaModel(nn.Module):
         self.gpuuse_coef = lru_cache(1)(self._gpuuse_coef)
         self.get_capture_rate = lru_cache(1)(self._get_capture_rate)
 
-    def forward(self, src: Tensor, position: Tensor,
+    def forward(self, src: Tensor, position: Tensor, out_state: bool=False,
                 get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
         """
         src: [L, B]
@@ -66,15 +66,17 @@ class MambaModel(nn.Module):
         assert torch.all((position == torch.arange(L, device=position.device).reshape(L, 1))|(src == self.config.pad_token_id)), \
             "Only sequential position is supported for Mamba"
 
-        output = self.model(src.T.contiguous(), )
-        x: Tensor = output['logits'] # [B, L, D]
+        model_output = self.model(src.T.contiguous(), )
+        x: Tensor = model_output['logits'] # [B, L, D]
         x = x.transpose(0, 1) # [L, B, D]
 
         # get_mem
+        output = (x,)
+        if out_state:
+            output = output+(model_output['hidden_states'])
         if get_mem:
-            return tuple([x]+get_mems(src.device, offset, mem_path))
-        else:
-            return x
+            output = output+tuple(get_mems(src.device, offset, mem_path))
+        return output[0] if len(output) == 1 else output
 
     @torch.inference_mode()
     def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None):

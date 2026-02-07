@@ -1,4 +1,4 @@
-import os, yaml, psutil, gc, math, random
+import os, yaml, psutil, math, random
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
@@ -6,6 +6,7 @@ from logging import getLogger
 import numpy as np, pandas as pd
 from contextlib import nullcontext
 import torch
+import torch.nn as nn
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
@@ -13,17 +14,17 @@ from rdkit.Chem import rdMolDescriptors
 from torch.utils.data import DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from torch.distributions import Categorical
 from torch.distributed.elastic.multiprocessing.errors import record
 from rdkit import Chem
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
-from src.utils.path import cleardir, make_pardir
+from src.utils.path import cleardir
 from src.utils.time import TimerTqdm
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.ddp import dist_all_gather
-from src.evaluate import rdmol2obmol, pdb2obmol, eval_vina, eval_qvina
+from src.chem import rdmol2obmol, pdb2obmol
+from src.evaluate import eval_vina, eval_qvina
 from src.data.protein import Protein2PDBDataset
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks
 from src.model import Model
@@ -167,12 +168,14 @@ def main():
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
     init_model, voc_encoder = get_model(pargs, None, init_state_path, device)
     net_model = get_model(pargs, voc_encoder, init_state_path, device)
+    state_size = net_model.d_model if isinstance(net_model, Model) else net_model.hidden_size
+    net_model.value_head = nn.Linear(state_size, 1)
     model = DistributedDataParallel(net_model)
     def get_gpuuse(batch_size: int, length: int):
-        if isinstance(model.module, Model):
-            return model.module.get_gpuuse(batch_size, length, True, 'FLASH')
+        if isinstance(net_model, Model):
+            return net_model.get_gpuuse(batch_size, length, True, 'FLASH')
         else:
-            return model.module.get_gpuuse(batch_size, length, True)
+            return net_model.get_gpuuse(batch_size, length, True)
     if args.max_prompt_len is not None:
         logger.info(f"Estimated GPU use={get_gpuuse(args.batch_size, args.max_new_token+args.max_prompt_len)/2**30:.03f}")
 
@@ -357,6 +360,7 @@ def main():
             logger.info(f"{mbatch_size=}")
         reward_loss = 0
         kl_loss = 0
+        value_loss = 0.0
         with model.join():
             for mbatch_start in range(0, B, mbatch_size):
                 mslice = slice(mbatch_start, mbatch_start+mbatch_size)
@@ -368,10 +372,11 @@ def main():
                     with torch.inference_mode():
                         init_logits = init_model(out_mbatch[:-1], position_mbatch[:-2]) # [L, B, N]
                         init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
-                    logits = model(out_mbatch[:-1], position_mbatch[:-2]) # [Lo-1, B, T]
+                    logits, states = model(out_mbatch[:-1], position_mbatch[:-2], out_state=True) # [Lo-1, B, T]
+                    values = model.value_head(states)
                     log_probs_all = F.log_softmax(logits, dim=-1) # [Lo-1, B, N]
                     log_probs = torch.gather(log_probs_all, dim=-1, index=out_mbatch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
-                    reward_loss_mbatch = torch.sum(-scores_mbatch*(log_probs*weight_mbatch).sum(dim=0)/weight_mbatch.sum(dim=0))
+                    reward_loss_mbatch = torch.sum(-(scores_mbatch-values.detach())*(log_probs*weight_mbatch).sum(dim=0)/weight_mbatch.sum(dim=0))
 
                     ## KL loss
                     log_probs_all = F.log_softmax(logits, dim=-1)
