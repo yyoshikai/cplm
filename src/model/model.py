@@ -23,7 +23,7 @@ class WrapperStreamer(Streamer):
     def estimated_n_token(self):
         return self.streamer.estimated_n_token()
 
-class LanguageModel(nn.Module):
+class Model(nn.Module):
     def forward(self, src: Tensor, position: Tensor, out_state: bool=False,
             get_mem: bool=False, offset: list[float]=None, mem_path: str=None):
         raise NotImplementedError
@@ -31,8 +31,8 @@ class LanguageModel(nn.Module):
     def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None):
         raise NotImplementedError
     
-    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str, 
-            capture_rate: bool=True):
+    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str, capture_rate: bool=True):
+        raise NotImplementedError
     
     @property
     def state_size(self) -> int:

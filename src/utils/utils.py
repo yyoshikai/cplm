@@ -162,8 +162,11 @@ def _flatten_dict(d: Mapping|Sequence) -> dict:
         return _flatten_dict({i: v for i, v in enumerate(d)})
     d_out = {}
     for key, value in d.items():
-        if isinstance(value, Mapping) or \
-                (isinstance(value, Sequence) and len(value) > 1): # dict, addict.Dict, OrderedDict; 長さ1のtensorをflattenし続けないように
+        if isinstance(value, Mapping) or (
+                isinstance(value, Sequence) 
+                and not isinstance(value, str) 
+                and len(value) > 1 # 長さ1のtensorをflattenし続けないように
+        ):
             value = _flatten_dict(value)
             for ckey, cvalue in value.items():
                 pkey = (key,)+ckey if isinstance(ckey, tuple) else (key, ckey)

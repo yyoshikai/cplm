@@ -18,7 +18,7 @@ from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
 from torch.nn.parallel import DistributedDataParallel
 from ..utils.memory import get_mems
-from .model import Streamer, LanguageModel
+from .model import Streamer, Model
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ def align_embedding(module: nn.Module, state_dict, prefix, local_metadata,
     # remove vocs
     del state_dict[prefix+'vocs']
 
-class TransformerModel(LanguageModel):
+class TransformerModel(Model):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
     data_logger = logging.getLogger(f"dexs.{__module__}.{__qualname__}")
     __constants__ = ['norm']

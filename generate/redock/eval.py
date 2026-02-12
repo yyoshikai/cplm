@@ -33,16 +33,18 @@ if __name__ == '__main__':
         raw_rec = pdb_path2obmol(f"{data.pb_dir}/posebusters_benchmark_set/{pdb_id}/{pdb_id}_protein.pdb")
         raw_center = get_coord_from_mol(raw_rec).mean(axis=0)
         for trial_idx in range(5):
-            lig_path = f"{gdir}/new_sdf/{data_idx}/{trial_idx}.sdf"
-            if not os.path.exists(lig_path): continue
-            with open(lig_path) as f:
+            in_lig_path = f"{gdir}/new_sdf/{data_idx}/{trial_idx}.sdf"
+            out_lig_path = f"{gdir}/centered_new_sdf/{data_idx}/{trial_idx}.sdf"
+            if not os.path.exists(in_lig_path) or os.path.exists(out_lig_path):
+                continue
+            with open(in_lig_path) as f:
                 lig = Chem.MolFromMolBlock(f.read(), removeHs=False)
             conf = lig.GetConformer()
             coord = conf.GetPositions()
             coord += raw_center
             set_conf(conf, coord)
             os.makedirs(f"{gdir}/centered_new_sdf/{data_idx}", exist_ok=True)
-            with open(f"{gdir}/centered_new_sdf/{data_idx}/{trial_idx}.sdf", 'w') as f:
+            with open(out_lig_path, 'w') as f:
                 f.write(Chem.MolToMolBlock(lig))
     
     file_paths = []
@@ -78,3 +80,4 @@ if __name__ == '__main__':
             data[k0][k1] = str(v)
         with open(f"{gdir}/eval/{data_idx}_{trial_idx}.yaml", 'w') as f:
             yaml.dump(dict(data), f)
+    print(f"generate.redock.eval {args.gname} finished!", flush=True)

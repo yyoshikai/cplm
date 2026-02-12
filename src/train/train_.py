@@ -28,7 +28,7 @@ from ..data import RevealIterator
 from ..data.tokenizer import VocEncoder
 from .collator import DDPStringCollateLoader, InfiniteLoader
 from ..model import TransformerModel, MambaModel
-from ..model.model import LanguageModel
+from ..model.model import Model
 from ..utils import git_commit, get_git_hash, reveal_data, should_show
 from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, set_third_party_logger
 from ..utils.model import get_num_params, get_model_size
@@ -103,37 +103,41 @@ def get_max_opt(result_dir: str) -> int:
     logger.info(f"{max_opt=}")
     return max_opt
 
-def _get_train_logger(result_dir):
+def _get_train_logger(result_dir, get_token_logger: bool, get_unk_logger: bool):
 
     # ddp info
     rank = dist.get_rank()
     size = dist.get_world_size()
     is_main = rank == get_process_ranks()[0] % size
 
-
     fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
     os.makedirs(f"{result_dir}/logs/debug", exist_ok=True)
-    os.makedirs(f"{result_dir}/data/example_log", exist_ok=True)
 
     # main logger
     logger = getLogger()
-    token_logger = getLogger('dexs')
-    token_logger.propagate = False
-    unk_logger = getLogger('unk')
-    unk_logger.propagate = False
-
-    # stream & info
     stream_handler = add_stream_handler(logger, logging.INFO, fmt=fmt)
     info_handler = add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", fmt=fmt, mode='a')
     if not is_main:
         for handler in [stream_handler, info_handler]:
             handler.addFilter(lambda record: not getattr(record, 'no_dup', False))
     
+    if get_token_logger:
+        os.makedirs(f"{result_dir}/data/example_log", exist_ok=True)
+        add_file_handler(logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
+
+        token_logger = getLogger('dexs')
+        token_logger.propagate = False
+        add_file_handler(token_logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
+    else:
+        token_logger = None
+
+    if get_unk_logger:
+        unk_logger = getLogger('unk')
+        unk_logger.propagate = False
+        add_file_handler(unk_logger, f"{result_dir}/logs/unknowns.log", fmt=fmt, mode='a')
+
     # debug
-    add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", fmt=fmt, mode='a')
-    add_file_handler(logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
-    add_file_handler(token_logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
-    add_file_handler(unk_logger, f"{result_dir}/logs/unknowns.log", fmt=fmt, mode='a')
     set_third_party_logger()
 
     return logger, token_logger
@@ -254,7 +258,7 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
-def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device) -> LanguageModel | tuple[LanguageModel, VocEncoder]:
+def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device) -> Model | tuple[Model, VocEncoder]:
 
     if init_state_path is not None:
         state = remove_module(torch.load(init_state_path, map_location=device, weights_only=True))
@@ -312,7 +316,7 @@ def log_batch(prefix: str, logger: Logger, token_logger: Logger, target_batch: T
         msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
         token_logger.debug(msg)
 
-def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
+def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_token_logger: bool=True, get_unk_logger: bool=True):
     # init DDP
     rank, size, device = init_ddp()
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
@@ -322,7 +326,7 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs):
     _sync_result_dir(result_dir, subdirs)
 
     # logging
-    logger, token_logger = _get_train_logger(result_dir)
+    logger, token_logger = _get_train_logger(result_dir, get_token_logger, get_unk_logger)
     logger.debug(f"{device=}, {torch.cuda.device_count()=}")
     logger.info(f"{rdkit.__version__=}", **NO_DUP)
     logger.info(f"{transformers.__version__=}", **NO_DUP)

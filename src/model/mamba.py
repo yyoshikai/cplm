@@ -17,10 +17,10 @@ from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCach
 from transformers.generation.streamers import BaseStreamer
 from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
 from .transformer import save_vocs, align_embedding
-from .model import Streamer, LanguageModel
+from .model import Streamer, Model
 from ..utils.memory import get_mems
 
-class MambaModel(LanguageModel):
+class MambaModel(Model):
     """
     Contents in ./gpuuse are from /workspace/resource_test/240921_transformer_size
     """

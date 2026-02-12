@@ -30,6 +30,7 @@ from src.evaluate import eval_vina, eval_qvina
 from src.train.collator import solve_increasing_fn_left
 from src.data.protein import Protein2PDBDataset
 from src.data.tokenizer import VocEncoder
+from src.model import Model
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper
@@ -64,6 +65,18 @@ def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
         return grads, diff_grads
     else:
         return grads
+
+class ReinforceModel(nn.Module):
+    def __init__(self, model: Model):
+        super().__init__()
+        self.model = model
+        self.value_head = nn.Linear(model.state_size, 1)
+    
+    def forward(self, src: Tensor, position: Tensor):
+        logits, states = self.model(src, position, out_state=True)
+        values = self.value_head(states).squeeze(-1)
+        return logits, values
+
 
 class ReinforceDataIter:
     def __init__(self, train_data: Dataset, device: torch.device, batch_size: int, generate_per_sample: int, max_prompt_len: int, fix_pocket: bool, num_workers: int, seed: int):
@@ -130,7 +143,7 @@ def generate(
     if step < 5:
         streamers = [TimeLogStreamer(streamer, str(b), 5.0) for b, streamer in enumerate(streamers)]
     with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
-        model.module.generate2(prompt_tokens, positions, streamers, max_new_token)
+        model.module.model.generate2(prompt_tokens, positions, streamers, max_new_token)
 
     tokens = pad_sequence([
         torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens)
@@ -173,12 +186,12 @@ def whiten_scores(scores: Tensor, all_idxs: Tensor, sample_whiten: list[Literal[
             mean = torch.nanmean(uidx_all_scores)
             std = torch.nanmean((uidx_all_scores-mean)**2).sqrt()+1e-5
             if sample_mean and sample_std:
-                scores[idxs == uidx].sub_(mean).div_(std)
+                scores[idxs == uidx] = (scores[idxs == uidx] - mean) / std
             elif sample_mean:
-                scores[idxs == uidx].sub_(mean)
+                scores[idxs == uidx] = scores[idxs == uidx] - mean
             elif sample_std:
-                scores[idxs == uidx].sub_(mean).div_(std).add_(mean)
-    
+                scores[idxs == uidx] = (scores[idxs == uidx] - mean) / std + mean
+
     # all whiten
     all_mean = 'mean' in all_whiten
     all_std = 'std' in all_whiten
@@ -186,11 +199,11 @@ def whiten_scores(scores: Tensor, all_idxs: Tensor, sample_whiten: list[Literal[
         mean = torch.nanmean(all_scores)
         std = torch.nanmean((all_scores-mean)**2).sqrt()+1e-5
         if all_mean and all_std:
-            scores.sub_(mean).div_(std)
+            scores = (scores - mean) / std
         elif sample_mean:
-            scores.sub_(mean)
+            scores = scores - mean
         elif sample_std:
-            scores.sub_(mean).div_(std).add_(mean)
+            scores = (scores - mean) / std + mean
     return scores
 
 def get_scores(
@@ -250,7 +263,8 @@ def get_scores(
             else:
                 scores.append(np.nan)
     error_recorder.record(**{str(i): error for i, error in enumerate(errors)})
-    scores = raw_scores = torch.tensor(scores, dtype=torch.float, device=device)
+    scores = torch.tensor(scores, dtype=torch.float, device=device)
+    raw_scores = scores.detach().clone()
     is_vina_error = torch.tensor([error == 'VINA' for error in errors], dtype=torch.bool, device=device)
     is_gen_error = torch.tensor([error is not None for error in errors], dtype=torch.bool, device=device) & (~is_vina_error)
     
@@ -286,6 +300,15 @@ def scale_loss(exp_loss: Tensor, weight: Tensor, scale: list[Literal['batch_size
     if 'episode_exp' in scale:
         episode_losses /= ns_exp
     return episode_losses.sum(dim=0)
+
+def save_rl_model(model: DistributedDataParallel, optimizer, result_dir, step: int):
+    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
+    if dist.get_rank() == SAVE_RANK:
+        torch.save(model.module.model.state_dict(), f"{result_dir}/models/{step}.pth")
+        if step > 0:
+            cleardir(f"{result_dir}/optimizers")
+            torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
+
 
 @record
 def main():
@@ -394,9 +417,8 @@ def main():
     
     # Environment
     result_dir = f"reinforce/results/{args.studyname}"
-    logger, token_logger, rank, device = set_env(result_dir, args, logs, 
-            subdirs=['models', 'grads/reward', 'grads/kl', 'grads/value'])
-    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
+    logger, _, rank, device = set_env(result_dir, args, logs, 
+            subdirs=['models', 'grads/reward', 'grads/kl', 'grads/value'], get_token_logger=False)
     ignore_rdkit_warning()
     ## check generate_per_sample
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
@@ -405,9 +427,9 @@ def main():
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
     init_model, voc_encoder = get_model(pargs, None, init_state_path, device)
     net_model = get_model(pargs, voc_encoder, init_state_path, device)
-    net_model.value_head = nn.Linear(net_model.state_size, 1)
-    net_model.to(device)
-    model = DistributedDataParallel(net_model)
+    reinforce_model = ReinforceModel(net_model)
+    reinforce_model.to(device)
+    model = DistributedDataParallel(reinforce_model)
     get_gpuuse = partial(net_model.get_gpuuse, bf16=True, kernel='FLASH')
     if args.max_prompt_len is not None:
         logger.info(f"Estimated GPU use={get_gpuuse(args.batch_size, args.max_new_token+args.max_prompt_len)/2**30:.03f}")
@@ -441,10 +463,7 @@ def main():
     ])
 
     # save at step 0
-    if rank == SAVE_RANK:
-        torch.save(model.state_dict(), f"{result_dir}/models/0.pth")
-        cleardir(f"{result_dir}/optimizers")
-        torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/0.pth")
+    save_rl_model(model, optimizer, result_dir, 0)
 
     train_looper.start_loops()
     for step in range(args.max_opt):
@@ -528,15 +547,14 @@ def main():
                     with torch.inference_mode():
                         init_logits = init_model(input_m, position_m) # [L, B, N]
                         init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [L, B, N]
-                    logits, states = model(input_m, position_m, out_state=True) # [L, B, T]
-                    values_m = model.value_head(states)
-                    log_probs_all = F.log_softmax(logits, dim=-1) # [L, B, N]
+                    logits_m, values_m = model(input_m, position_m) # [L, B, T], [L, B]
+                    log_probs_all = F.log_softmax(logits_m, dim=-1) # [L, B, N]
                     log_probs_m = torch.gather(log_probs_all, dim=-1, index=output_m.unsqueeze(-1)).squeeze(-1) # [L, B]
                     reward_loss_m = -((rewards_m-values_m.detach())*log_probs_m)
                     value_loss_m = (values_m-rewards_m)**2*0.5
 
                     ## KL loss
-                    log_probs_all = F.log_softmax(logits, dim=-1)
+                    log_probs_all = F.log_softmax(logits_m, dim=-1)
                     kl_loss_m = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
                         log_target=True) # [Lo-1, B, N]
                     kl_loss_m = kl_loss_m.sum(dim=-1) # [Lo-1, B]
@@ -582,10 +600,7 @@ def main():
         scheduler.step()
         
         if step % args.record_opt == 0:
-            if rank == SAVE_RANK:
-                torch.save(model.state_dict(), f"{result_dir}/models/{step}.pth")
-                cleardir(f"{result_dir}/optimizers")
-                torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
+            save_rl_model(model, optimizer, step)
 
         if step == 3:
             logger.info("RDKit logger will be disabled from now on.")
