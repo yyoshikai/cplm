@@ -16,13 +16,16 @@ from posebusters.posebusters import PoseBusters
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--gname', required=True)
+    parser.add_argument('--tqdm', action='store_true')
     args = parser.parse_args()
     gdir = f"generate/redock/{args.gname}"
     set_third_party_logger()
 
     data = PosebustersV2ProteinDataset()
-    
-    for data_idx in tqdm(range(len(data)), desc='centering ligand', dynamic_ncols=True):
+    data_idxs = range(len(data))
+    if args.tqdm:
+        data_idxs = tqdm(data_idxs, desc='centering ligand', dynamic_ncols=True)
+    for data_idx in data_idxs:
         if all((
                 not os.path.exists(f"{gdir}/new_sdf/{data_idx}/{t}.sdf") 
                 or os.path.exists(f"{gdir}/centered_new_sdf/{data_idx}/{t}.sdf")
@@ -72,8 +75,10 @@ if __name__ == '__main__':
     pb = PoseBusters('redock', None, max_workers=None, chunk_size=None)
     pb.file_paths = pd.DataFrame(file_paths, columns=['mol_pred', 'mol_true', 'mol_cond'])
     results = pb._run()
+    if args.tqdm:
+        results = tqdm(results, total=len(pb.file_paths), dynamic_ncols=True, desc="posebusters")
     os.makedirs(f"{gdir}/eval", exist_ok=True)
-    for (path, _molecule_name, _position), result in tqdm(results, total=len(pb.file_paths), dynamic_ncols=True, desc="posebusters"):
+    for (path, _molecule_name, _position), result in  results:
         *_, data_idx, trial_idx = path.split('/')
         data_idx, trial_idx = int(data_idx), int(trial_idx.split('.')[0])
         data = defaultdict(dict)
