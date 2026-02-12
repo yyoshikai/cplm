@@ -1,5 +1,7 @@
 import sys, os, shutil
 from argparse import ArgumentParser
+from collections import defaultdict
+import yaml
 import pandas as pd
 import openbabel.openbabel as ob
 from tqdm import tqdm
@@ -18,7 +20,13 @@ if __name__ == '__main__':
     set_third_party_logger()
 
     data = PosebustersV2ProteinDataset()
-    """for data_idx in tqdm(range(len(data)), desc='centering ligand', dynamic_ncols=True):
+    
+    for data_idx in tqdm(range(len(data)), desc='centering ligand', dynamic_ncols=True):
+        if all((
+                not os.path.exists(f"{gdir}/new_sdf/{data_idx}/{t}.sdf") 
+                or os.path.exists(f"{gdir}/centered_new_sdf/{data_idx}/{t}.sdf")
+        ) for t in range(5)):
+            continue
         obc = ob.OBConversion()
         obc.SetInFormat('pdb')
         pdb_id = data.ids[data_idx]
@@ -36,40 +44,37 @@ if __name__ == '__main__':
             os.makedirs(f"{gdir}/centered_new_sdf/{data_idx}", exist_ok=True)
             with open(f"{gdir}/centered_new_sdf/{data_idx}/{trial_idx}.sdf", 'w') as f:
                 f.write(Chem.MolToMolBlock(lig))
-    """
     
     file_paths = []
-    if os.path.exists(f"{gdir}/dirs"):
-        shutil.rmtree(f"{gdir}/dirs")
     for data_idx in range(len(data)):
         pdb_id = data.ids[data_idx]
         os.makedirs(f"{gdir}/dirs/{data_idx}", exist_ok=True)
         raw_rec_path = f"{data.pb_dir}/posebusters_benchmark_set/{pdb_id}/{pdb_id}_protein.pdb"
-        os.symlink(
-            raw_rec_path,
-            f"{gdir}/dirs/{data_idx}/raw_rec.pdb"
-        )
+        link_rec_path = f"{gdir}/dirs/{data_idx}/raw_rec.pdb"
+        if not os.path.exists(link_rec_path):
+            os.symlink(raw_rec_path, link_rec_path)
         raw_lig_path = f"{data.pb_dir}/posebusters_benchmark_set/{pdb_id}/{pdb_id}_ligand.sdf"
-        os.symlink(
-            raw_lig_path,
-            f"{gdir}/dirs/{data_idx}/raw_ligand.sdf"
-        )
+        link_lig_path = f"{gdir}/dirs/{data_idx}/raw_ligand.sdf"
+        if not os.path.exists(link_lig_path):
+            os.symlink(raw_lig_path, link_lig_path)
         for trial_idx in range(5):
-            lig_path = f"{gdir}/centered_new_sdf/{data_idx}/{trial_idx}.sdf"
-            if os.path.exists(lig_path):
-                os.symlink(f"../../centered_new_sdf/{data_idx}/{trial_idx}.sdf", f"{gdir}/dirs/{data_idx}/centered_new_{trial_idx}.sdf")
-                file_paths.append((lig_path, raw_lig_path, raw_rec_path))
+            raw_gen_path = f"{gdir}/centered_new_sdf/{data_idx}/{trial_idx}.sdf"
+            link_gen_path = f"{gdir}/dirs/{data_idx}/centered_new_{trial_idx}.sdf"
+            if os.path.exists(raw_gen_path):
+                if not os.path.exists(link_lig_path):
+                    os.symlink(f"../../centered_new_sdf/{data_idx}/{trial_idx}.sdf", link_gen_path)
+                if not os.path.exists(f"{gdir}/eval/{data_idx}_{trial_idx}.yaml"):
+                    file_paths.append((raw_gen_path, raw_lig_path, raw_rec_path))
 
-    pb = PoseBusters('redock', None, max_workers=None, chunk_size=100)
+    pb = PoseBusters('redock', None, max_workers=None, chunk_size=None)
     pb.file_paths = pd.DataFrame(file_paths, columns=['mol_pred', 'mol_true', 'mol_cond'])
     results = pb._run()
-    data = {}
+    os.makedirs(f"{gdir}/eval", exist_ok=True)
     for (path, _molecule_name, _position), result in tqdm(results, total=len(pb.file_paths), dynamic_ncols=True, desc="posebusters"):
         *_, data_idx, trial_idx = path.split('/')
         data_idx, trial_idx = int(data_idx), int(trial_idx.split('.')[0])
-        data[data_idx, trial_idx] = result
-    df = pb._make_table(data, pb.config, full_report=True)
-    df.index.names = ["data_idx", "trial"]
-    df.sort_index(inplace=True)
-    df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-    df.to_csv(f"{gdir}/posebusters.csv")
+        data = defaultdict(dict)
+        for k0, k1, v in result:
+            data[k0][k1] = str(v)
+        with open(f"{gdir}/eval/{data_idx}_{trial_idx}.yaml", 'w') as f:
+            yaml.dump(dict(data), f)

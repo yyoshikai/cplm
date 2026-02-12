@@ -1,6 +1,7 @@
-import sys, os, struct, traceback, warnings, subprocess, math
+import sys, os, struct, traceback, warnings, subprocess, math, csv
 from functools import partial
 from bisect import bisect_right
+from collections.abc import Mapping, Sequence
 from logging import getLogger
 from typing import Any, Callable, Literal
 import numpy as np
@@ -155,7 +156,22 @@ def should_show(n: int, max_interval: int|float|None=None):
         return (n&(n-1)) == 0 # True if n == 2**x
     else:
         return n % max_interval == 0
-    
+
+def _flatten_dict(d: Mapping|Sequence) -> dict:
+    if isinstance(d, Sequence):
+        return _flatten_dict({i: v for i, v in enumerate(d)})
+    d_out = {}
+    for key, value in d.items():
+        if isinstance(value, Mapping) or \
+                (isinstance(value, Sequence) and len(value) > 1): # dict, addict.Dict, OrderedDict; 長さ1のtensorをflattenし続けないように
+            value = _flatten_dict(value)
+            for ckey, cvalue in value.items():
+                pkey = (key,)+ckey if isinstance(ckey, tuple) else (key, ckey)
+                d_out[pkey] = cvalue
+        else:
+            d_out[key] = value
+    return d_out
+
 class IterateRecorder:
     logger = getLogger(f'{__module__}.{__qualname__}')
     def __init__(self, path: str, max_out_interval: int, cols: list[str]=[]):
@@ -165,25 +181,35 @@ class IterateRecorder:
         self.data_size = 0
         self.step = 0
         self.max_out_interval = max_out_interval
+        self.n_out_level = 1
 
     def record(self, **kwargs: dict[str, Any]):
         self.step += 1
-        
+        kwargs = _flatten_dict(kwargs)
+        kwargs = {tuple(str(k) for k in key) if isinstance(key, tuple) else (str(key),): str(value) for key, value in kwargs.items()}
         # record data
         for col, li in self.data.items():
-            li.append(str(kwargs.pop(col, '')))
+            li.append(kwargs.pop(col, ''))
         
         # add unknown cols
         if len(kwargs) > 0:
             new_cols = list(kwargs.keys())
-            if self.step > 1:
-                self.logger.warning(f"Recorder[{self.path}] New columns were added: {new_cols}")
+            new_n_level = max(len(col) for col in new_cols)
 
             ## Modify DataFrame
             if self.flushed:
-                df = pd.read_csv(self.path, keep_default_na=False, dtype=str)
-                df[new_cols] = ''
-                df.to_csv(self.path, index=False)
+                with open(self.path) as f:
+                    data = np.array(list(csv.reader(f)), dtype=object)
+                n_row, n_col = data.shape
+                if new_n_level > self.n_out_level:
+                    data = np.insert(data, self.n_out_level, np.full((new_n_level-self.n_out_level, n_col), '', dtype=object))
+                    self.n_out_level += new_n_level
+                data = np.concatenate([
+                    data, 
+                    np.array(list(col)+['']*(self.n_out_level+n_row-len(list(col)))),
+                ], axis=1)
+                with open(self.path, 'w', newline='') as f:
+                    csv.writer(f).writerows(data)
 
             ## Modify self.data
             for col in new_cols:
@@ -198,8 +224,14 @@ class IterateRecorder:
     def flush(self):
         pdir = os.path.dirname(self.path)
         if not os.path.exists(pdir): os.makedirs(pdir,  exist_ok=True)
-        pd.DataFrame(self.data).to_csv(self.path, mode='a' if self.flushed else 'w', 
-                header=False if self.flushed else True, index=False)
+        if not self.flushed:
+            self.n_out_level = max(len(col) for col in self.data)
+            with open(self.path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                for level in range(self.n_out_level):
+                    writer.writerow([col[level] if level < len(col) else '' for col in self.data])
+        with open(self.path, 'a', newline='') as f:
+            csv.writer(f).writerows(zip(*list(self.data.values())))
         self.data = {key: [] for key in self.data.keys()}
         self.data_size = 0
         self.flushed = True

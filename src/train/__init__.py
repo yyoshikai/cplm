@@ -1,1 +1,1 @@
-from train_ import *
+from .train_ import *

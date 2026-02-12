@@ -16,10 +16,11 @@ from transformers.models.mamba.configuration_mamba import MambaConfig
 from transformers.models.mamba.modeling_mamba import MambaForCausalLM, MambaCache
 from transformers.generation.streamers import BaseStreamer
 from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
-from .transformer import save_vocs, align_embedding, Streamer
+from .transformer import save_vocs, align_embedding
+from .model import Streamer, LanguageModel
 from ..utils.memory import get_mems
 
-class MambaModel(nn.Module):
+class MambaModel(LanguageModel):
     """
     Contents in ./gpuuse are from /workspace/resource_test/240921_transformer_size
     """
@@ -66,14 +67,14 @@ class MambaModel(nn.Module):
         assert torch.all((position == torch.arange(L, device=position.device).reshape(L, 1))|(src == self.config.pad_token_id)), \
             "Only sequential position is supported for Mamba"
 
-        model_output = self.model(src.T.contiguous(), )
+        model_output = self.model(src.T.contiguous(), output_hidden_states=True)
         x: Tensor = model_output['logits'] # [B, L, D]
         x = x.transpose(0, 1) # [L, B, D]
 
         # get_mem
         output = (x,)
         if out_state:
-            output = output+(model_output['hidden_states'])
+            output = output+(model_output['hidden_states'][-1].transpose(0, 1),) # [L, B, D]
         if get_mem:
             output = output+tuple(get_mems(src.device, offset, mem_path))
         return output[0] if len(output) == 1 else output
@@ -182,7 +183,7 @@ class MambaModel(nn.Module):
         mname = 'mamba_bf16' if bf16 else 'mamba'
         return capture_rates[mname]
         
-    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str=None, capture_rate: bool=True):
+    def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str|None=None, capture_rate: bool=True):
         t2dim2coefs = self.gpuuse_coef(bf16)
         max_gpuuse = 0
         for dim2coefs in t2dim2coefs.values():
@@ -197,6 +198,10 @@ class MambaModel(nn.Module):
         if capture_rate:
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16)
         return max_gpuuse
+
+    @property
+    def state_size(self):
+        return self.config.hidden_size
 
 class StreamerWrapper(BaseStreamer):
     def __init__(self, streamers: list[Streamer]):

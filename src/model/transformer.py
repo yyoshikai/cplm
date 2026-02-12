@@ -18,6 +18,7 @@ from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
 from torch.nn.parallel import DistributedDataParallel
 from ..utils.memory import get_mems
+from .model import Streamer, LanguageModel
 
 logger = logging.getLogger(__name__)
 
@@ -177,29 +178,7 @@ def align_embedding(module: nn.Module, state_dict, prefix, local_metadata,
     # remove vocs
     del state_dict[prefix+'vocs']
 
-class Streamer:
-    def put(self, tokens: list[int]) -> tuple[bool, int, list[int]]:
-        """
-        Returns
-        -------
-        is_remain: bool
-            If True, next token must be generated. If False, self.put() must not be called any more.
-        position: int
-            next position
-        token_range: list[int]
-            Next token range.
-        """
-        raise NotImplementedError
-    def estimated_n_token(self):
-        return None
-
-class WrapperStreamer(Streamer):
-    def __init__(self, streamer: Streamer):
-        self.streamer = streamer
-    def estimated_n_token(self):
-        return self.streamer.estimated_n_token()
-
-class Model(nn.Module):
+class TransformerModel(LanguageModel):
     logger = logging.getLogger(f"{__module__}.{__qualname__}")
     data_logger = logging.getLogger(f"dexs.{__module__}.{__qualname__}")
     __constants__ = ['norm']
@@ -464,3 +443,7 @@ class Model(nn.Module):
         if capture_rate:
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16=bf16, kernel=kernel)
         return max_gpuuse
+
+    @property
+    def state_size(self):
+        return self.d_model

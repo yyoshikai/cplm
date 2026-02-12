@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 import torch.distributed as dist
 from ..utils.ddp import dist_send_tensor, dist_recv_tensor
 from ..utils import should_show, solve_increasing_fn_left
-from ..train.looper import Looper
+from .looper import Looper
 
 T = TypeVar('T')
 T1 = TypeVar('T')

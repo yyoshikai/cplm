@@ -7,6 +7,7 @@ from logging import Logger
 from time import time
 import numpy as np
 import pandas as pd
+import torch
 from tqdm import tqdm
 from ..utils import should_show
 from ..utils.logger import NO_DUP
@@ -206,3 +207,20 @@ class TqdmLooper(Looper):
     def end_loop(self):
         assert self.pbar is not None, "start_loops() is not called before end_loop()"
         self.pbar.update()
+
+class GPUUseLooper(Looper):
+    def __init__(self, logger: Logger, device: torch.device, loop_name: str, init: int):
+        self.logger = logger
+        self.device = device
+        self.loop_name = loop_name
+        self.init = init
+        self.i_loop = 0
+    def start_loops(self):
+        torch.cuda.reset_peak_memory_stats()
+    def end_loop(self):
+        if self.i_loop < self.init:
+            gpu_use = torch.cuda.max_memory_allocated(self.device)/2**30
+            self.logger.debug(f"{self.loop_name}[{self.i_loop}] max GPU use={gpu_use:.03f}")
+        self.i_loop += 1
+        if self.i_loop < self.init:
+            torch.cuda.reset_peak_memory_stats()

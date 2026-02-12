@@ -26,8 +26,9 @@ from schedulefree import RAdamScheduleFree
 
 from ..data import RevealIterator
 from ..data.tokenizer import VocEncoder
-from ..data.collator import DDPStringCollateLoader, InfiniteLoader
-from ..model import Model, MambaModel
+from .collator import DDPStringCollateLoader, InfiniteLoader
+from ..model import TransformerModel, MambaModel
+from ..model.model import LanguageModel
 from ..utils import git_commit, get_git_hash, reveal_data, should_show
 from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, set_third_party_logger
 from ..utils.model import get_num_params, get_model_size
@@ -253,7 +254,7 @@ class CrossEntropyLoss(nn.CrossEntropyLoss):
             output = output.reshape_as(target)
         return output
 
-def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device) -> Model | MambaModel | tuple[Model|MambaModel, VocEncoder]:
+def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device) -> LanguageModel | tuple[LanguageModel, VocEncoder]:
 
     if init_state_path is not None:
         state = remove_module(torch.load(init_state_path, map_location=device, weights_only=True))
@@ -268,7 +269,7 @@ def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: st
         model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
     else:
         num_layers = args.n_layer or 12
-        model = Model(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
+        model = TransformerModel(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
     model.to(device)
     if args.model_bfloat16:
         model.to(torch.bfloat16)
@@ -410,11 +411,7 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
         num_workers: int, is_starting: bool, sdp_kernel: str, gpu_size: float, prefix: str, check_data_dist: bool
     ) -> tuple[list[float], list[float], Tensor, Tensor]:
     
-    def get_gpuuse(batch_size: int, length: int):
-        if isinstance(model.module, Model):
-            return model.module.get_gpuuse(batch_size, length, True, sdp_kernel)
-        else:
-            return model.module.get_gpuuse(batch_size, length, True)
+    get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel=sdp_kernel)
 
     logger = getLogger('validate')
     token_logger = getLogger('dexs.validate')
@@ -522,13 +519,8 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     else:
         train_loader = None
     
-    def get_gpuuse(batch_size: int, length: int):
-        if isinstance(model.module, Model):
-            return model.module.get_gpuuse(batch_size, length, True, args.sdp_kernel)
-        else:
-            return model.module.get_gpuuse(batch_size, length, True)
-    
     ## collated data loader
+    get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel=args.sdp_kernel)
     train_loader = DDPStringCollateLoader(train_loader, partial(collate, pad_token=voc_encoder.pad_token), get_gpuuse, 
             args.gpu_size, device, 100000, DATA_RANK['train'], 
             f"{result_dir}/data/train_large_items.csv", train_looper if 'data_loading' in args.check else None)

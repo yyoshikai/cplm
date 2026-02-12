@@ -2,39 +2,41 @@ import os, yaml, psutil, math, random
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
+from functools import partial
 from logging import getLogger
+from typing import Literal
 import numpy as np, pandas as pd
-from contextlib import nullcontext
 import torch
 import torch.nn as nn
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
-from rdkit.Chem import rdMolDescriptors
-from torch.utils.data import DataLoader, StackDataset
+from torch import Tensor
+from torch.utils.data import Dataset, DataLoader, StackDataset
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.distributed.elastic.multiprocessing.errors import record
 from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
 from src.utils.path import cleardir
 from src.utils.rdkit import ignore_rdkit_warning
-from src.utils.ddp import dist_all_gather
+from src.utils.ddp import dist_all_gather, reduce_float
+from src.utils.logger import NO_DUP
 from src.chem import rdmol2obmol, pdb2obmol
 from src.evaluate import eval_vina, eval_qvina
+from src.train.collator import solve_increasing_fn_left
 from src.data.protein import Protein2PDBDataset
+from src.data.tokenizer import VocEncoder
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks
-from src.model import Model
-from src.data.collator import solve_increasing_fn_left
 from src.train.data import get_finetune_data
-from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper
-from src.generate.streamer import LigandStreamer, TokenWriteStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
+from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper
+from src.generate.streamer import LigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
-## Scoring function 最大化したいものとする
-
+## Scoring function
 def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int):
     match target:
         case 'min_vina':
@@ -52,19 +54,256 @@ def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int)
             return -score if score is not None else np.nan
         case 'dummy':
             return random.random()
+# 参考
+error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}
+
+def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
+    grads = {name: param.grad.clone() for name, param in model.named_parameters()}
+    if prev_grads is not None:
+        diff_grads = {name: grad-prev_grads[name] for name, grad in grads.items()}
+        return grads, diff_grads
+    else:
+        return grads
+
+class ReinforceDataIter:
+    def __init__(self, train_data: Dataset, device: torch.device, batch_size: int, generate_per_sample: int, max_prompt_len: int, fix_pocket: bool, num_workers: int, seed: int):
+        _, _, DATA_RANK = get_process_ranks()
+        self.data_rank = DATA_RANK['train']
+        self.rank = dist.get_rank()
+        self.ddp_size = dist.get_world_size()
+
+        self.device = device
+        self.batch_size = batch_size
+        self.generate_per_sample = generate_per_sample
+        self.fix_pocket = fix_pocket
+        assert self.batch_size * self.ddp_size % self.generate_per_sample == 0
+        if self.rank == self.data_rank:
+            loader = DataLoader(train_data, batch_size=None, 
+                sampler=InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(seed)),
+                num_workers=num_workers, pin_memory=True, prefetch_factor=10 if num_workers > 0 else None)
+            self.train_iter = loader.__iter__()
+            if max_prompt_len is not None:
+                self.train_iter = itr.filterfalse(lambda x: len(x[2]) > max_prompt_len, self.train_iter)
+            if self.fix_pocket:
+                self.train_fixed_item = self.train_iter.__next__()
+                del self.train_iter
+
+
+    def get(self) -> tuple[Tensor, list[str], list[Tensor], list[list[int]]]:
+        if self.rank == self.data_rank:
+            all_items = []
+            for si in range(self.batch_size*self.ddp_size // self.generate_per_sample):
+                all_items += [self.train_fixed_item if self.fix_pocket else self.train_iter.__next__()] * self.generate_per_sample
+            batched_items = [all_items[r*self.batch_size:(r+1)*self.batch_size] for r in range(self.ddp_size)]
+        else:
+            batched_items = None
+        items_box = [None]
+        dist.scatter_object_list(items_box, batched_items, src=self.data_rank)
+        idxs, pdbs, prompt_tokens, positions = zip(*items_box[0])
+        all_idxs = torch.cat(dist_all_gather(torch.tensor(idxs, dtype=torch.int, device=self.device)))
+        prompt_tokens = [token.to(self.device) for token in prompt_tokens]
+        positions = [position.tolist() for position in positions]
+        return all_idxs, pdbs, prompt_tokens, positions
+
+def generate(
+        model: DistributedDataParallel, 
+        voc_encoder: VocEncoder,
+        result_dir: str, 
+        max_new_token: int,
+        coord_range: int,
+        lig_h_atom: bool,
+        lig_h_coord: bool,
+        device: torch.device,
+        size_recorder: IterateRecorder,
+
+        step: int,
+        prompt_tokens,
+        positions,
+        do_save: bool,
+) -> tuple[Tensor, Tensor, Tensor, int, list[Chem.Mol|None], list[str|None]]:
+    rank = dist.get_rank()
+
+    model.eval()
+    streamers = ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, coord_range, voc_encoder, False, lig_h_atom, lig_h_coord, None) for idx in range(len(prompt_tokens))]
+    streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in streamers]
+    streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in streamers]
+    if step < 5:
+        streamers = [TimeLogStreamer(streamer, str(b), 5.0) for b, streamer in enumerate(streamers)]
+    with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+        model.module.generate2(prompt_tokens, positions, streamers, max_new_token)
+
+    tokens = pad_sequence([
+        torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens)
+        for token_streamer in token_streamers
+    ], padding_value=voc_encoder.pad_token).to(device=device, dtype=torch.long)
+    input = tokens[:-1] # [L, B]
+    output = tokens[1:]
+
+    weight = torch.zeros_like(output, dtype=torch.float) # [L, B]
+    for b, token_streamer in enumerate(token_streamers):
+        prompt_size, new_size = len(token_streamer.prompt_tokens), len(token_streamer.new_tokens)
+        weight[prompt_size-1:prompt_size+new_size-1, b] = 1.0
+    all_exp = int(reduce_float(torch.sum(weight).item(), device))
+    position = pad_sequence([
+        torch.tensor(position+position_streamer.new_positions) for position, position_streamer
+        in zip(positions, position_streamers)
+    ], padding_value=0).to(device=device, dtype=torch.long)[:-2]
+    size_recorder.record(prompt=[len(s.prompt_tokens) for s in token_streamers], output=[len(s.new_tokens) for s in token_streamers])
+    ligs, errors = zip(*[(streamer.mol, streamer.error) for streamer in ligand_streamers])
+    return input, output, position, weight, all_exp, ligs, errors
+
+def whiten_scores(scores: Tensor, all_idxs: Tensor, sample_whiten: list[Literal['mean', 'std']], all_whiten: list[Literal['mean', 'std']]):
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    B, = scores.shape
+    # all_gather scores
+    all_scores = [torch.zeros_like(scores) for _ in range(world_size)]
+    dist.all_gather(all_scores, scores)
+    all_scores = torch.cat(all_scores)
+    
+    # sample whiten
+    sample_mean = 'mean' in sample_whiten
+    sample_std = 'std' in sample_whiten
+    if sample_mean or sample_std:
+        idxs = all_idxs[rank*B:(rank+1)*B]
+        for uidx in torch.unique(idxs):
+            uidx_all_scores = all_scores[all_idxs == uidx]
+            if torch.all(torch.isnan(uidx_all_scores)): 
+                continue
+            mean = torch.nanmean(uidx_all_scores)
+            std = torch.nanmean((uidx_all_scores-mean)**2).sqrt()+1e-5
+            if sample_mean and sample_std:
+                scores[idxs == uidx].sub_(mean).div_(std)
+            elif sample_mean:
+                scores[idxs == uidx].sub_(mean)
+            elif sample_std:
+                scores[idxs == uidx].sub_(mean).div_(std).add_(mean)
+    
+    # all whiten
+    all_mean = 'mean' in all_whiten
+    all_std = 'std' in all_whiten
+    if (all_mean or all_std) and not torch.all(torch.isnan(scores)):
+        mean = torch.nanmean(all_scores)
+        std = torch.nanmean((all_scores-mean)**2).sqrt()+1e-5
+        if all_mean and all_std:
+            scores.sub_(mean).div_(std)
+        elif sample_mean:
+            scores.sub_(mean)
+        elif sample_std:
+            scores.sub_(mean).div_(std).add_(mean)
+    return scores
+
+def get_scores(
+        pdbs: list[str],
+        ligs: list[Chem.Mol|None],
+        errors: list[str|None],
+        all_idxs: Tensor,
+
+        out_dir: str,
+        error_recorder: IterateRecorder,
+        score_recorder: IterateRecorder,
+        device: torch.device,
+
+        min_valid_score: float,
+        gen_error_score: float,
+        vina_error_score: float,
+        sample_whiten: list[Literal['mean', 'std']],
+        all_whiten: list[Literal['mean', 'std']],
+        gen_error_white_score: float, 
+        vina_error_white_score: float,
+        sample_rewhiten: list[Literal['mean', 'std']],
+        all_rewhiten: list[Literal['mean', 'std']],
+
+        target: str,
+        num_score_workers: int,
+        cpu: int,
+) -> Tensor:
+    """
+    1. nanでない報酬を(--min-valid-score, default=-math.inf)でclip
+    2. generation errorに(--gen-error-score, default=np.nan)を代入
+       vina errorに(--vina-error-score, default=np.nan)を代入
+    3. (--sample-whiten, default=[])に従ってサンプルごとの正規化
+        'mean': 平均=0とする
+        'std': 分散=1とする
+    4. (--all-whiten, default=[])に従って全体の正規化
+    5. (--gen-error-white-score, default=np.nan)がnp.nanでない場合, generationerrorに代入
+       (--vina-error-white-score, default=np.nan)がnp.nanでない場合, vina errorに代入
+    6. (--sample-rewhiten, default=[])に従ってサンプルごとの正規化
+    7. (--all-rewhiten, default=[])に従って全体の正規化
+    8. np.nanに全体の平均を代入
+    """
+    rank = dist.get_rank()
+
+    if num_score_workers >= 2:
+        with cf.ProcessPoolExecutor(num_score_workers) as e:
+            futures = [None if errors[idx] is not None else e.submit(get_score, target=target, lig_rdmol=lig, rec_pdb=pdbs[idx], out_dir=f"{out_dir}/{rank}_{idx}", cpu=cpu) for idx, lig in enumerate(ligs)]
+            scores = [np.nan if f is None else f.result() for f in futures]
+            errors = ['VINA' if error is None and np.isnan(score) else error for error, score in zip(errors, scores)]
+    else:
+        scores = []
+        for idx, lig in enumerate(ligs):
+            if errors[idx] is None:
+                score = get_score(target, lig, pdbs[idx], f"{out_dir}/{rank}_{idx}", cpu)
+                if np.isnan(score):
+                    errors[idx] = 'VINA'
+                scores.append(score)
+            else:
+                scores.append(np.nan)
+    error_recorder.record(**{str(i): error for i, error in enumerate(errors)})
+    scores = raw_scores = torch.tensor(scores, dtype=torch.float, device=device)
+    is_vina_error = torch.tensor([error == 'VINA' for error in errors], dtype=torch.bool, device=device)
+    is_gen_error = torch.tensor([error is not None for error in errors], dtype=torch.bool, device=device) & (~is_vina_error)
+    
+    if math.isfinite(min_valid_score):
+        torch.clamp_(scores, min=min_valid_score) # nan is ignored
+    scores[is_gen_error] = gen_error_score
+    scores[is_vina_error] = vina_error_score
+    scores = whiten_scores(scores, all_idxs, sample_whiten, all_whiten)
+    if math.isfinite(gen_error_white_score):
+        scores[is_gen_error] = gen_error_white_score
+    if math.isfinite(vina_error_white_score):
+        scores[is_vina_error] = vina_error_white_score
+    scores = whiten_scores(scores, all_idxs, sample_rewhiten, all_rewhiten)
+    scores[torch.isnan(scores)] = 0.0
+    score_recorder.record(raw=raw_scores.tolist(), normalized=scores.tolist())
+    return scores
+
+def scale_loss(exp_loss: Tensor, weight: Tensor, scale: list[Literal['batch_size', 'all_exp', 'episode_exp']], all_exp: int) -> Tensor:
+    """
+    episode_losses: Tensor[L, B]
+    weight: Tensor[L, B]
+    """
+    _, B = exp_loss.shape
+    ns_exp = weight.sum(dim=0)
+    world_size = dist.get_world_size()
+    episode_losses = torch.sum(exp_loss*weight).sum(dim=0) # [B, ]
+    episode_losses *= world_size # DDPで平均されるのを一旦解消
+
+    if 'batch_size' in scale:
+        episode_losses /= world_size*B
+    if 'all_exp' in scale:
+        episode_losses /= all_exp
+    if 'episode_exp' in scale:
+        episode_losses /= ns_exp
+    return episode_losses.sum(dim=0)
 
 @record
 def main():
     # arguments
     parser = ArgumentParser()
-    ## reward
+    ## score
     parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', 'qvina', 'dummy'], required=True)
-    parser.add_argument('--error-score', type=float, default=None)
-    parser.add_argument('--ignore-error', action='store_true')
-    parser.add_argument('--min-score', type=float, default=-math.inf)
     parser.add_argument('--max-new-token', type=int, default=1000)
-    parser.add_argument('--reward-scale', choices=['none', 'all_mean', 'sample_mean'], default='none')
-    parser.add_argument('--alpha', type=float, default=0.05) # same as BindGPT
+    ### score scale & normalization
+    parser.add_argument('--min-valid-score', type=float, default=-math.inf)
+    parser.add_argument('--gen-error-score', type=float, default=math.nan)
+    parser.add_argument('--vina-error-score', type=float, default=math.nan)
+    parser.add_argument('--sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--all-whiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--gen-error-white-score', type=float, default=math.nan)
+    parser.add_argument('--vina-error-white-score', type=float, default=math.nan)
+    parser.add_argument('--sample-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--all-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
     ## Data
     parser.add_argument('--max-prompt-len', type=int)
     parser.add_argument('--generate-per-sample', type=int, default=1)
@@ -78,8 +317,10 @@ def main():
     parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
     parser.add_argument('--clip-grad-value', type=float, default=None)
     parser.add_argument('--clip-grad-norm', type=float, default=1.0) # same as BindGPT
-    parser.add_argument('--loss-scale', type=float, default=1.0)
-    ## scheduler
+    parser.add_argument('--loss-scale', choices=['batch_size', 'all_exp', 'episode_exp'], nargs='*', default=[])
+    parser.add_argument('--kl-factor', type=float, default=0.05) # --alpha in old code. same as BindGPT
+    parser.add_argument('--value-factor', type=float, default=0.05)
+    ## lr/scheduler
     parser.add_argument('--lr', type=float, default=1.4e-5) # same as BindGPT
     parser.add_argument('--scheduler', default='constant') # same as BindGPT
     parser.add_argument("--schedule-free", action='store_true')
@@ -90,7 +331,6 @@ def main():
     parser.add_argument('--finetune-patience-val', type=int)
     ## environment
     parser.add_argument('--num-workers', type=int, default=0)
-    parser.add_argument('--prefetch-factor', type=int)
     parser.add_argument('--num-score-workers', type=int, default=1)
     parser.add_argument('--gc', action='store_true')
     parser.add_argument('--gpu-size-gb', type=float, required=True)
@@ -149,33 +389,26 @@ def main():
     else:
         assert args.finetune_patience_val is None
 
-    do_save_steps = [0, 1, 2, 3, 4, 50, 100]+list(range(200, 1000, 200)) \
-            +list(range(1000, args.max_opt, 1000))
+    do_save_steps = [0, 1, 100, 200, 400, 700]+list(range(1000, args.max_opt, 1000))
 
     
     # Environment
     result_dir = f"reinforce/results/{args.studyname}"
     logger, token_logger, rank, device = set_env(result_dir, args, logs, 
-            subdirs=['models'])
+            subdirs=['models', 'grads/reward', 'grads/kl', 'grads/value'])
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
     ignore_rdkit_warning()
     ## check generate_per_sample
-    ddp_size = dist.get_world_size()
-    if rank == MAIN_RANK:
-        logger.info(f"git hash={get_git_hash()}")
+    logger.info(f"git hash={get_git_hash()}", **NO_DUP)
 
     # model
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
     init_model, voc_encoder = get_model(pargs, None, init_state_path, device)
     net_model = get_model(pargs, voc_encoder, init_state_path, device)
-    state_size = net_model.d_model if isinstance(net_model, Model) else net_model.hidden_size
-    net_model.value_head = nn.Linear(state_size, 1)
+    net_model.value_head = nn.Linear(net_model.state_size, 1)
+    net_model.to(device)
     model = DistributedDataParallel(net_model)
-    def get_gpuuse(batch_size: int, length: int):
-        if isinstance(net_model, Model):
-            return net_model.get_gpuuse(batch_size, length, True, 'FLASH')
-        else:
-            return net_model.get_gpuuse(batch_size, length, True)
+    get_gpuuse = partial(net_model.get_gpuuse, bf16=True, kernel='FLASH')
     if args.max_prompt_len is not None:
         logger.info(f"Estimated GPU use={get_gpuuse(args.batch_size, args.max_new_token+args.max_prompt_len)/2**30:.03f}")
 
@@ -188,39 +421,23 @@ def main():
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
 
-    ## Scoring function 最大化したいものとする
-    error_score = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}[args.target]
-    if args.error_score is not None:
-        error_score = args.error_score
-
     # DataLoader
-    assert args.batch_size * ddp_size % args.generate_per_sample == 0
-    if rank == DATA_RANK['train']:
-        loader = DataLoader(train_data, batch_size=None, 
-            sampler=InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed)),
-            num_workers=args.num_workers, pin_memory=True, prefetch_factor=args.prefetch_factor)
-        train_iter = loader.__iter__()
-        if args.max_prompt_len is not None:
-            train_iter = itr.filterfalse(lambda x: len(x[2]) > args.max_prompt_len, train_iter)
-        if args.fix_pocket:
-            train_fixed_item = train_iter.__next__()
-            del train_iter
+    data_iter = ReinforceDataIter(train_data, device, args.batch_size, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
 
     # optimizer
     optimizer, scheduler = get_optimizer_scheduler(model, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, 'optimizer' in args.check)
     optimizer.zero_grad()
 
-    
-
     ## records
     step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", args.record_opt)
     error_recorder = IterateRecorder(f"{result_dir}/errors/{rank}.csv", args.record_opt)
     score_recorder = IterateRecorder(f"{result_dir}/scores/{rank}.csv", args.record_opt)
-    size_recorder = IterateRecorder(f"{result_dir}/size/{rank}.csv",  args.record_opt)
+    size_recorder = IterateRecorder(f"{result_dir}/sizes/{rank}.csv", args.record_opt)
     train_looper = Loopers([
-        LogLooper(logger, 'training', 'step', 1000, 5),
-        TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 100),
+        LogLooper(logger, 1000, 5, 'step', 'training'),
+        TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 1000),
         TimeLogLooper(logger, 'step', 1000), 
+        GPUUseLooper(logger, device, 'step', 5)
     ])
 
     # save at step 0
@@ -234,157 +451,123 @@ def main():
         is_starting = step < 5
         do_save = step in do_save_steps
 
-        # get batch
         train_looper.put('get_batch')
-        if rank == DATA_RANK['train']:
-            all_items = []
-            for si in range(args.batch_size*ddp_size // args.generate_per_sample):
-                all_items += [train_fixed_item if args.fix_pocket else train_iter.__next__()] * args.generate_per_sample
-            batched_items = [all_items[r*args.batch_size:(r+1)*args.batch_size] for r in range(ddp_size)]
-        else:
-            batched_items = None
-        items_box = [None]
-        if is_starting:
-            logger.debug("scatter_object_list started.")
-        dist.scatter_object_list(items_box, batched_items, src=DATA_RANK['train'])
-        if is_starting:
-            logger.debug("scatter_object_list ended.")
-        idxs, pdbs, prompt_tokens, positions = zip(*items_box[0])
-        all_idxs = torch.cat(dist_all_gather(torch.tensor(idxs, dtype=torch.int, device=device)))
-        prompt_tokens = [token.to(device) for token in prompt_tokens]
-        positions = [position.tolist() for position in positions]
-        prompt_sizes = [len(token) for token in prompt_tokens]
-        B = len(prompt_tokens)
+        all_idxs, pdbs, prompt_tokens, positions = data_iter.get()
 
-        # generate sample
         train_looper.put('generate')
-        model.eval()
-        streamers = ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, fargs.coord_range, voc_encoder, False, not fargs.no_lig_h_atom, not fargs.no_lig_h_coord, None) for idx in range(B)]
-        streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in streamers]
-        streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in streamers]
-        if is_starting and 'tokens' in args.check:
-            streamers = [TokenWriteStreamer(streamer, voc_encoder, 
-                    prompt_position=positions[idx],
-                    prompt_csv_path=f"{result_dir}/generation/prompt_token/step{step}/rank{rank}/{idx}.csv", 
-                    new_csv_path=f"{result_dir}/generation/new_token/step{step}/rank{rank}/{idx}.csv"
-                ) for idx, streamer in enumerate(streamers)]
-        if is_starting:
-            streamers = [TimeLogStreamer(streamer, str(b), 5.0) for b, streamer in enumerate(streamers)]
-        with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
-            net_model.generate2(prompt_tokens, positions, streamers, args.max_new_token)
+        input, output, position, weight, all_exp, ligs, errors = generate(
+            model, 
+            voc_encoder,
+            result_dir,
+            args.max_new_token,
+            fargs.coord_range,
+            not fargs.no_lig_h_atom,
+            not fargs.no_lig_h_coord,
+            device,
+            size_recorder,
+            step, 
+            prompt_tokens, 
+            positions, 
+            do_save,
+        )
 
-        out_batch = pad_sequence([
-            torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens)
-            for token_streamer in token_streamers
-        ], padding_value=voc_encoder.pad_token).to(device=device, dtype=torch.long)
-        weight = torch.zeros_like(out_batch, dtype=torch.float)[:-1] # [Lo-1, B]
-        sizes = {}
-        for b, token_streamer in enumerate(token_streamers):
-            prompt_size, new_size = len(token_streamer.prompt_tokens), len(token_streamer.new_tokens)
-            weight[prompt_size-1:prompt_size+new_size-1, b] = 1.0
-            sizes[f'prompt {b}'] = prompt_size; sizes[f'output {b}'] = new_size
-        position_batch = pad_sequence([
-            torch.tensor(position+position_streamer.new_positions) for position, position_streamer
-            in zip(positions, position_streamers)
-        ], padding_value=0).to(device=device, dtype=torch.long)
-        size_recorder.record(**sizes)
-                
-        # Get score
         train_looper.put('get_score')
-        errors = []
-        with cf.ProcessPoolExecutor(args.num_score_workers) if (args.num_score_workers >= 2) else nullcontext() as e:
-            futures = []
-            valid_scores = []
-            for idx, ligand_streamer in enumerate(ligand_streamers):
-                lig_mol = ligand_streamer.mol
-                errors.append('' if ligand_streamer.error is None else ligand_streamer.error)
-                if ligand_streamer.error is not None: 
-                    continue
-                out_dir = f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
-                os.makedirs(out_dir, exist_ok=True)
-                if args.num_score_workers >= 2:
-                    futures.append(e.submit(get_score, target=args.target, lig_rdmol=lig_mol, rec_pdb=pdbs[idx], out_dir=out_dir, cpu=args.cpu))
-                else:
-                    valid_scores.append(get_score(args.target, lig_mol, pdbs[idx], out_dir, args.cpu))
-            if args.num_score_workers >= 2:
-                valid_scores = np.array([f.result() for f in futures])
-            else:
-                valid_scores = np.array(valid_scores)
-        errors = np.array(errors)
-        scores = np.full(len(errors), np.nan)
-        scores[errors == ""] = valid_scores
-        errors[errors == ""][np.isnan(valid_scores)] = 'VINA'
+        scores = get_scores(
+            pdbs,
+            ligs,
+            errors,
+            all_idxs,
 
-        error_recorder.record(**{str(i): errors[i] for i in range(args.batch_size)})
-        scores = torch.tensor(scores, device=device, dtype=torch.float)
-        if not args.ignore_error:
-            scores[torch.isnan(scores)] = error_score
-        torch.clamp_(scores, min=args.min_score)
-        score_recorder.record(**{str(i): score for i, score in enumerate(scores.tolist())})
+            f"{result_dir}/generation/{step if do_save else 'tmp'}",
+            error_recorder,
+            score_recorder,
+            device,
+            args.min_valid_score,
+            args.gen_error_score,
+            args.vina_error_score,
+            args.sample_whiten,
+            args.all_whiten,
+            args.gen_error_white_score, 
+            args.vina_error_white_score,
+            args.sample_rewhiten,
+            args.all_rewhiten,
 
-        ## gather & normalize score
-        all_scores = [torch.zeros(args.batch_size, dtype=torch.float, device=device)
-                for _ in range(ddp_size)]
-        dist.all_gather(all_scores, scores)
-        all_scores = torch.cat(all_scores)
-
-        match args.reward_scale:
-            case 'none': 
-                pass
-            case 'all_mean':
-                if torch.any(torch.isfinite(all_scores)):
-                    scores = scores - torch.nanmean(all_scores)
-            case 'sample_mean':
-                idxs = all_idxs[rank*args.batch_size:(rank+1)*args.batch_size]
-                unique_idxs = idxs.unique()
-                for uidx in unique_idxs:
-                    if torch.any(torch.isfinite(all_scores[all_idxs == uidx])):
-                        scores[idxs == uidx] -= torch.nanmean(all_scores[all_idxs == uidx])
-        if args.ignore_error:
-            scores[torch.isnan(scores)] = 0.0
+            args.target,
+            args.num_score_workers,
+            args.cpu,
+        )
         if is_starting:
             logger.info(f"step {step} scores={scores.cpu().tolist()}")
+        
+
 
         # Forward Get prob & reward loss
         train_looper.put('forward_backward')
         model.train()
-        La, B = out_batch.shape
-        mbatch_size = solve_increasing_fn_left(lambda bsz: get_gpuuse(bsz, La)-args.gpu_size, 16)
+        L, B = input.shape
+        mbatch_size = solve_increasing_fn_left(lambda bsz: get_gpuuse(bsz, L)-args.gpu_size, 16)
         if mbatch_size == 0:
             raise ValueError(f"Input was too large")
         if is_starting:
             logger.info(f"{mbatch_size=}")
-        reward_loss = 0
-        kl_loss = 0
-        value_loss = 0.0
         with model.join():
+            reward_loss = 0.0
+            kl_loss = 0.0
+            value_loss = 0.0
+            if do_save:
+                values = []
+                log_probs = []
             for mbatch_start in range(0, B, mbatch_size):
                 mslice = slice(mbatch_start, mbatch_start+mbatch_size)
-                out_mbatch = out_batch[:, mslice]
-                position_mbatch = position_batch[:,mslice]
-                weight_mbatch = weight[:, mslice]
-                scores_mbatch = scores[mslice]
+                input_m = input[:, mslice]
+                output_m = output[:, mslice]
+                position_m = position[:,mslice]
+                weight_m = weight[:, mslice]
+                rewards_m = scores[mslice]
                 with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                     with torch.inference_mode():
-                        init_logits = init_model(out_mbatch[:-1], position_mbatch[:-2]) # [L, B, N]
-                        init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [Lo-1, B, N]
-                    logits, states = model(out_mbatch[:-1], position_mbatch[:-2], out_state=True) # [Lo-1, B, T]
-                    values = model.value_head(states)
-                    log_probs_all = F.log_softmax(logits, dim=-1) # [Lo-1, B, N]
-                    log_probs = torch.gather(log_probs_all, dim=-1, index=out_mbatch[1:].unsqueeze(-1)).squeeze(-1) # [Lo-1, B]
-                    reward_loss_mbatch = torch.sum(-(scores_mbatch-values.detach())*(log_probs*weight_mbatch).sum(dim=0)/weight_mbatch.sum(dim=0))
+                        init_logits = init_model(input_m, position_m) # [L, B, N]
+                        init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [L, B, N]
+                    logits, states = model(input_m, position_m, out_state=True) # [L, B, T]
+                    values_m = model.value_head(states)
+                    log_probs_all = F.log_softmax(logits, dim=-1) # [L, B, N]
+                    log_probs_m = torch.gather(log_probs_all, dim=-1, index=output_m.unsqueeze(-1)).squeeze(-1) # [L, B]
+                    reward_loss_m = -((rewards_m-values_m.detach())*log_probs_m)
+                    value_loss_m = (values_m-rewards_m)**2*0.5
 
                     ## KL loss
                     log_probs_all = F.log_softmax(logits, dim=-1)
-                    kl_loss_mbatch = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
+                    kl_loss_m = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
                         log_target=True) # [Lo-1, B, N]
-                    kl_loss_mbatch = kl_loss_mbatch.sum(dim=-1) # [Lo-1, B]
-                    kl_loss_mbatch = torch.sum(kl_loss_mbatch*weight_mbatch)
+                    kl_loss_m = kl_loss_m.sum(dim=-1) # [Lo-1, B]
                     
-                    loss = (reward_loss_mbatch + kl_loss_mbatch * args.alpha) * args.loss_scale
+                    reward_loss += scale_loss(reward_loss_m, weight_m, args.loss_scale, all_exp).sum()
+                    kl_loss += scale_loss(kl_loss_m, weight_m, args.loss_scale, all_exp).sum() * args.kl_factor
+                    value_loss += scale_loss(value_loss_m, weight_m, args.loss_scale, all_exp).sum() * args.value_factor
+                    if do_save:
+                        values.append(values_m.detach())
+                        log_probs.append(log_probs_m.detach())
+            if do_save:
+                reward_loss.backward()
+                grads = get_grads(model, prev_grads=None)
+                torch.save(grads, f"{result_dir}/grads/reward/step{step}.pth")
+                kl_loss.backward()
+                grads, kl_grads = get_grads(model, prev_grads=grads)
+                torch.save(kl_grads, f"{result_dir}/grads/kl/step{step}.pth")
+                value_loss.backward()
+                _, value_grads = get_grads(model, grads)
+                torch.save(value_grads, f"{result_dir}/grads/value/step{step}.pth")
+                del grads, kl_grads, value_grads
+            else:
+                loss = reward_loss+kl_loss+value_loss
                 loss.backward()
-                reward_loss += reward_loss_mbatch.item()
-                kl_loss += kl_loss_mbatch.item()
+        if do_save:
+            values = torch.cat(values, dim=1)
+            log_probs = torch.cat(log_probs, dim=1)
+            os.makedirs(f"{result_dir}/batches/{step}", exist_ok=True)
+            for b in (range(B) if step in [0, 100] else [0]):
+                df = pd.DataFrame(dict(input=[voc_encoder.i2voc[i] for i in input[:,b]], output=[voc_encoder.i2voc[i] for i in output[:,b]], position=position[:,b].tolist(), weight=weight[:,b].tolist(), log_prob=log_probs[:,b].tolist(), value=values[:,b].tolist()))
+                df.to_csv(f"{result_dir}/batches/{step}/{rank}_{b}.csv")
 
         # Optimizer's step
         train_looper.put('optim')
@@ -394,9 +577,8 @@ def main():
         optimizer.step()
         optimizer.zero_grad()
         step += 1
-        step_recorder.record(batch_size=B, max_len=max(prompt_sizes), lr=scheduler.get_last_lr()[0], 
-                memory=psutil.virtual_memory().used/(2**30), 
-                reward_loss=reward_loss, kl_loss=kl_loss)
+        step_recorder.record(lr=scheduler.get_last_lr()[0], memory=psutil.virtual_memory().used/(2**30), 
+                reward_loss=reward_loss.item(), kl_loss=kl_loss.item(), value_loss=value_loss.item())
         scheduler.step()
         
         if step % args.record_opt == 0:
@@ -404,10 +586,6 @@ def main():
                 torch.save(model.state_dict(), f"{result_dir}/models/{step}.pth")
                 cleardir(f"{result_dir}/optimizers")
                 torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
-
-        if is_starting:
-            logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
-            torch.cuda.reset_peak_memory_stats()
 
         if step == 3:
             logger.info("RDKit logger will be disabled from now on.")

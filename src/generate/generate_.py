@@ -1,3 +1,4 @@
+import os
 from argparse import Namespace
 from collections.abc import Callable
 from inspect import getfullargspec
@@ -7,7 +8,6 @@ import torch
 from torch.utils.data import Dataset, DataLoader, Subset, BatchSampler
 from src.utils.random import set_random_seed
 from src.utils.logger import add_file_handler, get_logger, set_third_party_logger
-from src.utils.path import cleardir
 from src.utils.rdkit import ignore_rdkit_warning
 from src.data.tokenizer import VocEncoder
 from src.train import get_model, log_logs
@@ -27,7 +27,9 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
 
     # Environment
     set_random_seed(seed)
-    cleardir(out_dir)
+    if os.path.exists(out_dir):
+        raise FileExistsError(f"{out_dir=} already exists.")
+    os.makedirs(out_dir, exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # logger

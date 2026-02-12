@@ -26,7 +26,7 @@ from src.data import KeyDataset, CacheDataset, StackDataset, TensorDataset
 from src.data.coord import CoordTransformDataset, RescaleDataset
 from src.data.datasets.moleculenet import UniMolMoleculeNetDataset, MoleculeNetDataset
 from src.data.tokenizer import FloatTokenizer, BinaryClassTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, TokenEncodeDataset, RemoveLastDataset, TokenWeightDataset
-from src.data.collator import DDPStringCollateLoader
+from src.train.collator import DDPStringCollateLoader
 from src.data.molecule import MolProcessDataset, MolTokenizeDataset
 from src.train import get_early_stop_opt, set_env, get_process_ranks, get_model, CrossEntropyLoss, get_optimizer_scheduler, log_batch
 
