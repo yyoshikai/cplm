@@ -9,7 +9,8 @@ from rdkit import Chem
 from src.data.datasets.posebusters import PosebustersV2ProteinDataset
 from src.chem import get_coord_from_mol, set_conf, pdb_path2obmol
 from src.utils.logger import set_third_party_logger
-sys.path.append("/workspace/github/posebusters")
+from src.utils.path import WORKDIR
+sys.path.append(f"{WORKDIR}/github/posebusters")
 from posebusters.posebusters import PoseBusters
 
 if __name__ == '__main__':
