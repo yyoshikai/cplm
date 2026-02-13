@@ -10,8 +10,7 @@ tmp
 /downstream/*
 !/downstream/finetune
 !/downstream/finetune/*.py
-/tests/*
-!/tests/*.py
+/tests
 /generate/*/*
 !/generate/protein_structure/*.py
 !/generate/pocket_structure/*.py
@@ -33,4 +32,3 @@ __pycache__/
 results/
 pjs/
 graph/
-
