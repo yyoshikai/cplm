@@ -2,6 +2,7 @@ import os, yaml, psutil, math, random
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
+from collections.abc import Callable
 from functools import partial
 from logging import getLogger
 from typing import Literal
@@ -33,12 +34,12 @@ from src.data.tokenizer import VocEncoder
 from src.model import Model
 from src.train import set_env, get_model, get_optimizer_scheduler, get_process_ranks
 from src.train.data import get_finetune_data
-from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper
+from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
 from src.generate.streamer import LigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 ## Scoring function
-def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int):
+def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool):
     match target:
         case 'min_vina':
             score, min_score, error = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
@@ -49,9 +50,10 @@ def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int)
         case 'mw_max':
             return rdMolDescriptors.CalcExactMolWt(lig_rdmol)
         case 'qvina':
+            os.makedirs(out_dir, exist_ok=True)
             with open(f"{out_dir}/rec_input.pdb", 'w') as f:
                 f.write(rec_pdb)
-            score = eval_qvina(lig_rdmol, f"{out_dir}/rec_input.pdb", out_dir, timeout=60, cpu=cpu)[0]
+            score = eval_qvina(lig_rdmol, f"{out_dir}/rec_input.pdb", out_dir, timeout=60, cpu=cpu, print_prepare=print_prepare)[0]
             return -score if score is not None else np.nan
         case 'dummy':
             return random.random()
@@ -59,12 +61,20 @@ def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int)
 error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}
 
 def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
-    grads = {name: param.grad.clone() for name, param in model.named_parameters()}
+    grads = { name: param.grad.clone() if param.grad is not None else None 
+            for name, param in model.named_parameters() }
     if prev_grads is not None:
-        diff_grads = {name: grad-prev_grads[name] for name, grad in grads.items()}
+        diff_grads = {}
+        for name, grad in grad.items():
+            prev_grad = prev_grads[name]
+            if grad is None:
+                assert prev_grad is None
+                diff_grads[name] = None
+            else:
+                diff_grads[name] = grad if prev_grad is None else grad - prev_grad
         return grads, diff_grads
     else:
-        return grads
+        return grads, grads
 
 class ReinforceModel(nn.Module):
     def __init__(self, model: Model):
@@ -141,7 +151,7 @@ def generate(
     streamers = token_streamers = [TokenSaveStreamer(streamer) for streamer in streamers]
     streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in streamers]
     if step < 5:
-        streamers = [TimeLogStreamer(streamer, str(b), 5.0) for b, streamer in enumerate(streamers)]
+        streamers = [TimeLogStreamer(streamer, str(b), 10.0) for b, streamer in enumerate(streamers)]
     with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
         model.module.model.generate2(prompt_tokens, positions, streamers, max_new_token)
 
@@ -230,6 +240,7 @@ def get_scores(
         target: str,
         num_score_workers: int,
         cpu: int,
+        print_prepare: bool
 ) -> Tensor:
     """
     1. nanでない報酬を(--min-valid-score, default=-math.inf)でclip
@@ -249,14 +260,14 @@ def get_scores(
 
     if num_score_workers >= 2:
         with cf.ProcessPoolExecutor(num_score_workers) as e:
-            futures = [None if errors[idx] is not None else e.submit(get_score, target=target, lig_rdmol=lig, rec_pdb=pdbs[idx], out_dir=f"{out_dir}/{rank}_{idx}", cpu=cpu) for idx, lig in enumerate(ligs)]
+            futures = [None if errors[idx] is not None else e.submit(get_score, target=target, lig_rdmol=lig, rec_pdb=pdbs[idx], out_dir=f"{out_dir}/{rank}_{idx}", cpu=cpu, print_prepare=print_prepare) for idx, lig in enumerate(ligs)]
             scores = [np.nan if f is None else f.result() for f in futures]
             errors = ['VINA' if error is None and np.isnan(score) else error for error, score in zip(errors, scores)]
     else:
         scores = []
         for idx, lig in enumerate(ligs):
             if errors[idx] is None:
-                score = get_score(target, lig, pdbs[idx], f"{out_dir}/{rank}_{idx}", cpu)
+                score = get_score(target, lig, pdbs[idx], f"{out_dir}/{rank}_{idx}", cpu, print_prepare)
                 if np.isnan(score):
                     errors[idx] = 'VINA'
                 scores.append(score)
@@ -282,15 +293,62 @@ def get_scores(
     score_recorder.record(raw=raw_scores.tolist(), normalized=scores.tolist())
     return scores
 
+def get_advantage(model: ReinforceModel, input: Tensor, position: Tensor, weight: Tensor, scores: Tensor, whiten: list[Literal['mean', 'std']], get_gpuuse: Callable[[int], float], gpu_size: float) -> Tensor:
+    """
+    Parameters
+    ----------
+    input, position, weight: Tensor(float)[L, B]
+    scores: Tensor(float)[B,]
+
+    Returns
+    -------
+    advantage: Tensor(float)[L, B]
+    
+    """
+    model
+    L, B = input.shape
+    device = input.device
+    mbatch_size = solve_increasing_fn_left(lambda bsz: get_gpuuse(bsz, L)-gpu_size, 16)*2
+    if mbatch_size == 0:
+        raise ValueError(f"Input was too large")
+    advantage = []
+    with torch.inference_mode(), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+        for mbatch_start in range(0, B, mbatch_size):
+            mslice = slice(mbatch_start, mbatch_start+mbatch_size)
+            _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
+            advantage_m = scores[mslice].unsqueeze(0) - values_m
+            advantage.append(advantage_m)
+    advantage = torch.cat(advantage, dim=1).detach() # [L, B]
+    all_adv = reduce_float(torch.sum(advantage*weight), device)
+    all_adv2 = reduce_float(torch.sum(advantage**2*weight), device)
+    all_weight = reduce_float(torch.sum(weight), device)
+    adv_mean = all_adv / all_weight
+    adv_std = all_adv2 / all_weight - adv_mean**2
+    whiten_mean = 'mean' in whiten
+    whiten_std = 'std' in whiten
+    if whiten_mean and whiten_std:
+        advantage = (advantage-adv_mean)/adv_std
+    elif whiten_mean:
+        advantage = advantage-adv_mean
+    elif whiten_std:
+        advantage = (advantage-adv_mean)/adv_std+adv_mean
+    return advantage
+
 def scale_loss(exp_loss: Tensor, weight: Tensor, scale: list[Literal['batch_size', 'all_exp', 'episode_exp']], all_exp: int) -> Tensor:
     """
-    episode_losses: Tensor[L, B]
+    exp_losses: Tensor[L, B]
     weight: Tensor[L, B]
+    
+    Returns
+    -------
+    eposide_losses: [, B]
+
     """
     _, B = exp_loss.shape
     ns_exp = weight.sum(dim=0)
     world_size = dist.get_world_size()
-    episode_losses = torch.sum(exp_loss*weight).sum(dim=0) # [B, ]
+    exp_loss = exp_loss*weight
+    episode_losses = torch.sum(exp_loss*weight, dim=0) # [B, ]
     episode_losses *= world_size # DDPで平均されるのを一旦解消
 
     if 'batch_size' in scale:
@@ -299,7 +357,7 @@ def scale_loss(exp_loss: Tensor, weight: Tensor, scale: list[Literal['batch_size
         episode_losses /= all_exp
     if 'episode_exp' in scale:
         episode_losses /= ns_exp
-    return episode_losses.sum(dim=0)
+    return episode_losses
 
 def save_rl_model(model: DistributedDataParallel, optimizer, result_dir, step: int):
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
@@ -309,6 +367,11 @@ def save_rl_model(model: DistributedDataParallel, optimizer, result_dir, step: i
             cleardir(f"{result_dir}/optimizers")
             torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
 
+def save_grads(loss: Tensor, model: nn.Module, path: str):
+    grads = torch.autograd.grad(loss, model.parameters(), retain_graph=True, allow_unused=True)
+    grads = {name: grad for (name, param), grad in zip(model.named_parameters(), grads)}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(grads, path)
 
 @record
 def main():
@@ -327,6 +390,7 @@ def main():
     parser.add_argument('--vina-error-white-score', type=float, default=math.nan)
     parser.add_argument('--sample-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--all-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--adv-whiten', choices=['mean', 'std'], nargs='*', default=[])
     ## Data
     parser.add_argument('--max-prompt-len', type=int)
     parser.add_argument('--generate-per-sample', type=int, default=1)
@@ -370,7 +434,7 @@ def main():
     parser.add_argument('--all-autocast', action='store_true')
     parser.add_argument('--fix-pocket', action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
-    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens'])
+    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu'])
     args = parser.parse_args()
     ## set default args
     if args.test: args.studyname+='_test'
@@ -448,7 +512,6 @@ def main():
 
     # optimizer
     optimizer, scheduler = get_optimizer_scheduler(model, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, 'optimizer' in args.check)
-    optimizer.zero_grad()
 
     ## records
     step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", args.record_opt)
@@ -461,13 +524,15 @@ def main():
         TimeLogLooper(logger, 'step', 1000), 
         GPUUseLooper(logger, device, 'step', 5)
     ])
+    if 'gpu' in args.check:
+        train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
 
     # save at step 0
     save_rl_model(model, optimizer, result_dir, 0)
 
     train_looper.start_loops()
     for step in range(args.max_opt):
-        is_starting = step < 5
+        is_starting = step < 3
         do_save = step in do_save_steps
 
         train_looper.put('get_batch')
@@ -514,21 +579,21 @@ def main():
             args.target,
             args.num_score_workers,
             args.cpu,
+            is_starting
         )
         if is_starting:
             logger.info(f"step {step} scores={scores.cpu().tolist()}")
         
-
+        # get & whiten advantage
+        train_looper.put('advantage')
+        advantage = get_advantage(model.module, input, position, weight, scores, args.adv_whiten, get_gpuuse, args.gpu_size)
 
         # Forward Get prob & reward loss
         train_looper.put('forward_backward')
-        model.train()
         L, B = input.shape
         mbatch_size = solve_increasing_fn_left(lambda bsz: get_gpuuse(bsz, L)-args.gpu_size, 16)
-        if mbatch_size == 0:
-            raise ValueError(f"Input was too large")
-        if is_starting:
-            logger.info(f"{mbatch_size=}")
+        model.train()
+        optimizer.zero_grad()
         with model.join():
             reward_loss = 0.0
             kl_loss = 0.0
@@ -550,42 +615,45 @@ def main():
                     logits_m, values_m = model(input_m, position_m) # [L, B, T], [L, B]
                     log_probs_all = F.log_softmax(logits_m, dim=-1) # [L, B, N]
                     log_probs_m = torch.gather(log_probs_all, dim=-1, index=output_m.unsqueeze(-1)).squeeze(-1) # [L, B]
-                    reward_loss_m = -((rewards_m-values_m.detach())*log_probs_m)
-                    value_loss_m = (values_m-rewards_m)**2*0.5
+                    reward_loss_m = -advantage[:, mslice]*log_probs_m
+                    value_loss_m = (rewards_m-values_m)**2*0.5
 
                     ## KL loss
                     log_probs_all = F.log_softmax(logits_m, dim=-1)
                     kl_loss_m = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
                         log_target=True) # [Lo-1, B, N]
                     kl_loss_m = kl_loss_m.sum(dim=-1) # [Lo-1, B]
-                    
-                    reward_loss += scale_loss(reward_loss_m, weight_m, args.loss_scale, all_exp).sum()
-                    kl_loss += scale_loss(kl_loss_m, weight_m, args.loss_scale, all_exp).sum() * args.kl_factor
-                    value_loss += scale_loss(value_loss_m, weight_m, args.loss_scale, all_exp).sum() * args.value_factor
-                    if do_save:
-                        values.append(values_m.detach())
-                        log_probs.append(log_probs_m.detach())
-            if do_save:
-                reward_loss.backward()
-                grads = get_grads(model, prev_grads=None)
-                torch.save(grads, f"{result_dir}/grads/reward/step{step}.pth")
-                kl_loss.backward()
-                grads, kl_grads = get_grads(model, prev_grads=grads)
-                torch.save(kl_grads, f"{result_dir}/grads/kl/step{step}.pth")
-                value_loss.backward()
-                _, value_grads = get_grads(model, grads)
-                torch.save(value_grads, f"{result_dir}/grads/value/step{step}.pth")
-                del grads, kl_grads, value_grads
-            else:
-                loss = reward_loss+kl_loss+value_loss
+                    reward_loss_m = scale_loss(reward_loss_m, weight_m, args.loss_scale, all_exp)
+                    kl_loss_m = scale_loss(kl_loss_m, weight_m, args.loss_scale, all_exp) * args.kl_factor
+                    value_loss_m = scale_loss(value_loss_m, weight_m, args.loss_scale, all_exp) * args.value_factor
+                if step in [0, 100]:
+                    for mb in range(min(mbatch_size, B-mbatch_start)):
+                        save_grads(reward_loss_m[mb], model.module, f"{result_dir}/grads/reward/step{step}/{rank}_{mbatch_start+mb}.pth")
+                        save_grads(kl_loss_m[mb], model.module, f"{result_dir}/grads/kl/step{step}/{rank}_{mbatch_start+mb}.pth")
+                        save_grads(value_loss_m[mb], model.module, f"{result_dir}/grads/value/step{step}/{rank}_{mbatch_start+mb}.pth")
+                        
+                loss = reward_loss_m.sum()+kl_loss_m.sum()+value_loss_m.sum()
                 loss.backward()
+                reward_loss += reward_loss_m.sum().item()
+                kl_loss += kl_loss_m.sum().item()
+                value_loss += value_loss_m.sum().item()
+                if do_save:
+                    values.append(values_m.detach())
+                    log_probs.append(log_probs_m.detach())
         if do_save:
             values = torch.cat(values, dim=1)
-            log_probs = torch.cat(log_probs, dim=1)
+            log_probs10 = torch.cat(log_probs, dim=1) / math.log(10)
             os.makedirs(f"{result_dir}/batches/{step}", exist_ok=True)
             for b in (range(B) if step in [0, 100] else [0]):
-                df = pd.DataFrame(dict(input=[voc_encoder.i2voc[i] for i in input[:,b]], output=[voc_encoder.i2voc[i] for i in output[:,b]], position=position[:,b].tolist(), weight=weight[:,b].tolist(), log_prob=log_probs[:,b].tolist(), value=values[:,b].tolist()))
-                df.to_csv(f"{result_dir}/batches/{step}/{rank}_{b}.csv")
+                pd.DataFrame(dict(
+                    input=[voc_encoder.i2voc[i] for i in input[:,b]], 
+                    output=[voc_encoder.i2voc[i] for i in output[:,b]], 
+                    position=position[:,b].float().cpu(), 
+                    weight=weight[:,b].float().cpu(), 
+                    log_prob=log_probs10[:,b].float().cpu(), 
+                    value=values[:,b].float().cpu(), 
+                    advantage=advantage[:,b].float().cpu())
+                ).to_csv(f"{result_dir}/batches/{step}/{rank}_{b}.csv")
 
         # Optimizer's step
         train_looper.put('optim')
@@ -593,10 +661,9 @@ def main():
             torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
         optimizer.step()
-        optimizer.zero_grad()
         step += 1
         step_recorder.record(lr=scheduler.get_last_lr()[0], memory=psutil.virtual_memory().used/(2**30), 
-                reward_loss=reward_loss.item(), kl_loss=kl_loss.item(), value_loss=value_loss.item())
+                reward_loss=reward_loss, kl_loss=kl_loss, value_loss=value_loss)
         scheduler.step()
         
         if step % args.record_opt == 0:

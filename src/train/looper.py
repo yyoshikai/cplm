@@ -1,4 +1,4 @@
-import math
+import os, math
 from collections import defaultdict
 from collections.abc import Iterable
 from graphlib import TopologicalSorter
@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
+from torch.profiler import profile, ProfilerActivity, record_function
 from ..utils import should_show
 from ..utils.logger import NO_DUP
 
@@ -141,6 +142,7 @@ class TimeWriteLooper(TimeLooper):
     def write(self):
         processes = self.processes()
         if self.df_processes is None:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
             pd.DataFrame(self.process2ts)[processes].to_csv(self.path, index=False)
         elif self.df_processes != processes:
             df_written = pd.read_csv(self.path)
@@ -220,7 +222,27 @@ class GPUUseLooper(Looper):
     def end_loop(self):
         if self.i_loop < self.init:
             gpu_use = torch.cuda.max_memory_allocated(self.device)/2**30
-            self.logger.debug(f"{self.loop_name}[{self.i_loop}] max GPU use={gpu_use:.03f}")
+            self.logger.info(f"{self.loop_name}[{self.i_loop}] max GPU use={gpu_use:.03f}")
         self.i_loop += 1
         if self.i_loop < self.init:
             torch.cuda.reset_peak_memory_stats()
+
+class MemorySnapshotLooper(Looper):
+    def __init__(self, snapshot_path: str, n_step: int, dump_process: bool):
+        self.snapshot_path = snapshot_path
+        self.n_step = n_step
+        self.dump_process = dump_process
+        self.i_step = 0
+    def start_loops(self):
+        
+        torch.cuda.memory._record_memory_history()
+    def put(self, process):
+        if self.dump_process:
+            torch.cuda.memory._dump_snapshot(self.snapshot_path)
+    def end_loop(self):
+        self.i_step += 1
+        if self.dump_process or self.i_step == self.n_step:
+            torch.cuda.memory._dump_snapshot(self.snapshot_path)
+        if self.i_step == self.n_step:
+            torch.cuda.memory._record_memory_history(enabled=None)
+

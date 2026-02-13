@@ -1,4 +1,4 @@
-import psutil, math
+import math, warnings
 from pathlib import Path
 from functools import partial, lru_cache
 from collections import defaultdict
@@ -19,6 +19,9 @@ from transformers.generation.stopping_criteria import StoppingCriteria, Stopping
 from .transformer import save_vocs, align_embedding
 from .model import Streamer, Model
 from ..utils.memory import get_mems
+
+# This warning is inherent in mamba of the version we used.
+warnings.filterwarnings('ignore', message="torch.get_autocast_gpu_dtype() is deprecated.", category=DeprecationWarning, module='mamba_ssm.ops.selective_scan_interface', lineno=201)
 
 class MambaModel(Model):
     """

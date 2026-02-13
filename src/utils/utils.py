@@ -1,5 +1,6 @@
 import sys, os, struct, traceback, warnings, subprocess, math, csv
 from functools import partial
+from contextlib import contextmanager
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from logging import getLogger
@@ -258,3 +259,19 @@ def solve_increasing_fn_left(func: Callable[[int], float], start_sup: int) -> in
         else:
             sup = v
     return min
+
+@contextmanager
+def silence_print(silence: bool=True):
+    if silence:
+        original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+        try:
+            yield sys.stdout
+        finally:
+            sys.stdout.close()
+            sys.stdout = original_stdout
+    else:
+        try:
+            yield sys.stdout
+        finally:
+            pass

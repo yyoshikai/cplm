@@ -9,6 +9,7 @@ from vina import Vina
 from openbabel import openbabel as ob
 from openbabel.openbabel import OBMol, OBConversion
 from .prepare_receptor4 import main as prepare_receptor4_func
+from .utils import silence_print
 from .utils.path import make_pardir, WORKDIR
 from .chem import sdf2obmol, pdb2obmol, rdmol2obmol, get_coord_from_mol
 logger = getLogger(__name__)
@@ -64,7 +65,7 @@ def parse_qvina_out(path: str) -> float:
     return affinity
 
 
-def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, cpu: int|None = None):
+def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=True, center=None, exhaustiveness=16, timeout: Optional[float]=None, cpu: int|None = None, print_prepare: bool=True):
     """
     Returns
     -------
@@ -103,23 +104,24 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
         obc.SetOutFormat('pdbqt')
         obc.WriteFile(lig_obmol, f"{out_dir}/lig.pdbqt")
         
-        prepare_receptor4_func(['-r', rec_pdb_path, '-o', f'{out_dir}/rec.pdbqt'])
+        with silence_print(not print_prepare):
+            prepare_receptor4_func(['-r', rec_pdb_path, '-o', f'{out_dir}/rec.pdbqt'])
 
-        proc = subprocess.Popen('/bin/bash', shell=False, stdin=subprocess.PIPE, 
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/bin/qvina02")
-        command = f"cd {out_dir} && {path_to_qvina} --receptor rec.pdbqt --ligand lig.pdbqt --center_x {center[0]:.4f} --center_y {center[1]:.4f} --center_z {center[2]:.4f} --size_x 20 --size_y 20 --size_z 20 --exhaustiveness {exhaustiveness}"
-        if cpu is not None:
-            command += f" --cpu {cpu}"
-        proc.stdin.write(command.encode('utf-8'))
-        proc.stdin.close()
-        start = time()
-        while proc.poll() is None:
-            if timeout is not None and time()-start > timeout:
-                print(f"qvina subprocess reached timeout({timeout})", flush=True)
-                return None, 'timeout', stdout, stderr
-        stdout = proc.stdout.read().decode()
-        stderr = proc.stderr.read().decode()
+        with subprocess.Popen('/bin/bash', shell=False, stdin=subprocess.PIPE, 
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+            path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/bin/qvina02")
+            command = f"cd {out_dir} && {path_to_qvina} --receptor rec.pdbqt --ligand lig.pdbqt --center_x {center[0]:.4f} --center_y {center[1]:.4f} --center_z {center[2]:.4f} --size_x 20 --size_y 20 --size_z 20 --exhaustiveness {exhaustiveness}"
+            if cpu is not None:
+                command += f" --cpu {cpu}"
+            proc.stdin.write(command.encode('utf-8'))
+            proc.stdin.close()
+            start = time()
+            while proc.poll() is None:
+                if timeout is not None and time()-start > timeout:
+                    print(f"qvina subprocess reached timeout({timeout})", flush=True)
+                    return None, 'timeout', stdout, stderr
+            stdout = proc.stdout.read().decode()
+            stderr = proc.stderr.read().decode()
         
         affinity = parse_qvina_out(f"{out_dir}/lig_out.pdbqt")
         return affinity, None, stdout, stderr

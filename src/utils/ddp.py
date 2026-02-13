@@ -58,7 +58,13 @@ def dist_all_gather(t: Tensor) -> list[Tensor]:
     return outputs
 
 
-def reduce_float(value: float, device: torch.device) -> float:
+def reduce_float(value: float|Tensor, device: torch.device) -> float:
+    """
+    value: float or Tensor of 1 element.
+    
+    """
+    if isinstance(value, Tensor):
+        value = value.item()
     tensor = torch.tensor(value, dtype=torch.float, device=device)
     dist.all_reduce(tensor)
     return tensor.item()
