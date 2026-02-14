@@ -69,7 +69,9 @@ if __name__ == '__main__':
             if os.path.exists(raw_gen_path):
                 if not os.path.exists(link_lig_path):
                     os.symlink(f"../../centered_new_sdf/{data_idx}/{trial_idx}.sdf", link_gen_path)
-                if not os.path.exists(f"{gdir}/eval/{data_idx}_{trial_idx}.yaml"):
+                if os.path.exists(f"{gdir}/eval/{data_idx}_{trial_idx}.yaml"):
+                    print(f"{gdir}/eval/{data_idx}_{trial_idx}.yaml already exists.")
+                else:
                     file_paths.append((raw_gen_path, raw_lig_path, raw_rec_path))
 
     pb = PoseBusters('redock', None, max_workers=None, chunk_size=None)
