@@ -293,7 +293,7 @@ def get_scores(
     score_recorder.record(raw=raw_scores.tolist(), normalized=scores.tolist())
     return scores
 
-def get_advantage(model: ReinforceModel, input: Tensor, position: Tensor, weight: Tensor, scores: Tensor, whiten: list[Literal['mean', 'std']], get_gpuuse: Callable[[int], float], gpu_size: float) -> Tensor:
+def get_advantage(model: ReinforceModel, input: Tensor, position: Tensor, weight: Tensor, scores: Tensor, whiten: list[Literal['mean', 'std']], mbatch_size: int) -> Tensor:
     """
     Parameters
     ----------
@@ -308,9 +308,6 @@ def get_advantage(model: ReinforceModel, input: Tensor, position: Tensor, weight
     model
     L, B = input.shape
     device = input.device
-    mbatch_size = solve_increasing_fn_left(lambda bsz: get_gpuuse(bsz, L)-gpu_size, 16)*2
-    if mbatch_size == 0:
-        raise ValueError(f"Input was too large")
     advantage = []
     with torch.inference_mode(), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
         for mbatch_start in range(0, B, mbatch_size):
@@ -420,7 +417,8 @@ def main():
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--num-score-workers', type=int, default=1)
     parser.add_argument('--gc', action='store_true')
-    parser.add_argument('--gpu-size-gb', type=float, required=True)
+    parser.add_argument('--gpu-size-gb', type=float)
+    parser.add_argument('--mbatch-size', type=int)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--commit', action='store_false', dest='no_commit')
     ## verbosity
@@ -440,7 +438,10 @@ def main():
     if args.test: args.studyname+='_test'
     if args.record_opt is None:
         args.record_opt = 1 if args.test else 500
-    args.gpu_size = args.gpu_size_gb * (2**30)
+    if args.mbatch_size is None:
+        assert args.gpu_size_gb is not None
+        args.gpu_size = args.gpu_size_gb * (2**30)
+    
     args.sdp_kernel = 'FLASH'
 
     logs = []
@@ -494,9 +495,8 @@ def main():
     reinforce_model = ReinforceModel(net_model)
     reinforce_model.to(device)
     model = DistributedDataParallel(reinforce_model)
-    get_gpuuse = partial(net_model.get_gpuuse, bf16=True, kernel='FLASH')
     if args.max_prompt_len is not None:
-        logger.info(f"Estimated GPU use={get_gpuuse(args.batch_size, args.max_new_token+args.max_prompt_len)/2**30:.03f}")
+        logger.info(f"Estimated GPU use={net_model.get_gpuuse(args.mbatch_size, args.max_new_token+args.max_prompt_len, True, 'FLASH')/2**30:.03f}")
 
     # data
     ## vocs from state_dict
@@ -585,13 +585,17 @@ def main():
             logger.info(f"step {step} scores={scores.cpu().tolist()}")
         
         # get & whiten advantage
+        L, B = input.shape
+        mbatch_size = args.mbatch_size if args.mbatch_size is not None else \
+            solve_increasing_fn_left(lambda bsz: 
+            net_model.get_gpuuse(bsz, L, True, 'FLASH')-args.gpu_size, 16)
+        if mbatch_size == 0:
+            raise ValueError(f"Input was too large")
         train_looper.put('advantage')
-        advantage = get_advantage(model.module, input, position, weight, scores, args.adv_whiten, get_gpuuse, args.gpu_size)
+        advantage = get_advantage(model.module, input, position, weight, scores, args.adv_whiten, mbatch_size)
 
         # Forward Get prob & reward loss
         train_looper.put('forward_backward')
-        L, B = input.shape
-        mbatch_size = solve_increasing_fn_left(lambda bsz: get_gpuuse(bsz, L)-args.gpu_size, 16)
         model.train()
         optimizer.zero_grad()
         with model.join():
