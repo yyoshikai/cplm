@@ -671,7 +671,7 @@ def main():
         scheduler.step()
         
         if step % args.record_opt == 0:
-            save_rl_model(model, optimizer, step)
+            save_rl_model(model, optimizer, result_dir, step)
 
         if step == 3:
             logger.info("RDKit logger will be disabled from now on.")
