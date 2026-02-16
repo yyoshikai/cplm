@@ -2,8 +2,6 @@ import os, yaml, psutil, math, random
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
-from collections.abc import Callable
-from functools import partial
 from logging import getLogger
 from typing import Literal
 import numpy as np, pandas as pd
@@ -77,14 +75,19 @@ def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
         return grads, grads
 
 class ReinforceModel(nn.Module):
-    def __init__(self, model: Model):
+    def __init__(self, model: Model, baseline):
         super().__init__()
+        self.baseline = baseline
         self.model = model
-        self.value_head = nn.Linear(model.state_size, 1)
+        if baseline:
+            self.value_head = nn.Linear(model.state_size, 1)
     
     def forward(self, src: Tensor, position: Tensor):
         logits, states = self.model(src, position, out_state=True)
-        values = self.value_head(states).squeeze(-1)
+        if self.baseline:
+            values = self.value_head(states).squeeze(-1)
+        else:
+            values = None
         return logits, values
 
 
@@ -293,7 +296,7 @@ def get_scores(
     score_recorder.record(raw=raw_scores.tolist(), normalized=scores.tolist())
     return scores
 
-def get_advantage(model: ReinforceModel, input: Tensor, position: Tensor, weight: Tensor, scores: Tensor, whiten: list[Literal['mean', 'std']], mbatch_size: int) -> Tensor:
+def get_velocity(model: ReinforceModel, input: Tensor, position: Tensor, weight: Tensor, scores: Tensor, whiten: list[Literal['mean', 'std']], mbatch_size: int) -> Tensor:
     """
     Parameters
     ----------
@@ -302,34 +305,37 @@ def get_advantage(model: ReinforceModel, input: Tensor, position: Tensor, weight
 
     Returns
     -------
-    advantage: Tensor(float)[L, B]
+    velocity: Tensor(float)[L, B]
     
     """
     model
     L, B = input.shape
     device = input.device
-    advantage = []
+    velocity = []
     with torch.inference_mode(), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
         for mbatch_start in range(0, B, mbatch_size):
             mslice = slice(mbatch_start, mbatch_start+mbatch_size)
             _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
-            advantage_m = scores[mslice].unsqueeze(0) - values_m
-            advantage.append(advantage_m)
-    advantage = torch.cat(advantage, dim=1).detach() # [L, B]
-    all_adv = reduce_float(torch.sum(advantage*weight), device)
-    all_adv2 = reduce_float(torch.sum(advantage**2*weight), device)
+            if model.baseline:
+                velocity_m = scores[mslice].unsqueeze(0) - values_m
+            else:
+                velocity_m = scores[mslice].unsqueeze(0).expand((L, B))
+            velocity.append(velocity_m)
+    velocity = torch.cat(velocity, dim=1).detach() # [L, B]
+    all_adv = reduce_float(torch.sum(velocity*weight), device)
+    all_adv2 = reduce_float(torch.sum(velocity**2*weight), device)
     all_weight = reduce_float(torch.sum(weight), device)
     adv_mean = all_adv / all_weight
     adv_std = all_adv2 / all_weight - adv_mean**2
     whiten_mean = 'mean' in whiten
     whiten_std = 'std' in whiten
     if whiten_mean and whiten_std:
-        advantage = (advantage-adv_mean)/adv_std
+        velocity = (velocity-adv_mean)/adv_std
     elif whiten_mean:
-        advantage = advantage-adv_mean
+        velocity = velocity-adv_mean
     elif whiten_std:
-        advantage = (advantage-adv_mean)/adv_std+adv_mean
-    return advantage
+        velocity = (velocity-adv_mean)/adv_std+adv_mean
+    return velocity
 
 def scale_loss(exp_loss: Tensor, weight: Tensor, scale: list[Literal['batch_size', 'all_exp', 'episode_exp']], all_exp: int) -> Tensor:
     """
@@ -359,7 +365,11 @@ def scale_loss(exp_loss: Tensor, weight: Tensor, scale: list[Literal['batch_size
 def save_rl_model(model: DistributedDataParallel, optimizer, result_dir, step: int):
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
     if dist.get_rank() == SAVE_RANK:
+        os.makedirs(f"{result_dir}/models", exist_ok=True)
         torch.save(model.module.model.state_dict(), f"{result_dir}/models/{step}.pth")
+        if model.module.baseline:
+            os.makedirs(f"{result_dir}/value_models/{step}.pth", exist_ok=True)
+            torch.save(model.module.value_head.state_dict(), f"{result_dir}/value_models/{step}.pth")
         if step > 0:
             cleardir(f"{result_dir}/optimizers")
             torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
@@ -388,6 +398,7 @@ def main():
     parser.add_argument('--sample-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--all-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--adv-whiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--no-baseline', action='store_false', dest='baseline')
     ## Data
     parser.add_argument('--max-prompt-len', type=int)
     parser.add_argument('--generate-per-sample', type=int, default=1)
@@ -483,7 +494,7 @@ def main():
     # Environment
     result_dir = f"reinforce/results/{args.studyname}"
     logger, _, rank, device = set_env(result_dir, args, logs, 
-            subdirs=['models', 'grads/reward', 'grads/kl', 'grads/value'], get_token_logger=False)
+            subdirs=['grads/reward', 'grads/kl', 'grads/value'], get_token_logger=False)
     ignore_rdkit_warning()
     ## check generate_per_sample
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
@@ -492,7 +503,7 @@ def main():
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
     init_model, voc_encoder = get_model(pargs, None, init_state_path, device)
     net_model = get_model(pargs, voc_encoder, init_state_path, device)
-    reinforce_model = ReinforceModel(net_model)
+    reinforce_model = ReinforceModel(net_model, args.baseline)
     reinforce_model.to(device)
     model = DistributedDataParallel(reinforce_model)
     if args.max_prompt_len is not None:
@@ -584,15 +595,15 @@ def main():
         if is_starting:
             logger.info(f"step {step} scores={scores.cpu().tolist()}")
         
-        # get & whiten advantage
+        # get & whiten velocity
         L, B = input.shape
         mbatch_size = args.mbatch_size if args.mbatch_size is not None else \
             solve_increasing_fn_left(lambda bsz: 
             net_model.get_gpuuse(bsz, L, True, 'FLASH')-args.gpu_size, 16)
         if mbatch_size == 0:
             raise ValueError(f"Input was too large")
-        train_looper.put('advantage')
-        advantage = get_advantage(model.module, input, position, weight, scores, args.adv_whiten, mbatch_size)
+        train_looper.put('velocity')
+        velocity = get_velocity(model.module, input, position, weight, scores, args.adv_whiten, mbatch_size)
 
         # Forward Get prob & reward loss
         train_looper.put('forward_backward')
@@ -619,7 +630,7 @@ def main():
                     logits_m, values_m = model(input_m, position_m) # [L, B, T], [L, B]
                     log_probs_all = F.log_softmax(logits_m, dim=-1) # [L, B, N]
                     log_probs_m = torch.gather(log_probs_all, dim=-1, index=output_m.unsqueeze(-1)).squeeze(-1) # [L, B]
-                    reward_loss_m = -advantage[:, mslice]*log_probs_m
+                    reward_loss_m = -velocity[:, mslice]*log_probs_m
                     value_loss_m = (rewards_m-values_m)**2*0.5
 
                     ## KL loss
@@ -652,11 +663,11 @@ def main():
                 pd.DataFrame(dict(
                     input=[voc_encoder.i2voc[i] for i in input[:,b]], 
                     output=[voc_encoder.i2voc[i] for i in output[:,b]], 
-                    position=position[:,b].float().cpu(), 
-                    weight=weight[:,b].float().cpu(), 
-                    log_prob=log_probs10[:,b].float().cpu(), 
+                    position=position[:,b].float().cpu(),
+                    weight=weight[:,b].float().cpu(),
+                    log_prob=log_probs10[:,b].float().cpu(),
                     value=values[:,b].float().cpu(), 
-                    advantage=advantage[:,b].float().cpu())
+                    velocity=velocity[:,b].float().cpu())
                 ).to_csv(f"{result_dir}/batches/{step}/{rank}_{b}.csv")
 
         # Optimizer's step
