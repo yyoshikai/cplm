@@ -90,7 +90,6 @@ class ReinforceModel(nn.Module):
             values = None
         return logits, values
 
-
 class ReinforceDataIter:
     def __init__(self, train_data: Dataset, device: torch.device, batch_size: int, generate_per_sample: int, max_prompt_len: int, fix_pocket: bool, num_workers: int, seed: int):
         _, _, DATA_RANK = get_process_ranks()
@@ -319,7 +318,8 @@ def get_velocity(model: ReinforceModel, input: Tensor, position: Tensor, weight:
             if model.baseline:
                 velocity_m = scores[mslice].unsqueeze(0) - values_m
             else:
-                velocity_m = scores[mslice].unsqueeze(0).expand((L, B))
+                mb = min(B-mbatch_start, mbatch_size)
+                velocity_m = scores[mslice].unsqueeze(0).expand(L, mb)
             velocity.append(velocity_m)
     velocity = torch.cat(velocity, dim=1).detach() # [L, B]
     all_adv = reduce_float(torch.sum(velocity*weight), device)
@@ -631,21 +631,28 @@ def main():
                     log_probs_all = F.log_softmax(logits_m, dim=-1) # [L, B, N]
                     log_probs_m = torch.gather(log_probs_all, dim=-1, index=output_m.unsqueeze(-1)).squeeze(-1) # [L, B]
                     reward_loss_m = -velocity[:, mslice]*log_probs_m
-                    value_loss_m = (rewards_m-values_m)**2*0.5
+                    reward_loss_m = scale_loss(reward_loss_m, weight_m, args.loss_scale, all_exp)
 
                     ## KL loss
                     log_probs_all = F.log_softmax(logits_m, dim=-1)
                     kl_loss_m = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
                         log_target=True) # [Lo-1, B, N]
                     kl_loss_m = kl_loss_m.sum(dim=-1) # [Lo-1, B]
-                    reward_loss_m = scale_loss(reward_loss_m, weight_m, args.loss_scale, all_exp)
                     kl_loss_m = scale_loss(kl_loss_m, weight_m, args.loss_scale, all_exp) * args.kl_factor
-                    value_loss_m = scale_loss(value_loss_m, weight_m, args.loss_scale, all_exp) * args.value_factor
+
+                    if args.baseline:
+                        value_loss_m = (rewards_m-values_m)**2*0.5
+                        value_loss_m = scale_loss(value_loss_m, weight_m, args.loss_scale, all_exp) * args.value_factor
+                    else:
+                        value_loss_m = torch.zeros_like(velocity) # [L, B]
+                        values_m = torch.zeros_like(velocity) # [L, B]
+                                        
                 if step in [0, 100]:
                     for mb in range(min(mbatch_size, B-mbatch_start)):
                         save_grads(reward_loss_m[mb], model.module, f"{result_dir}/grads/reward/step{step}/{rank}_{mbatch_start+mb}.pth")
                         save_grads(kl_loss_m[mb], model.module, f"{result_dir}/grads/kl/step{step}/{rank}_{mbatch_start+mb}.pth")
-                        save_grads(value_loss_m[mb], model.module, f"{result_dir}/grads/value/step{step}/{rank}_{mbatch_start+mb}.pth")
+                        if args.baseline:
+                            save_grads(value_loss_m[mb], model.module, f"{result_dir}/grads/value/step{step}/{rank}_{mbatch_start+mb}.pth")
                         
                 loss = reward_loss_m.sum()+kl_loss_m.sum()+value_loss_m.sum()
                 loss.backward()
@@ -653,11 +660,11 @@ def main():
                 kl_loss += kl_loss_m.sum().item()
                 value_loss += value_loss_m.sum().item()
                 if do_save:
-                    values.append(values_m.detach())
                     log_probs.append(log_probs_m.detach())
+                    values.append(values_m.detach())
         if do_save:
-            values = torch.cat(values, dim=1)
             log_probs10 = torch.cat(log_probs, dim=1) / math.log(10)
+            values = torch.cat(values, dim=1)
             os.makedirs(f"{result_dir}/batches/{step}", exist_ok=True)
             for b in (range(B) if step in [0, 100] else [0]):
                 pd.DataFrame(dict(
