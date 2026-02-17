@@ -368,7 +368,7 @@ def save_rl_model(model: DistributedDataParallel, optimizer, result_dir, step: i
         os.makedirs(f"{result_dir}/models", exist_ok=True)
         torch.save(model.module.model.state_dict(), f"{result_dir}/models/{step}.pth")
         if model.module.baseline:
-            os.makedirs(f"{result_dir}/value_models/{step}.pth", exist_ok=True)
+            os.makedirs(f"{result_dir}/value_models", exist_ok=True)
             torch.save(model.module.value_head.state_dict(), f"{result_dir}/value_models/{step}.pth")
         if step > 0:
             cleardir(f"{result_dir}/optimizers")
