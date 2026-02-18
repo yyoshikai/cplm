@@ -684,7 +684,7 @@ def main():
                     dist.reduce(grad, dst=SAVE_RANK, op=dist.ReduceOp.AVG)
             if rank == SAVE_RANK:
                 for term, grads in term2grads.items():
-                    torch.save(grads, f"{result_dir}/grads/{term}/step{step}.pth")
+                    torch.save(dict(grads), f"{result_dir}/grads/{term}/step{step}.pth")
 
         # Optimizer's step
         train_looper.put('optim')
