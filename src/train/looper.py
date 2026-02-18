@@ -86,7 +86,7 @@ class TimeLooper(Looper):
     
         self.process_graph = defaultdict(set) # {later process: {former processes}}
         self.process_graph['init'] = set()
-        self.process2t = {}
+        self.process2t = defaultdict(float)
 
     def processes(self):
         return list(TopologicalSorter(self.process_graph).static_order())
@@ -100,18 +100,17 @@ class TimeLooper(Looper):
         cur_end_t = time()
         if not self.start_loops_called:
             raise ValueError(f"start_loops() must be called before put({process}).")
-        if self.cur_process in self.process2t:
-            self.process2t[self.cur_process] += cur_end_t - self.cur_start_t
-        else:
-            if process != 'init':
-                self.process_graph[process].add(self.cur_process)
-            self.process2t[self.cur_process] = cur_end_t - self.cur_start_t
-            self.cur_process = process
-            self.cur_start_t = cur_end_t
+        self.process2t[self.cur_process] += cur_end_t - self.cur_start_t
+        
 
+        if process not in self.process2t and process != 'init':
+            self.process_graph[process].add(self.cur_process)
+        self.cur_start_t = cur_end_t
+        self.cur_process = process
+        
     def end_loop(self):
         self.put('init')
-        self.process2t = {}
+        self.process2t = defaultdict(float)
 
 class TimeWriteLooper(TimeLooper):
     def __init__(self, path: str, write_max_interval: int):
@@ -133,7 +132,7 @@ class TimeWriteLooper(TimeLooper):
         self.i_loop += 1
         if should_show(self.i_loop, self.write_max_interval):
             self.write()
-        self.process2t = {}
+        self.process2t = defaultdict(float)
     
     def end_loops(self):
         if self.n_written != self.i_loop:

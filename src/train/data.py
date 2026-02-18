@@ -21,7 +21,6 @@ from ..data.coord import CoordTransformDataset
 def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
     logs = []
 
-    # compatibility
     assert isinstance(args, Namespace) # not Dict
     args = deepcopy(args)
     default_args = { 'lig_coord_follow_atom': False, 'lig_atoms': False, 'pocket_atom_order': False, 'lig_atom_order': False}

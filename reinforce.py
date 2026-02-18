@@ -2,6 +2,7 @@ import os, yaml, psutil, math, random
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
+from collections import defaultdict
 from logging import getLogger
 from typing import Literal
 import numpy as np, pandas as pd
@@ -374,11 +375,6 @@ def save_rl_model(model: DistributedDataParallel, optimizer, result_dir, step: i
             cleardir(f"{result_dir}/optimizers")
             torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{step}.pth")
 
-def save_grads(loss: Tensor, model: nn.Module, path: str):
-    grads = torch.autograd.grad(loss, model.parameters(), retain_graph=True, allow_unused=True)
-    grads = {name: grad for (name, param), grad in zip(model.named_parameters(), grads)}
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    torch.save(grads, path)
 
 @record
 def main():
@@ -498,6 +494,7 @@ def main():
     ignore_rdkit_warning()
     ## check generate_per_sample
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
+    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 
     # model
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
@@ -506,7 +503,7 @@ def main():
     reinforce_model = ReinforceModel(net_model, args.baseline)
     reinforce_model.to(device)
     model = DistributedDataParallel(reinforce_model)
-    if args.max_prompt_len is not None:
+    if args.max_prompt_len is not None and args.mbatch_size is not None:
         logger.info(f"Estimated GPU use={net_model.get_gpuuse(args.mbatch_size, args.max_new_token+args.max_prompt_len, True, 'FLASH')/2**30:.03f}")
 
     # data
@@ -609,6 +606,7 @@ def main():
         train_looper.put('forward_backward')
         model.train()
         optimizer.zero_grad()
+        save_grad = step in [0, 100]
         with model.join():
             reward_loss = 0.0
             kl_loss = 0.0
@@ -616,6 +614,8 @@ def main():
             if do_save:
                 values = []
                 log_probs = []
+            if save_grad:
+                term2grads = {term: defaultdict(float) for term in ['reward', 'kl', 'value']}
             for mbatch_start in range(0, B, mbatch_size):
                 mslice = slice(mbatch_start, mbatch_start+mbatch_size)
                 input_m = input[:, mslice]
@@ -644,16 +644,18 @@ def main():
                         value_loss_m = (rewards_m-values_m)**2*0.5
                         value_loss_m = scale_loss(value_loss_m, weight_m, args.loss_scale, all_exp) * args.value_factor
                     else:
-                        value_loss_m = torch.zeros_like(velocity) # [L, B]
+                        value_loss_m = torch.zeros_like(velocity, requires_grad=True) # [L, B]
                         values_m = torch.zeros_like(velocity) # [L, B]
                                         
-                if step in [0, 100]:
-                    for mb in range(min(mbatch_size, B-mbatch_start)):
-                        save_grads(reward_loss_m[mb], model.module, f"{result_dir}/grads/reward/step{step}/{rank}_{mbatch_start+mb}.pth")
-                        save_grads(kl_loss_m[mb], model.module, f"{result_dir}/grads/kl/step{step}/{rank}_{mbatch_start+mb}.pth")
-                        if args.baseline:
-                            save_grads(value_loss_m[mb], model.module, f"{result_dir}/grads/value/step{step}/{rank}_{mbatch_start+mb}.pth")
-                        
+                if save_grad:
+                    train_looper.put('save_grad')
+                    terms = {'reward': reward_loss_m.sum(), 'kl': kl_loss_m.sum(), 'value': value_loss_m.sum()}
+                    for term_name, term in terms.items():
+                        grads = torch.autograd.grad(term, model.parameters(), retain_graph=True, allow_unused=True)
+                        for (param_name, _), grad in zip(model.named_parameters(), grads):
+                            if grad is not None:
+                                term2grads[term_name][param_name] += grad
+                    train_looper.put('forward_backward')
                 loss = reward_loss_m.sum()+kl_loss_m.sum()+value_loss_m.sum()
                 loss.backward()
                 reward_loss += reward_loss_m.sum().item()
@@ -676,6 +678,13 @@ def main():
                     value=values[:,b].float().cpu(), 
                     velocity=velocity[:,b].float().cpu())
                 ).to_csv(f"{result_dir}/batches/{step}/{rank}_{b}.csv")
+        if save_grad:
+            for term, grads in term2grads.items():
+                for param_name, grad in grads.items():
+                    dist.reduce(grad, dst=SAVE_RANK, op=dist.ReduceOp.AVG)
+            if rank == SAVE_RANK:
+                for term, grads in term2grads.items():
+                    torch.save(grads, f"{result_dir}/grads/{term}/step{step}.pth")
 
         # Optimizer's step
         train_looper.put('optim')

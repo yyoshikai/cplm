@@ -93,8 +93,6 @@ class MambaModel(Model):
 
         for position in positions:
             assert torch.all(torch.tensor(position, device=device) == torch.arange(len(position), device=device))
-        if tqdm:
-            torch.cuda.reset_peak_memory_stats(device)
 
         wrapper = StreamerWrapper(streamers)
         
