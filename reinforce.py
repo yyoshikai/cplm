@@ -312,12 +312,12 @@ def get_scores(
         torch.clamp_(scores, min=min_valid_score) # nan is ignored
     scores[is_gen_error] = gen_error_score
     scores[is_vina_error] = vina_error_score
+    sample_mean, sample_std = get_sample_stat(scores, all_idxs) # out of IF for DDP
     if math.isfinite(gen_error_sample_deviation) and torch.any(is_gen_error):
-        sample_mean, sample_std = get_sample_stat(scores, all_idxs)
         scores[is_gen_error] = sample_mean[is_gen_error]+sample_std[is_gen_error]*gen_error_sample_deviation
 
+    sample_mean, sample_std = get_sample_stat(scores, all_idxs)
     if math.isfinite(vina_error_sample_deviation) and torch.any(is_vina_error):
-        sample_mean, sample_std = get_sample_stat(scores, all_idxs)
         scores[is_vina_error] = sample_mean[is_vina_error]+sample_std[is_vina_error]*vina_error_sample_deviation
 
 
