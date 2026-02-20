@@ -19,10 +19,7 @@ T_co = TypeVar('T_co', covariant=True)
 class VocEncoder:
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, vocs: Iterable[str]):
-        assert '[PAD]' not in vocs
-        self.i2voc = ['[PAD]']+sorted(set(vocs))
-        self.pad_token = 0
-        self.voc2i = {voc: i for i, voc in enumerate(self.i2voc)}
+        self.set_vocs(vocs)
     
     def encode(self, words: Iterable[str]):
         try:
@@ -34,6 +31,12 @@ class VocEncoder:
     def decode(self, tokens: Iterable[int]):
         return [self.i2voc[t] for t in 
             itertools.takewhile(lambda x: x!= self.pad_token, tokens)]
+    
+    def set_vocs(self, vocs: Iterable[str]):
+        assert '[PAD]' not in vocs
+        self.i2voc = ['[PAD]']+sorted(set(vocs))
+        self.pad_token = 0
+        self.voc2i = {voc: i for i, voc in enumerate(self.i2voc)}
 
     @property
     def voc_size(self) -> int:

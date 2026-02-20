@@ -178,45 +178,67 @@ def generate(
     ligs, errors = zip(*[(streamer.mol, streamer.error) for streamer in ligand_streamers])
     return input, output, position, weight, all_exp, ligs, errors
 
-def whiten_scores(scores: Tensor, all_idxs: Tensor, sample_whiten: list[Literal['mean', 'std']], all_whiten: list[Literal['mean', 'std']]):
-    rank = dist.get_rank()
+def all_gather(values: Tensor, dim=0):
     world_size = dist.get_world_size()
-    B, = scores.shape
+    all_values = [torch.zeros_like(values) for _ in range(world_size)]
+    dist.all_gather(all_values, values)
+    return torch.cat(all_values, dim=dim)
+
+def get_sample_stat(values: Tensor, all_idxs: Tensor) -> tuple[Tensor, Tensor]:
+    rank = dist.get_rank()
+    all_values = all_gather(values)
+    B, = values.shape
+
+    sample_means = torch.full_like(values, math.nan)
+    sample_stds = torch.full_like(values, math.nan)
+    idxs = all_idxs[rank*B:(rank+1)*B]
+    for uidx in torch.unique(idxs):
+        uidx_all_values = all_values[all_idxs == uidx]
+        if torch.all(torch.isnan(uidx_all_values)):
+            continue
+        mean = torch.nanmean(uidx_all_values)
+        std = torch.nanmean((uidx_all_values-mean)**2).sqrt()
+        sample_means[idxs == uidx] = mean
+        sample_stds[idxs == uidx] = std
+    return sample_means, sample_stds
+
+def get_all_stat(values: Tensor) -> tuple[float, float]:
+    all_values = all_gather(values)
+    mean = torch.nanmean(all_values).item()
+    std = torch.nanmean((all_values-mean)**2).sqrt().item()
+    return mean, std
+
+def whiten_scores(scores: Tensor, all_idxs: Tensor, sample_whiten: list[Literal['mean', 'std']], all_whiten: list[Literal['mean', 'std']]):
+    world_size = dist.get_world_size()
     # all_gather scores
     all_scores = [torch.zeros_like(scores) for _ in range(world_size)]
     dist.all_gather(all_scores, scores)
     all_scores = torch.cat(all_scores)
     
     # sample whiten
+    sample_means, sample_stds = get_sample_stat(scores, all_idxs)
+    sample_stds+=1e-5
     sample_mean = 'mean' in sample_whiten
     sample_std = 'std' in sample_whiten
     if sample_mean or sample_std:
-        idxs = all_idxs[rank*B:(rank+1)*B]
-        for uidx in torch.unique(idxs):
-            uidx_all_scores = all_scores[all_idxs == uidx]
-            if torch.all(torch.isnan(uidx_all_scores)): 
-                continue
-            mean = torch.nanmean(uidx_all_scores)
-            std = torch.nanmean((uidx_all_scores-mean)**2).sqrt()+1e-5
-            if sample_mean and sample_std:
-                scores[idxs == uidx] = (scores[idxs == uidx] - mean) / std
-            elif sample_mean:
-                scores[idxs == uidx] = scores[idxs == uidx] - mean
-            elif sample_std:
-                scores[idxs == uidx] = (scores[idxs == uidx] - mean) / std + mean
+        if sample_mean and sample_std:
+            scores = (scores-sample_means)/sample_stds
+        elif sample_mean:
+            scores = scores-sample_means
+        elif sample_std:
+            scores = (scores-sample_means)/sample_stds+sample_mean
 
     # all whiten
     all_mean = 'mean' in all_whiten
     all_std = 'std' in all_whiten
+    mean, std = get_all_stat(scores)
     if (all_mean or all_std) and not torch.all(torch.isnan(scores)):
-        mean = torch.nanmean(all_scores)
-        std = torch.nanmean((all_scores-mean)**2).sqrt()+1e-5
         if all_mean and all_std:
-            scores = (scores - mean) / std
+            scores = (scores - mean) / (std+1e-5)
         elif sample_mean:
             scores = scores - mean
         elif sample_std:
-            scores = (scores - mean) / std + mean
+            scores = (scores - mean) / (std+1e-5) + mean
     return scores
 
 def get_scores(
@@ -233,6 +255,8 @@ def get_scores(
         min_valid_score: float,
         gen_error_score: float,
         vina_error_score: float,
+        gen_error_sample_deviation: float,
+        vina_error_sample_deviation: float,
         sample_whiten: list[Literal['mean', 'std']],
         all_whiten: list[Literal['mean', 'std']],
         gen_error_white_score: float, 
@@ -249,15 +273,17 @@ def get_scores(
     1. nanでない報酬を(--min-valid-score, default=-math.inf)でclip
     2. generation errorに(--gen-error-score, default=np.nan)を代入
        vina errorに(--vina-error-score, default=np.nan)を代入
-    3. (--sample-whiten, default=[])に従ってサンプルごとの正規化
+    3. gen_error_sample_deviation, vina_error_sample_deviationがnanでない場合これらを代入
+        mean+std*gen_error_sample_deviation 等を代入
+    4. (--sample-whiten, default=[])に従ってサンプルごとの正規化
         'mean': 平均=0とする
         'std': 分散=1とする
-    4. (--all-whiten, default=[])に従って全体の正規化
-    5. (--gen-error-white-score, default=np.nan)がnp.nanでない場合, generationerrorに代入
+    5. (--all-whiten, default=[])に従って全体の正規化
+    6. (--gen-error-white-score, default=np.nan)がnp.nanでない場合, generationerrorに代入
        (--vina-error-white-score, default=np.nan)がnp.nanでない場合, vina errorに代入
-    6. (--sample-rewhiten, default=[])に従ってサンプルごとの正規化
-    7. (--all-rewhiten, default=[])に従って全体の正規化
-    8. np.nanに全体の平均を代入
+    7. (--sample-rewhiten, default=[])に従ってサンプルごとの正規化
+    8. (--all-rewhiten, default=[])に従って全体の正規化
+    9. np.nanに0.0を代入
     """
     rank = dist.get_rank()
 
@@ -286,6 +312,15 @@ def get_scores(
         torch.clamp_(scores, min=min_valid_score) # nan is ignored
     scores[is_gen_error] = gen_error_score
     scores[is_vina_error] = vina_error_score
+    if math.isfinite(gen_error_sample_deviation) and torch.any(is_gen_error):
+        sample_mean, sample_std = get_sample_stat(scores, all_idxs)
+        scores[is_gen_error] = sample_mean[is_gen_error]+sample_std[is_gen_error]*gen_error_sample_deviation
+
+    if math.isfinite(vina_error_sample_deviation) and torch.any(is_vina_error):
+        sample_mean, sample_std = get_sample_stat(scores, all_idxs)
+        scores[is_vina_error] = sample_mean[is_vina_error]+sample_std[is_vina_error]*vina_error_sample_deviation
+
+
     scores = whiten_scores(scores, all_idxs, sample_whiten, all_whiten)
     if math.isfinite(gen_error_white_score):
         scores[is_gen_error] = gen_error_white_score
@@ -387,6 +422,8 @@ def main():
     parser.add_argument('--min-valid-score', type=float, default=-math.inf)
     parser.add_argument('--gen-error-score', type=float, default=math.nan)
     parser.add_argument('--vina-error-score', type=float, default=math.nan)
+    parser.add_argument('--gen-error-sample-deviation', type=float, default=math.nan)
+    parser.add_argument('--vina-error-sample-deviation', type=float, default=math.nan)
     parser.add_argument('--sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--all-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--gen-error-white-score', type=float, default=math.nan)
@@ -577,6 +614,8 @@ def main():
             args.min_valid_score,
             args.gen_error_score,
             args.vina_error_score,
+            args.gen_error_sample_deviation,
+            args.vina_error_sample_deviation,
             args.sample_whiten,
             args.all_whiten,
             args.gen_error_white_score, 
