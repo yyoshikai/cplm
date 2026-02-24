@@ -126,10 +126,10 @@ class ReinforceDataIter:
         items_box = [None]
         dist.scatter_object_list(items_box, batched_items, src=self.data_rank)
         idxs, pdbs, prompt_tokens, positions = zip(*items_box[0])
-        all_idxs = torch.cat(dist_all_gather(torch.tensor(idxs, dtype=torch.int, device=self.device)))
         prompt_tokens = [token.to(self.device) for token in prompt_tokens]
         positions = [position.tolist() for position in positions]
-        return all_idxs, pdbs, prompt_tokens, positions
+        idxs = torch.tensor(idxs, dtype=torch.long, device=self.device)
+        return idxs, pdbs, prompt_tokens, positions
 
 def generate(
         model: DistributedDataParallel, 
@@ -184,14 +184,13 @@ def all_gather(values: Tensor, dim=0):
     dist.all_gather(all_values, values)
     return torch.cat(all_values, dim=dim)
 
-def get_sample_stat(values: Tensor, all_idxs: Tensor) -> tuple[Tensor, Tensor]:
-    rank = dist.get_rank()
+def get_sample_stat(values: Tensor, idxs: Tensor) -> tuple[Tensor, Tensor]:
     all_values = all_gather(values)
+    all_idxs = all_gather(idxs)
     B, = values.shape
 
     sample_means = torch.full_like(values, math.nan)
     sample_stds = torch.full_like(values, math.nan)
-    idxs = all_idxs[rank*B:(rank+1)*B]
     for uidx in torch.unique(idxs):
         uidx_all_values = all_values[all_idxs == uidx]
         if torch.all(torch.isnan(uidx_all_values)):
@@ -208,7 +207,7 @@ def get_all_stat(values: Tensor) -> tuple[float, float]:
     std = torch.nanmean((all_values-mean)**2).sqrt().item()
     return mean, std
 
-def whiten_scores(scores: Tensor, all_idxs: Tensor, sample_whiten: list[Literal['mean', 'std']], all_whiten: list[Literal['mean', 'std']]):
+def whiten_scores(scores: Tensor, idxs: Tensor, sample_whiten: list[Literal['mean', 'std']], all_whiten: list[Literal['mean', 'std']]):
     world_size = dist.get_world_size()
     # all_gather scores
     all_scores = [torch.zeros_like(scores) for _ in range(world_size)]
@@ -216,7 +215,7 @@ def whiten_scores(scores: Tensor, all_idxs: Tensor, sample_whiten: list[Literal[
     all_scores = torch.cat(all_scores)
     
     # sample whiten
-    sample_means, sample_stds = get_sample_stat(scores, all_idxs)
+    sample_means, sample_stds = get_sample_stat(scores, idxs)
     sample_stds+=1e-5
     sample_mean = 'mean' in sample_whiten
     sample_std = 'std' in sample_whiten
@@ -245,7 +244,7 @@ def get_scores(
         pdbs: list[str],
         ligs: list[Chem.Mol|None],
         errors: list[str|None],
-        all_idxs: Tensor,
+        idxs: Tensor,
 
         out_dir: str,
         error_recorder: IterateRecorder,
@@ -312,26 +311,36 @@ def get_scores(
         torch.clamp_(scores, min=min_valid_score) # nan is ignored
     scores[is_gen_error] = gen_error_score
     scores[is_vina_error] = vina_error_score
-    sample_mean, sample_std = get_sample_stat(scores, all_idxs) # out of IF for DDP
+    sample_mean, sample_std = get_sample_stat(scores, idxs) # out of IF for DDP
     if math.isfinite(gen_error_sample_deviation) and torch.any(is_gen_error):
         scores[is_gen_error] = sample_mean[is_gen_error]+sample_std[is_gen_error]*gen_error_sample_deviation
 
-    sample_mean, sample_std = get_sample_stat(scores, all_idxs)
+    sample_mean, sample_std = get_sample_stat(scores, idxs)
     if math.isfinite(vina_error_sample_deviation) and torch.any(is_vina_error):
         scores[is_vina_error] = sample_mean[is_vina_error]+sample_std[is_vina_error]*vina_error_sample_deviation
 
 
-    scores = whiten_scores(scores, all_idxs, sample_whiten, all_whiten)
+    scores = whiten_scores(scores, idxs, sample_whiten, all_whiten)
     if math.isfinite(gen_error_white_score):
         scores[is_gen_error] = gen_error_white_score
     if math.isfinite(vina_error_white_score):
         scores[is_vina_error] = vina_error_white_score
-    scores = whiten_scores(scores, all_idxs, sample_rewhiten, all_rewhiten)
+    scores = whiten_scores(scores, idxs, sample_rewhiten, all_rewhiten)
     scores[torch.isnan(scores)] = 0.0
     score_recorder.record(raw=raw_scores.tolist(), normalized=scores.tolist())
     return scores
 
-def get_velocity(model: ReinforceModel, input: Tensor, position: Tensor, weight: Tensor, scores: Tensor, whiten: list[Literal['mean', 'std']], mbatch_size: int) -> Tensor:
+def get_velocity(
+        model: ReinforceModel, 
+        input: Tensor, 
+        position: Tensor, 
+        weight: Tensor, 
+        scores: Tensor, 
+        idxs: Tensor, 
+        sample_whiten: list[Literal['mean', 'std']], 
+        all_whiten: list[Literal['mean', 'std']], 
+        mbatch_size: int
+) -> Tensor:
     """
     Parameters
     ----------
@@ -345,7 +354,6 @@ def get_velocity(model: ReinforceModel, input: Tensor, position: Tensor, weight:
     """
     model
     L, B = input.shape
-    device = input.device
     velocity = []
     with torch.inference_mode(), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
         for mbatch_start in range(0, B, mbatch_size):
@@ -358,19 +366,63 @@ def get_velocity(model: ReinforceModel, input: Tensor, position: Tensor, weight:
                 velocity_m = scores[mslice].unsqueeze(0).expand(L, mb)
             velocity.append(velocity_m)
     velocity = torch.cat(velocity, dim=1).detach() # [L, B]
-    all_adv = reduce_float(torch.sum(velocity*weight), device)
-    all_adv2 = reduce_float(torch.sum(velocity**2*weight), device)
-    all_weight = reduce_float(torch.sum(weight), device)
-    adv_mean = all_adv / all_weight
-    adv_std = all_adv2 / all_weight - adv_mean**2
-    whiten_mean = 'mean' in whiten
-    whiten_std = 'std' in whiten
-    if whiten_mean and whiten_std:
-        velocity = (velocity-adv_mean)/adv_std
-    elif whiten_mean:
-        velocity = velocity-adv_mean
-    elif whiten_std:
-        velocity = (velocity-adv_mean)/adv_std+adv_mean
+
+    # sample-wise whiten
+    ## get sample-wise stat
+    idx2n = {}
+    idx2s = {}
+    idx2s2 = {}
+    for idx in torch.unique(idxs).tolist():
+        idx_weight = weight[:, idxs == idx]
+        idx_velocity = velocity[:, idxs == idx]
+        idx2n[idx] = idx_weight.sum().item()
+        idx2s[idx] = (idx_velocity*idx_weight).sum().item()
+        idx2s2[idx] = (idx_velocity**2*idx_weight).sum().item()
+    obj = (idx2n, idx2s, idx2s2)
+    objs = [None]*dist.get_world_size()
+    dist.all_gather_object(objs, obj)
+    idx2n = defaultdict(int)
+    idx2s = defaultdict(float)
+    idx2s2 = defaultdict(float)
+    for idx2n0, idx2s0, idx2s20 in objs:
+        for idx, n in idx2n0.items():
+            idx2n[idx] += n
+        for idx, s in idx2s0.items():
+            idx2s[idx] += s
+        for idx, s2 in idx2s20.items():
+            idx2s2[idx] += s2
+    means = torch.zeros_like(scores)
+    stds = torch.zeros_like(scores)
+    for idx in torch.unique(idxs).tolist():
+        mean = idx2s[idx] / idx2n[idx]
+        std = math.sqrt((idx2s2[idx] / idx2n[idx]) - mean**2)+1e-5
+        means[idxs == idx] = mean
+        stds[idxs == idx] = std
+    ## whiten
+    sample_whiten_mean = 'mean' in sample_whiten
+    sample_whiten_std = 'std' in sample_whiten
+    if sample_whiten_mean and sample_whiten_std:
+        velocity = (velocity-means)/stds
+    elif sample_whiten_mean:
+        velocity = (velocity-means)
+    elif sample_whiten_std:
+        velocity = (velocity-means)/stds+means
+
+    # all whiten
+    all_n = sum(idx2n.values())
+    all_s = sum(idx2s.values())
+    all_s2 = sum(idx2s2.values())
+    all_mean = all_s / all_n
+    all_std = math.sqrt((all_s2/all_n)-all_mean**2)+1e-5
+    all_s
+    all_whiten_mean = 'mean' in all_whiten
+    all_whiten_std = 'std' in all_whiten
+    if all_whiten_mean and all_whiten_std:
+        velocity = (velocity-all_mean)/all_std
+    elif all_whiten_mean:
+        velocity = velocity-all_mean
+    elif all_whiten_std:
+        velocity = (velocity-all_mean)/all_std+all_mean
     return velocity
 
 def scale_loss(exp_loss: Tensor, weight: Tensor, scale: list[Literal['batch_size', 'all_exp', 'episode_exp']], all_exp: int) -> Tensor:
@@ -430,7 +482,8 @@ def main():
     parser.add_argument('--vina-error-white-score', type=float, default=math.nan)
     parser.add_argument('--sample-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--all-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--adv-whiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--adv-all-whiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--adv-sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--no-baseline', action='store_false', dest='baseline')
     ## Data
     parser.add_argument('--max-prompt-len', type=int)
@@ -581,7 +634,7 @@ def main():
         do_save = step in do_save_steps
 
         train_looper.put('get_batch')
-        all_idxs, pdbs, prompt_tokens, positions = data_iter.get()
+        idxs, pdbs, prompt_tokens, positions = data_iter.get()
 
         train_looper.put('generate')
         input, output, position, weight, all_exp, ligs, errors = generate(
@@ -605,7 +658,7 @@ def main():
             pdbs,
             ligs,
             errors,
-            all_idxs,
+            idxs,
 
             f"{result_dir}/generation/{step if do_save else 'tmp'}",
             error_recorder,
@@ -639,7 +692,7 @@ def main():
         if mbatch_size == 0:
             raise ValueError(f"Input was too large")
         train_looper.put('velocity')
-        velocity = get_velocity(model.module, input, position, weight, scores, args.adv_whiten, mbatch_size)
+        velocity = get_velocity(model.module, input, position, weight, scores, idxs, args.adv_sample_whiten, args.adv_all_whiten, mbatch_size)
 
         # Forward Get prob & reward loss
         train_looper.put('forward_backward')
