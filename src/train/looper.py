@@ -3,16 +3,15 @@ from collections import defaultdict
 from collections.abc import Iterable
 from graphlib import TopologicalSorter
 from typing import TypeVar
-from logging import Logger
+from logging import Logger, getLogger
 from time import time
 import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-from torch.profiler import profile, ProfilerActivity, record_function
 from ..utils import should_show
 from ..utils.logger import NO_DUP
-
+from ..utils.notice import notice, SLACK_URL
 
 """
 Basic usage:
@@ -110,7 +109,11 @@ class TimeLooper(Looper):
         
     def end_loop(self):
         self.put('init')
+        self.time_end_loop()
         self.process2t = defaultdict(float)
+
+    def time_end_loop(self):
+        pass
 
 class TimeWriteLooper(TimeLooper):
     def __init__(self, path: str, write_max_interval: int):
@@ -123,8 +126,7 @@ class TimeWriteLooper(TimeLooper):
         self.process2ts = {}
         self.df_processes = None
 
-    def end_loop(self):
-        self.put('init')
+    def time_end_loop(self):
         for process, ts in self.process2ts.items():
             self.process2ts[process].append(self.process2t.pop(process, math.nan))
         for new_process, t in self.process2t.items():
@@ -132,7 +134,6 @@ class TimeWriteLooper(TimeLooper):
         self.i_loop += 1
         if should_show(self.i_loop, self.write_max_interval):
             self.write()
-        self.process2t = defaultdict(float)
     
     def end_loops(self):
         if self.n_written != self.i_loop:
@@ -167,14 +168,12 @@ class TimeLogLooper(TimeLooper):
         self.i_loop = 0
         self.last_log_loop = None
 
-    def end_loop(self):
-        self.put('init')
+    def time_end_loop(self):
         for process, t in self.process2t.items():
             self.process2t_total[process] += t
         self.i_loop += 1
         if should_show(self.i_loop, self.max_interval):
             self.log()
-        self.process2t = defaultdict(float)
     
     def end_loops(self):
         if self.last_log_loop != self.i_loop:
@@ -245,3 +244,40 @@ class MemorySnapshotLooper(Looper):
         if self.i_step == self.n_step:
             torch.cuda.memory._record_memory_history(enabled=None)
 
+class EndEstimateLooper(TimeLooper):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, duration_h: float, total_step: int, name: str, min_interval: int, max_interval: int, init_ignore_processes: list[int]):
+        """
+        init_ignore_process: validation, save_model等, 最初のstepで行うが終了時刻の推定には無視したいこと
+        """
+
+        super().__init__()
+        self.duration_h = duration_h
+        self.total_step = total_step
+        self.name = name
+        self.notified = False
+        self.min_interval = min_interval
+        self.max_interval = max_interval
+        self.init_ignore_processes = init_ignore_processes
+
+    def start_loops(self):
+        super().start_loops()
+        self.start_time = time()
+        self.step = 0
+
+    def time_end_loop(self):
+        if self.step == 0:
+            for process, t in self.process2t.items():
+                if process in self.init_ignore_processes:
+                    self.start_time += t
+        self.step += 1
+        if self.step % self.min_interval == 0 and should_show(self.step//self.min_interval, self.max_interval//self.min_interval):
+            est_time = (time() - self.start_time) * self.total_step / self.step
+            m, s = divmod(int(est_time), 60)
+            h, m = divmod(m, 60)
+            msg = f"Estimated end time={h}:{m:02}:{s:02} at step {self.step}"
+            self.logger.info(msg)
+            if est_time > self.duration_h * 3600 * 0.95:
+                if not self.notified and SLACK_URL is not None:
+                    notice(f"[WARNING][{self.name}] {msg}", )
+                    self.notified = True

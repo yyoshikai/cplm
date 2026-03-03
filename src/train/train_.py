@@ -35,10 +35,9 @@ from ..utils.model import get_num_params, get_model_size
 from ..utils.path import cleardir
 from ..utils.ddp import reduce_float
 from ..utils.random import ddp_set_random_seed, set_deterministic
-from ..utils.time import EndEstimator
 from ..utils import IterateRecorder, remove_module
 from .data import collate
-from .looper import Loopers, TimeLogLooper, TimeWriteLooper, LogLooper
+from .looper import Loopers, TimeLogLooper, TimeWriteLooper, LogLooper, EndEstimateLooper, GPUUseLooper
 
 def init_ddp():
     dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
@@ -103,7 +102,7 @@ def get_max_opt(result_dir: str) -> int:
     logger.info(f"{max_opt=}")
     return max_opt
 
-def _get_train_logger(result_dir, get_token_logger: bool, get_unk_logger: bool):
+def _get_train_logger(result_dir, get_unk_logger: bool):
 
     # ddp info
     rank = dist.get_rank()
@@ -121,16 +120,6 @@ def _get_train_logger(result_dir, get_token_logger: bool, get_unk_logger: bool):
     if not is_main:
         for handler in [stream_handler, info_handler]:
             handler.addFilter(lambda record: not getattr(record, 'no_dup', False))
-    
-    if get_token_logger:
-        os.makedirs(f"{result_dir}/data/example_log", exist_ok=True)
-        add_file_handler(logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
-
-        token_logger = getLogger('dexs')
-        token_logger.propagate = False
-        add_file_handler(token_logger, f"{result_dir}/data/example_log/{rank}.log", fmt=fmt, mode='a')
-    else:
-        token_logger = None
 
     if get_unk_logger:
         unk_logger = getLogger('unk')
@@ -140,7 +129,7 @@ def _get_train_logger(result_dir, get_token_logger: bool, get_unk_logger: bool):
     # debug
     set_third_party_logger()
 
-    return logger, token_logger
+    return logger
 
 def add_train_args(parser: ArgumentParser):
     """
@@ -292,31 +281,36 @@ def log_logs(logger: Logger, logs: list[str|tuple[str, int]]):
             msg, level = log
             logger.log(level, msg, **NO_DUP)
 
-def log_batch(prefix: str, logger: Logger, token_logger: Logger, target_batch: Tensor, weight_batch: Tensor, voc_encoder: VocEncoder, step: int, check_data_dist: bool, gpuuse_getter: Callable[[int, int], float]):
+def save_batch(dir: str, logger: Logger, input: Tensor, target: Tensor, position: Tensor, weight: Tensor, voc_encoder: VocEncoder, idxs: list[int]|int|None, check_data_dist: bool, gpuuse_getter: Callable[[int, int], float]):
 
     # weight
-    weight_items = weight_batch.sum(dim=0).tolist()
-    length, batch_size = target_batch.shape
-    gpuuse_gb = gpuuse_getter(batch_size, length) / (2**30)
-    logger.debug(f"{prefix}[{step}] batch shape={tuple(target_batch.shape)} GPU use={gpuuse_gb}")
+    L, B = target.shape
+    rank = dist.get_world_size()
+    gpuuse_gb = gpuuse_getter(B, L) / (2**30)
+    logger.debug(f"{dir} {rank=} batch shape={tuple(target.shape)} GPU use={gpuuse_gb}")
     if check_data_dist:
-        logger.debug(f"{prefix}[{step}] weights={weight_items}")
+        weight_items = weight.sum(dim=0).tolist()
+        logger.debug(f"{dir} {rank=} weights={weight_items}")
 
-    # tokens
-    if batch_size > 10: 
-        rstate = np.random.RandomState(step)
-        idxs = np.sort(rstate.choice(batch_size, size=10, replace=False))
-    else:
-        idxs = np.arange(batch_size)
+    if idxs is None: 
+        idxs = list(range(B))
+    elif isinstance(idxs, int):
+        if B > idxs:
+            idxs = np.random.default_rng(hash(dir)%10000).choice(B, idxs, replace=False)
+        else:
+            idxs = list(range(B))
+    os.makedirs(dir, exist_ok=True)
     for idx in idxs:
-        msg = f"{prefix}[{step}] batch[{idx:3}]="
-        tokens = voc_encoder.decode(target_batch[:,idx].cpu().tolist())
-        for t, w in zip(tokens, weight_batch[:,idx]):
-            msg += f"{t}[{w}],"
-        msg += f" remaining weights= {reveal_data(weight_batch[len(tokens):,idx])}"
-        token_logger.debug(msg)
+        df = pd.DataFrame({
+            'input': [voc_encoder.i2voc[i] for i in input[:,idx].cpu().tolist()], 
+            'target': [voc_encoder.i2voc[i] for i in target[:,idx].cpu().tolist()], 
+            'position': position[:,idx].cpu().numpy(),
+            'weight': weight[:,idx].cpu().numpy(),
+        })
+        df.to_csv(f"{dir}/{rank}_{idx}.tsv", index=False, sep='\t')
 
-def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_token_logger: bool=True, get_unk_logger: bool=True):
+
+def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_unk_logger: bool=True):
     # init DDP
     rank, size, device = init_ddp()
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
@@ -326,7 +320,7 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_tok
     _sync_result_dir(result_dir, subdirs)
 
     # logging
-    logger, token_logger = _get_train_logger(result_dir, get_token_logger, get_unk_logger)
+    logger = _get_train_logger(result_dir, get_unk_logger)
     logger.debug(f"{device=}, {torch.cuda.device_count()=}")
     logger.info(f"{rdkit.__version__=}", **NO_DUP)
     logger.info(f"{transformers.__version__=}", **NO_DUP)
@@ -363,7 +357,7 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_tok
     log_logs(logger, preparation_logs)
     logger.info('')
 
-    return logger, token_logger, rank, device
+    return logger, rank, device
 
 def get_optimizer_scheduler(model: nn.Module, max_opt: int, 
         weight_decay_all: bool, weight_decay: float, schedule_free: bool, 
@@ -412,13 +406,13 @@ def get_optimizer_scheduler(model: nn.Module, max_opt: int,
 
 def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncoder, 
         model: DistributedDataParallel, criterion: nn.Module, 
-        num_workers: int, is_starting: bool, sdp_kernel: str, gpu_size: float, prefix: str, check_data_dist: bool
+        result_dir: str, opt: int,
+        num_workers: int, is_starting: bool, sdp_kernel: str, gpu_size: float, check_data_dist: bool
     ) -> tuple[list[float], list[float], Tensor, Tensor]:
     
     get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel=sdp_kernel)
 
     logger = getLogger('validate')
-    token_logger = getLogger('dexs.validate')
     rank = dist.get_rank()
     data_rank = get_process_ranks()[2]['valid']
     device = next(model.parameters()).device
@@ -460,8 +454,7 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
                 
                 ### Log result
                 if is_starting and val_step_is_starting:
-                    log_batch(f"valid{prefix}[{data_name}]", logger, token_logger, target_token, 
-                            weight_batch, voc_encoder, val_step, check_data_dist, get_gpuuse)
+                    save_batch(f"{result_dir}/batches/validation/opt{opt}/val_step{val_step}", logger, input_token, target_token, input_position, weight_batch, voc_encoder, 2, check_data_dist, get_gpuuse)
 
                 ### Add
                 process_loss += (loss*weight_batch).sum()
@@ -485,7 +478,7 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
 def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
 
     result_dir = os.path.join(tname, 'results', args.studyname)
-    logger, token_logger, rank, device = set_env(result_dir, args, preparation_logs, 
+    logger, rank, device = set_env(result_dir, args, preparation_logs, 
             subdirs=['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log'])
     logger.info(f"num_workers={args.num_workers}", **NO_DUP)
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
@@ -506,10 +499,11 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     train_looper = Loopers([
         LogLooper(logger, 10000, 5, 'step', 'trianing'), 
         TimeLogLooper(logger, 'step', 10000), 
-        TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 10000)
+        TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 10000), 
+        GPUUseLooper(logger, device, 'step', 5)
     ])
     if args.end_limit is not None and rank == MAIN_RANK:
-        end_estimator = EndEstimator(args.end_limit, args.max_opt, args.studyname)
+        train_looper.append(EndEstimateLooper(args.end_limit, args.max_opt, args.studyname, ['evaluation']))
 
     # DataLoader
     if rank == DATA_RANK['train']:
@@ -574,9 +568,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             # validation
             train_looper.put('evaluation')
             if args.schedule_free: optimizer.eval()
-            process_weights, process_losses, total_weights, total_losses = validate(valid_datas, data_names, voc_encoder,
-                model, criterion, 
-                args.num_workers, len(val2mean_loss) <= 1, args.sdp_kernel, args.gpu_size, f"[{opt}]", check_data_dist, )
+            process_weights, process_losses, total_weights, total_losses = validate(valid_datas, data_names, voc_encoder, model, criterion, result_dir, opt, args.num_workers, len(val2mean_loss) <= 1, args.sdp_kernel, args.gpu_size, check_data_dist, )
             mean_losses = total_losses / total_weights
             estimated_train_weights = total_weights * valid2train_r
             mean_loss = ((mean_losses*estimated_train_weights).sum() / estimated_train_weights.sum()).item()
@@ -606,33 +598,25 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 logger.info(f"Early stop.", **NO_DUP)
                 break
             next_eval_opt += args.eval_opt
-        
-        # estimate end
-        if args.end_limit is not None and rank == MAIN_RANK:
-            if not end_estimator.is_started:
-                end_estimator.start()
 
         # End of training
         if opt >= args.max_opt:
             break
 
         # step
-        ## reset gpu to watch gpu use
-        if is_starting:
-            torch.cuda.reset_peak_memory_stats(device)
         ## get batch
         train_looper.put('get_batch')
         token_batch, position_batch, weight_batch = train_iter.__next__()
-        target = token_batch[1:]
+        input, target = token_batch[:-1], token_batch[1:]
+        position = position_batch[:-1]
         max_len, batch_size = token_batch.shape
         worker_step_weight = weight_batch.sum().item()
 
         ## Log target for final check
         train_looper.put('log_target')
         if is_starting:
-            token_logger.debug(f"Train step {step} data:")
-            log_batch('train', logger, token_logger, target, weight_batch, 
-                    voc_encoder, step, check_data_dist, get_gpuuse)
+            save_batch(f"{result_dir}/batches/train/step{step}", logger, input, target, position, weight_batch, 
+                    voc_encoder, 2, check_data_dist, get_gpuuse)
 
         ## If do_opt, forward will have to sync gradients
         worker_opt_accum_weight += worker_step_weight
@@ -645,7 +629,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         train_looper.put('forward')
         with nullcontext() if do_opt or args.sync_every_step else model.no_sync():
             with torch.autocast('cuda', torch.bfloat16):
-                pred = model(token_batch[:-1], position_batch[:-1])
+                pred = model(input, position)
                 loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
                 worker_step_loss = loss.item()
 
@@ -685,12 +669,8 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
                 ## reset grad
                 worker_opt_accum_loss = 0
                 optimizer.zero_grad()
-        
-        ## Log gpuuse
-        train_looper.put('log')
-        if is_starting:
-            logger.debug(f"Actual GPU use={torch.cuda.max_memory_allocated(device)/2**30:.03f}")
 
+        train_looper.put('log')
         ## Log grad
         if check_grad:
             name, param = next(model.named_parameters())
@@ -736,10 +716,6 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             if should_show(opt, max(1, args.eval_opt//5)):
                 logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:>9.02f}", **NO_DUP)
 
-            ## estimate end
-            if rank == MAIN_RANK and args.end_limit is not None and opt % 10 == 0 \
-                    and should_show(opt // 10, args.eval_opt // 10):
-                end_estimator.check(opt)
         train_looper.end_loop()
     opt_recorder.flush()
     step_recorder.flush()

@@ -579,8 +579,7 @@ def main():
     
     # Environment
     result_dir = f"reinforce/results/{args.studyname}"
-    logger, _, rank, device = set_env(result_dir, args, logs, 
-            subdirs=['grads/reward', 'grads/kl', 'grads/value'], get_token_logger=False)
+    logger, rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
     ignore_rdkit_warning()
     ## check generate_per_sample
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)

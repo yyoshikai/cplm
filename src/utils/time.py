@@ -60,30 +60,3 @@ class FileWatch(_Watch):
         self.starts = []
         self.ends = []
         self.logger.info(f"Wrote.")
-
-class EndEstimator:
-    logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, duration_h, total_step, name):
-        self.duration_h = duration_h
-        self.total_step = total_step
-        self.name = name
-        self.start_time = None
-        self.notified = False
-        self.is_started = False
-    def start(self):
-        self.start_time = time()
-        self.is_started = True
-    def check(self, cur_step: int):
-        assert cur_step > 0
-        if self.start_time is None:
-            raise ValueError("start() should be called before check().")
-        est_time = (time() - self.start_time) * self.total_step / cur_step
-        m, s = divmod(int(est_time), 60)
-        h, m = divmod(m, 60)
-        msg = f"Estimated end time={h}:{m:02}:{s:02} at step {cur_step}"
-        self.logger.info(msg)
-        if est_time > self.duration_h * 3600 * 0.95:
-            if not self.notified and SLACK_URL is not None:
-                notice(f"[WARNING][{self.name}] {msg}", )
-                self.notified = True
-
