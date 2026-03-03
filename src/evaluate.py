@@ -52,6 +52,7 @@ def eval_vina(ligand: OBMol|str, rec: OBMol|str, rec_pdbqt_path: str) -> tuple[f
         v.compute_vina_maps(lig_center.tolist(), [20, 20, 20])
         score = v.score()[0]
         min_score = v.optimize()[0]
+        
     except Exception as e:
         error = e
     return score, min_score, error
