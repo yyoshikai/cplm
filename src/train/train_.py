@@ -502,8 +502,9 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 10000), 
         GPUUseLooper(logger, device, 'step', 5)
     ])
+    opt_looper = Loopers([])
     if args.end_limit is not None and rank == MAIN_RANK:
-        train_looper.append(EndEstimateLooper(args.end_limit, args.max_opt, args.studyname, ['evaluation']))
+        opt_looper.append(EndEstimateLooper(args.end_limit, args.max_opt, args.studyname, 10, args.eval_opt, ['evaluation']))
 
     # DataLoader
     if rank == DATA_RANK['train']:
@@ -560,6 +561,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
 
     train_start = time()
     train_looper.start_loops()
+    opt_looper.start_loops()
     for step in itr.count():
         is_starting = step < 5
 
@@ -567,6 +569,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         if opt == next_eval_opt:            
             # validation
             train_looper.put('evaluation')
+            opt_looper.put('evaluation')
             if args.schedule_free: optimizer.eval()
             process_weights, process_losses, total_weights, total_losses = validate(valid_datas, data_names, voc_encoder, model, criterion, result_dir, opt, args.num_workers, len(val2mean_loss) <= 1, args.sdp_kernel, args.gpu_size, check_data_dist, )
             mean_losses = total_losses / total_weights
@@ -604,6 +607,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             break
 
         # step
+        opt_looper.put('step')
         ## get batch
         train_looper.put('get_batch')
         token_batch, position_batch, weight_batch = train_iter.__next__()
@@ -689,6 +693,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         # opt
         if do_opt:
             ## optimizer
+            opt_looper.put('optim')
             train_looper.put('optim')
             if args.clip_grad_value is not None:
                 torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
@@ -715,11 +720,12 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
 
             if should_show(opt, max(1, args.eval_opt//5)):
                 logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:>9.02f}", **NO_DUP)
+            opt_looper.end_loop()
 
         train_looper.end_loop()
     opt_recorder.flush()
     step_recorder.flush()
     val_recorder.flush()
     train_looper.end_loops()
-
+    opt_looper.end_loops()
     # dist.destroy_process_group()

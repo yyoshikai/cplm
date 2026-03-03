@@ -355,7 +355,7 @@ def get_velocity(
     model
     L, B = input.shape
     velocity = []
-    with torch.inference_mode(), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+    with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
         for mbatch_start in range(0, B, mbatch_size):
             mslice = slice(mbatch_start, mbatch_start+mbatch_size)
             _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
