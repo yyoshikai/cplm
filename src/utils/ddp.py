@@ -52,12 +52,6 @@ def dist_broadcast_tensor(t: Tensor|None, device: torch.device, src: int,
     dist.broadcast(t, src=src)
     return t
 
-def dist_all_gather(t: Tensor) -> list[Tensor]:
-    outputs = [torch.zeros_like(t) for _ in range(dist.get_world_size())]
-    dist.all_gather(outputs, t)
-    return outputs
-
-
 def reduce_float(value: float|Tensor, device: torch.device) -> float:
     """
     value: float or Tensor of 1 element.
@@ -69,3 +63,9 @@ def reduce_float(value: float|Tensor, device: torch.device) -> float:
     dist.all_reduce(tensor)
     return tensor.item()
 
+
+def all_gather(values: Tensor, dim=0):
+    world_size = dist.get_world_size()
+    all_values = [torch.zeros_like(values) for _ in range(world_size)]
+    dist.all_gather(all_values, values)
+    return torch.cat(all_values, dim=dim)

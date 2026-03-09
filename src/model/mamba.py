@@ -20,9 +20,6 @@ from .transformer import save_vocs, align_embedding
 from .model import Streamer, Model
 from ..utils.memory import get_mems
 
-# This warning is inherent in mamba of the version we used.
-warnings.filterwarnings('ignore', message="torch.get_autocast_gpu_dtype() is deprecated.", category=DeprecationWarning, module='mamba_ssm.ops.selective_scan_interface', lineno=201)
-
 class MambaModel(Model):
     """
     Contents in ./gpuuse are from /workspace/resource_test/240921_transformer_size
@@ -64,6 +61,9 @@ class MambaModel(Model):
         src: [L, B]
         position: [L, B]
         """
+        # This warning is inherent in mamba of the version we used.
+        # pandas/core/dtypes/common.py, lineno=1644 が warnings.simplefilter("always", DeprecationWarning) というのをやっていたため，ここで毎回定義する必要がある。。
+        warnings.filterwarnings('ignore',  message=r"torch\.get_autocast_gpu_dtype\(\) is deprecated\.", category=DeprecationWarning, module='mamba_ssm.ops.selective_scan_interface', )
         L, B = src.shape
 
         # check position
@@ -88,6 +88,7 @@ class MambaModel(Model):
         contexts: list[Tensor(L, torch.long)]
         positions: list[Tensor(L, torch.long)]
         """
+        warnings.filterwarnings('ignore', message="torch.get_autocast_gpu_dtype() is deprecated.", category=DeprecationWarning, module='mamba_ssm.ops.selective_scan_interface', lineno=201)
         # get shape
         device = next(self.parameters()).device
 
