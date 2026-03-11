@@ -355,7 +355,7 @@ def get_log_prob(logits: Tensor, output: Tensor):
 
 
 class DPOTrainer(Trainer):
-    def __init__(self, model: Model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, kl_factor: float, train_looper: Looper, clip_grad_value: float|None, clip_grad_norm: float, train_bfloat: bool):
+    def __init__(self, model: Model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, kl_factor: float, train_looper: Looper, clip_grad_value: float|None, clip_grad_norm: float):
         """
         DPO Trainer with Placket-Luce model
         """
@@ -365,6 +365,15 @@ class DPOTrainer(Trainer):
         
         self.init_model = copy.deepcopy(model)
         self.model = DistributedDataParallel(model)
+        def grad_hook(name):
+            def hook(grad):
+                if torch.isnan(grad).any():
+                    print(f"NaN detected in gradient of {name}")
+            return hook
+        for name, p in model.named_parameters():
+            if p.requires_grad:
+                p.register_hook(grad_hook(name))
+
         self.optimizer, self.scheduler = get_optimizer_scheduler(self.model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer)
 
         self.mbatch_size = mbatch_size
@@ -373,12 +382,12 @@ class DPOTrainer(Trainer):
         self.clip_grad_value = clip_grad_value
         self.clip_grad_norm = clip_grad_norm
         self.train_looper = train_looper
-        self.train_bfloat = train_bfloat
 
         _, self.save_rank, _ = get_process_ranks()
 
     def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, idxs: Tensor):
         
+        self.model.train()
         self.optimizer.zero_grad()
         L, B = input.shape
         mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.init_model)
@@ -410,9 +419,10 @@ class DPOTrainer(Trainer):
         loss.backward()
         r_grads = all_rs.grad[B*self.rank:B*(self.rank+1)]*0.001
 
+        self.model.train()
         log_probs = []
-        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, self.train_bfloat)
-        with (torch.autocast('cuda', torch.bfloat16) if self.train_bfloat else nullcontext()), \
+        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, True)
+        with torch.autocast('cuda', torch.bfloat16), \
                 sdpa_kernel(SDPBackend.FLASH_ATTENTION):
             for mb in range(0, B, mbatch_size):
                 mslice = slice(mb, mb+mbatch_size)
@@ -421,6 +431,7 @@ class DPOTrainer(Trainer):
                 log_probs.append(log_probs_m.detach())
                 rs_m = torch.sum(log_probs_m*weight[:,mslice], dim=0)
                 rs_m.backward(gradient=r_grads[mslice])
+
         self._batch_info = {
             'log_prob': (torch.cat(log_probs, dim=1)/math.log(10)).float().cpu(),
             'velocity': r_grads.float().cpu().unsqueeze(0).expand_as(input)
@@ -460,7 +471,6 @@ class GRPOTrainer(Trainer):
         self.init_model = copy.deepcopy(model)
         self.model = DistributedDataParallel(model)
         self.optimizer, self.scheduler = get_optimizer_scheduler(self.model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer)
-
 
 class WrapTrainer(Trainer):
     def __init__(self, trainer: Trainer):

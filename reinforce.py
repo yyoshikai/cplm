@@ -113,7 +113,6 @@ class ReinforceDataIter:
                 self.train_fixed_item = self.train_iter.__next__()
                 del self.train_iter
 
-
     def get(self) -> tuple[Tensor, list[str], list[Tensor], list[list[int]]]:
         if self.rank == self.data_rank:
             all_items = []
@@ -342,7 +341,6 @@ def main():
     parser.add_argument('--valid-sample', type=float, default=1.0)
     ## training
     parser.add_argument('--studyname', required=True)
-    parser.add_argument('--dpo-no-train-bfloat', action='store_false', dest='dpo_train_bfloat')
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--max-opt', type=int, default=10000)
     ## optimizer
@@ -473,7 +471,7 @@ def main():
         baseline = args.trainer == 'reinforce'
         trainer = ReinforceTrainer(model_, baseline, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.adv_all_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)
     elif args.trainer == 'dpo':
-        trainer = DPOTrainer(model_, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.kl_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, args.dpo_train_bfloat)
+        trainer = DPOTrainer(model_, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.kl_factor, train_looper, args.clip_grad_value, args.clip_grad_norm)
     trainer = GetMemoryTrainer(trainer, device)
     trainer = SaveBatchTrainer(trainer, result_dir, do_save_steps, voc_encoder)
     trainer = SaveStepTrainer(trainer, result_dir, args.record_opt, args.max_opt)
