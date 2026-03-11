@@ -365,15 +365,6 @@ class DPOTrainer(Trainer):
         
         self.init_model = copy.deepcopy(model)
         self.model = DistributedDataParallel(model)
-        def grad_hook(name):
-            def hook(grad):
-                if torch.isnan(grad).any():
-                    print(f"NaN detected in gradient of {name}")
-            return hook
-        for name, p in model.named_parameters():
-            if p.requires_grad:
-                p.register_hook(grad_hook(name))
-
         self.optimizer, self.scheduler = get_optimizer_scheduler(self.model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer)
 
         self.mbatch_size = mbatch_size
@@ -387,6 +378,7 @@ class DPOTrainer(Trainer):
 
     def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, idxs: Tensor):
         
+        self.train_looper.put('train_rs')
         self.model.train()
         self.optimizer.zero_grad()
         L, B = input.shape
@@ -404,7 +396,11 @@ class DPOTrainer(Trainer):
                 rs_m = torch.sum((log_probs_m-init_log_probs_m)*weight[:,mslice], dim=0)*self.kl_factor
                 rs.append(rs_m)
         rs = torch.cat(rs)
+
+        self.train_looper.put('train_gather_rs')
         all_rs = all_gather(rs)
+
+        self.train_looper.put('train_backward_rs')
         all_rs.requires_grad_()
         all_idxs = all_gather(idxs)
         all_scores = all_gather(scores)
@@ -419,6 +415,7 @@ class DPOTrainer(Trainer):
         loss.backward()
         r_grads = all_rs.grad[B*self.rank:B*(self.rank+1)]*0.001
 
+        self.train_looper.put('train_backward_model')
         self.model.train()
         log_probs = []
         mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, True)
@@ -432,6 +429,7 @@ class DPOTrainer(Trainer):
                 rs_m = torch.sum(log_probs_m*weight[:,mslice], dim=0)
                 rs_m.backward(gradient=r_grads[mslice])
 
+        self.train_looper('train_update')
         self._batch_info = {
             'log_prob': (torch.cat(log_probs, dim=1)/math.log(10)).float().cpu(),
             'velocity': r_grads.float().cpu().unsqueeze(0).expand_as(input)
