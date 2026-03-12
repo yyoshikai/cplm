@@ -35,10 +35,11 @@ if __name__ == '__main__':
             f"{f'/{args.genname}' if args.genname is not None else ''}/{args.studyname}/{args.opt}"
 
     def streamer_fn(item, i_trial, voc_encoder):
-        if getattr(targs, 'lig_atoms', False):
+        if targs.format in ['atoms_coords', 'ordered_atoms_coords']:
+            atom_order = targs.format == 'ordered_atoms_coords'
             streamer = AtomLigandStreamer(
                 new_sdf_path=f"{out_dir}/new_sdf/{item}.txt",
-                coord_range=targs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, atom_order=getattr(targs, 'lig_atom_order', False), h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord,
+                coord_range=targs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, atom_order=atom_order, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord,
             )
         else:
             streamer = LigandStreamer(

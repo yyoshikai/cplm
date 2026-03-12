@@ -34,7 +34,64 @@ class ReinforceModel(nn.Module):
         else:
             values = None
         return logits, values
+
+
+def get_all_stat(values: Tensor) -> tuple[float, float]:
+    all_values = all_gather(values)
+    mean = torch.nanmean(all_values).item()
+    std = torch.nanmean((all_values-mean)**2).sqrt().item()
+    return mean, std
+
+def get_sample_stat(values: Tensor, idxs: Tensor) -> tuple[Tensor, Tensor]:
+    all_values = all_gather(values)
+    all_idxs = all_gather(idxs)
+    B, = values.shape
+
+    sample_means = torch.full_like(values, math.nan)
+    sample_stds = torch.full_like(values, math.nan)
+    for uidx in torch.unique(idxs):
+        uidx_all_values = all_values[all_idxs == uidx]
+        if torch.all(torch.isnan(uidx_all_values)):
+            continue
+        mean = torch.nanmean(uidx_all_values)
+        std = torch.nanmean((uidx_all_values-mean)**2).sqrt()
+        sample_means[idxs == uidx] = mean
+        sample_stds[idxs == uidx] = std
+    return sample_means, sample_stds
+
+def whiten_scores(scores: Tensor, idxs: Tensor, sample_whiten: list[Literal['mean', 'std']], all_whiten: list[Literal['mean', 'std']]):
+    world_size = dist.get_world_size()
+    # all_gather scores
+    all_scores = [torch.zeros_like(scores) for _ in range(world_size)]
+    dist.all_gather(all_scores, scores)
+    all_scores = torch.cat(all_scores)
     
+    # sample whiten
+    sample_means, sample_stds = get_sample_stat(scores, idxs)
+    sample_stds+=1e-5
+    sample_mean = 'mean' in sample_whiten
+    sample_std = 'std' in sample_whiten
+    if sample_mean or sample_std:
+        if sample_mean and sample_std:
+            scores = (scores-sample_means)/sample_stds
+        elif sample_mean:
+            scores = scores-sample_means
+        elif sample_std:
+            scores = (scores-sample_means)/sample_stds+sample_mean
+
+    # all whiten
+    all_mean = 'mean' in all_whiten
+    all_std = 'std' in all_whiten
+    mean, std = get_all_stat(scores)
+    if (all_mean or all_std) and not torch.all(torch.isnan(scores)):
+        if all_mean and all_std:
+            scores = (scores - mean) / (std+1e-5)
+        elif sample_mean:
+            scores = scores - mean
+        elif sample_std:
+            scores = (scores - mean) / (std+1e-5) + mean
+    return scores
+
 def all_gather_counter(c: dict) -> dict:
     cs = [None]*dist.get_world_size()
     dist.all_gather_object(cs, c)
@@ -168,7 +225,7 @@ def get_mbatch_size(mbatch_size: int|None, L: int, gpu_size: float, model: Model
     return mbatch_size
 
 class Trainer:
-    def train(self, input, output, position, weight, scores, idxs):
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
         raise NotImplementedError
     def save(self):
         raise NotImplementedError
@@ -211,7 +268,7 @@ class ReinforceTrainer(Trainer):
         self.clip_grad_norm = clip_grad_norm
         self.result_dir = result_dir
 
-    def train(self, input, output, position, weight, scores, idxs):
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
         # get & whiten velocity
         L, B = input.shape
         mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.reinforce_model.model)
@@ -325,22 +382,6 @@ class ReinforceTrainer(Trainer):
     def step_info(self):
         return self._step_info
 
-def get_log_ratio(model: Model, init_model: Model, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, mbatch_size: int|None, gpu_size: float):
-
-    L, B = input.shape
-    mbatch_size = get_mbatch_size(mbatch_size, L, gpu_size, init_model)
-    rs = [] # [B, ]
-    with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-        for mb in range(0, B, mbatch_size):
-            mslice = slice(mb, mb+mbatch_size)
-            with torch.inference_mode():
-                init_logits_m = init_model(input[:,mslice], position[:,mslice]).detach() # [L, Bm]
-            logits_m = model(input[:,mslice], position[:,mslice]) # [L, Bm]
-            init_logits_m = torch.sum(init_logits_m*weight[:,mslice], dim=0)
-            logits_m = torch.sum(logits_m*weight[:,mslice], dim=0)
-            rs.append((logits_m-init_logits_m))
-    return torch.cat(rs)
-
 def get_log_prob(logits: Tensor, output: Tensor):
     """
     Args:
@@ -376,7 +417,7 @@ class DPOTrainer(Trainer):
 
         _, self.save_rank, _ = get_process_ranks()
 
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, idxs: Tensor):
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
         
         self.train_looper.put('train_rs')
         self.model.train()
@@ -448,7 +489,7 @@ class DPOTrainer(Trainer):
     def save(self, result_dir):
         if self.rank == self.save_rank:
             os.makedirs(f"{result_dir}/models", exist_ok=True)
-            torch.save(self.policy_model().state_dict(), f"{result_dir}/models/{self.step}.pth")
+            torch.save(self.model.module.state_dict(), f"{result_dir}/models/{self.step}.pth")
             if self.step > 0:
                 cleardir(f"{result_dir}/optimizers")
                 torch.save(self.optimizer.state_dict(), f"{result_dir}/optimizers/{self.step}.pth")
@@ -458,9 +499,10 @@ class DPOTrainer(Trainer):
         return self._batch_info
     def step_info(self):
         return self._step_info
+
     
 class GRPOTrainer(Trainer):
-    def __init__(self, model: Model, baseline: bool, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, adv_sample_whiten, adv_all_whiten, loss_scale, kl_factor: float, value_factor: float, train_looper: Looper, clip_grad_value: float|None, clip_grad_norm: float):
+    def __init__(self, model: Model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, kl_factor: float, clip_grad_value: float|None, clip_grad_norm: float, n_ppo_step: int, ppo_clip_eps: float):
         self.step = 0
         self._batch_info = self._step_info = {}
 
@@ -469,12 +511,79 @@ class GRPOTrainer(Trainer):
         self.init_model = copy.deepcopy(model)
         self.model = DistributedDataParallel(model)
         self.optimizer, self.scheduler = get_optimizer_scheduler(self.model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer)
+        self.clip_grad_norm = clip_grad_norm
+        self.clip_grad_value = clip_grad_value
+
+        self.mbatch_size = mbatch_size
+        self.gpu_size = gpu_size
+        self.n_ppo_step = n_ppo_step
+        self.eps = ppo_clip_eps
+        self.kl_factor = kl_factor
+
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
+
+        advs = whiten_scores(scores, idxs, sample_whiten=['mean', 'std'], all_whiten=[])
+        all_weight = reduce_float(weight.sum().item())
+        L, B = input.shape
+        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, True)
+
+        init_log_probs = []
+        with torch.autocast('cuda', torch.bfloat16), \
+                sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
+                torch.inference_mode():
+            for mb in range(0, B, mbatch_size):
+                mslice = slice(mb, mb+mbatch_size)
+                init_log_probs_m = get_log_prob(self.init_model(input[:,mslice], position[:,mslice]).detach(), output)
+                init_log_probs.append(init_log_probs_m)
+        init_log_probs = torch.cat(init_log_probs, dim=1)
+
+
+        self.model.train()
+        self.init_model.train()
+        self._batch_info = {}
+        self._step_info = {}
+        for step in range(self.n_ppo_step):
+            log_probs = []
+            grads = []
+            self.optimizer.zero_grad()
+            reward_loss = 0
+            kl_loss = 0
+            with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+                for mb in range(0, B, mbatch_size):
+                    mslice = slice(mb, mb+mbatch_size)
+                    log_probs_m = get_log_prob(self.model(input[:,mslice], position[:,mslice]), output)
+                    log_probs.append(log_probs_m.detach())
+                    rs_m = log_probs_m - init_log_probs[:, mslice]
+                    rs_clip_m = torch.clamp(rs_m, 1-self.eps, 1+self.eps) # [L, B]
+                    reward_losses_m = torch.min(rs_m*advs[mslice], rs_clip_m*advs[mslice])
+                    reward_loss_m = torch.sum(reward_losses_m*weight[:,mslice])
+                    reward_loss += reward_loss_m.item()
+                    kl_loss_m = torch.sum((torch.exp(rs_m)-rs_m-1)*weight[:,mslice])
+                    kl_loss += kl_loss_m.item()
+                    loss = (reward_loss_m+kl_loss_m*self.kl_factor) / all_weight * dist.get_world_size()
+                    loss.backward()
+                    grads.append(log_probs_m.grad)
+            self._step_info['reward_loss', step] = reward_loss
+            self._step_info['kl_loss', step] = kl_loss
+            if step == 0:
+                log_probs = torch.cat(log_probs, dim=0)
+                grads = torch.cat(grads, dim=0)
+                self._batch_info = {
+                    'log_prob0': (log_probs / math.log(10)).float().cpu(),
+                    'grad0': grads.float().cpu()
+                }
+            if self.clip_grad_value is not None:
+                torch.nn.utils.clip_grad_value_(self.model.parameters(), self.clip_grad_value)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+            self.optimizer.step()
+            self.scheduler.step()
+
 
 class WrapTrainer(Trainer):
     def __init__(self, trainer: Trainer):
         self.trainer = trainer
-    def train(self, input, output, position, weight, scores, idxs):
-        return self.trainer.train(input, output, position, weight, scores, idxs)
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
+        return self.trainer.train(input, output, position, weight, scores, errors, idxs)
     def save(self, result_dir: str):
         self.trainer.save(result_dir)
     def policy_model(self):
@@ -494,9 +603,9 @@ class SaveBatchTrainer(WrapTrainer):
         self.do_save_steps = do_save_steps
         self.voc_encoder = voc_encoder
 
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, idxs):
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
         L, B = input.shape
-        self.trainer.train(input, output, position, weight, scores, idxs)
+        self.trainer.train(input, output, position, weight, scores, errors, idxs)
 
         if self.step in self.do_save_steps:
             
@@ -532,8 +641,44 @@ class SaveStepTrainer(WrapTrainer):
         self.step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", record_opt)
         self.max_opt = max_opt
 
-    def train(self, input, output, position, weight, scores, idxs):
-        self.trainer.train(input, output, position, weight, scores, idxs)
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
+        self.trainer.train(input, output, position, weight, scores, errors, idxs)
         self.step_recorder.record(**self.step_info())
         if self.step == self.max_opt:
             self.step_recorder.flush()
+
+class WrapScoreTrainer(WrapTrainer):
+    def __init__(self, trainer):
+        super().__init__(trainer)
+        self._raw_scores = None
+
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
+        self._raw_scores = scores
+        scores = self.wrap_scores(scores, idxs, errors)
+        self.trainer.train(input, output, position, weight, scores, errors, idxs)
+
+    def step_info(self):
+        info = self.trainer.step_info()
+        info.update({('raw_score', i): raw_score for i, raw_score in enumerate(self._raw_scores.tolist())})
+        return info
+    
+    def wrap_scores(self, scores: Tensor, idxs: Tensor, errors: list[str]):
+        raise NotImplementedError
+
+class SampleWhitenTrainer(WrapScoreTrainer):
+    def __init__(self, trainer: Trainer, mean: bool, std: bool, eps: float=1e-5):
+        super().__init__(trainer)
+        self.mean = mean
+        self.std = std
+        self.eps = eps
+
+    def wrap_scores(self, scores: Tensor, idxs: Tensor, errors: list[str]):
+        sample_means, sample_stds = get_sample_stat(scores, idxs)
+        sample_stds+=1e-5
+        if self.mean and self.std:
+            scores = (scores-sample_means)/sample_stds
+        elif self.mean:
+            scores = scores-sample_means
+        elif self.std:
+            scores = (scores-sample_means)/sample_stds+sample_means
+        return scores

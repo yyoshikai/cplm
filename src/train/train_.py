@@ -3,6 +3,7 @@ import itertools as itr
 from argparse import ArgumentParser, Namespace
 from collections.abc import Callable
 from contextlib import nullcontext
+from copy import deepcopy
 from logging import Logger, getLogger
 from functools import partial
 from time import time
@@ -182,23 +183,66 @@ def add_pretrain_args(parser: ArgumentParser):
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
     # pocket-heavy-coordはデフォルトで入れるようにした。
     parser.add_argument("--lig-randomize", action='store_true')
-    parser.add_argument('--lig-coord-follow-atom', action='store_true')
-    parser.add_argument('--lig-atoms', action='store_true')
-    parser.add_argument('--lig-atom-order', action='store_true')
+    parser.add_argument("--lig-format", choices=['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], default='smiles_coords')
     parser.add_argument("--no-lig-h-atom", action='store_true')
     parser.add_argument("--no-lig-h-coord", action='store_true')
     parser.add_argument("--no-pocket-heavy-atom", action='store_true')
     parser.add_argument("--no-pocket-heavy-coord", action='store_true')
     parser.add_argument("--pocket-h-atom", action='store_true') # pocketには無効
     parser.add_argument("--pocket-h-coord", action='store_true') # pocketには無効
-    parser.add_argument('--pocket-atom-order', action='store_true')
+    parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_coords'], default='atoms_coords')
     parser.add_argument("--coord-range", type=int, default=250)
-    parser.add_argument("--coord-follow-atom", action='store_true')
     # model
     parser.add_argument('--mamba', action='store_true')
-    parser.add_argument('--n-layer', type=int)
+    parser.add_argument('--n-layer', type=int) # MambaとTFでdefaultが違う可能性があるので定めない。
+    ## tf
+    parser.add_argument('--d-model', type=int, default=768)
     ## compatibility
     parser.add_argument("--model-bfloat16", action='store_true')
+
+def update_args(args: Namespace) -> Namespace:
+    """
+    古いargs を変換する。
+    """
+    logger = getLogger('update_args')
+
+    args = deepcopy(args)
+
+    # 260312 lig_coord_follow_atom, lig_atoms, lig_atom_order をlig_formatにまとめる
+    if not hasattr(args, 'lig_format'):
+        lig_arg_names = ['lig_atoms', 'lig_coord_follow_atom', 'lig_atom_order']
+        lig_args = tuple(getattr(args, name, False) for name in lig_arg_names)
+        lig_formats = {
+            (True, True, False): 'atom_coords', 
+            (True, False, True): 'ordered_atoms_coords', 
+            (True, False, False): 'atoms_coords', 
+            (False, False, False): 'smiles_coords'
+        }
+        lig_format = lig_formats[lig_args]
+        logger.warning(f"lig_format was set to {lig_format} from "+', '.join([f"{name}={getattr(args, name)}" for name in lig_arg_names if hasattr(args, name)]))
+        [delattr(args, name) for name in lig_arg_names if hasattr(args, name)]
+        args.lig_format = lig_format
+    
+    # 260312 coord_follow_atom, pocket_atom_order を pocket_formatにまとめる
+    if not hasattr(args, 'pocket_format'):
+        pocket_arg_names = ['coord_follow_atom', 'pocket_atom_order']
+        pocket_args = tuple(getattr(args, name, False) for name in pocket_arg_names)
+        pocket_formats = {
+            (False, True): 'ordered_atoms_coords', 
+            (True, False): 'atom_coords', 
+            (False, False): 'atoms_coords', 
+        }
+        pocket_format = pocket_formats[pocket_args]
+        logger.warning(f"pocket_format was set to {pocket_format} from "+', '.join(f"{name}={getattr(args, name)}" for name in pocket_arg_names if hasattr(args, name)))
+        [delattr(args, name) for name in pocket_arg_names if hasattr(args, name)]
+        args.pocket_format = pocket_format
+
+    # 260312 d_model, n_layer
+    if not hasattr(args, 'n_layer'):
+        args.n_layer = None
+    if not hasattr(args, 'd_model'):
+        args.d_model = 768
+    return args
 
 def update_pretrain_args(args: Namespace, targs: dict):
     for key, value in targs.items():
@@ -261,8 +305,9 @@ def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: st
         if args.n_layer is not None: kwargs['num_hidden_layers'] = args.n_layer
         model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
     else:
-        num_layers = args.n_layer or 12
-        model = TransformerModel(num_layers, 768, 12, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
+        n_head, r = divmod(args.d_model, 64)
+        assert r == 0
+        model = TransformerModel(args.n_layer or 12, args.d_model, n_head, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
     model.to(device)
     if args.model_bfloat16:
         model.to(torch.bfloat16)

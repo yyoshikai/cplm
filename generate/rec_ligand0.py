@@ -46,7 +46,6 @@ if __name__ == '__main__':
         finetune_dir = f"finetune/results/{args.sname}"
         model_path = f"{finetune_dir}/models/{args.opt}.pth"
     fargs = Namespace(**yaml.safe_load(open(f"{finetune_dir}/args.yaml")))
-    setdefault(fargs, 'lig_atoms', False)
 
     out_dir = ("./generate/rec_ligand/"
             +("reinforce" if args.reinforce else "finetune")
@@ -70,9 +69,7 @@ if __name__ == '__main__':
     get_token_position_fn = lambda item: (item[2], item[3])
 
     with cf.ProcessPoolExecutor() as e:
-        if fargs.lig_atoms:
-            raise NotImplementedError
-        else:
+        if fargs.format == 'smiles_coords':
             def streamer_fn(item, i_trial, voc_encoder):
                 idx, rec, prompt_token, position = item
                 mwrite(f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb", obmol2pdb(rec))
@@ -90,4 +87,6 @@ if __name__ == '__main__':
                     range_path=f"{out_dir}/token_range/{idx}_{i_trial}.txt"
                 )
                 return streamer
+        else:
+            raise NotImplementedError
         generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed)

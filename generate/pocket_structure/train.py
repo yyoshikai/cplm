@@ -62,14 +62,14 @@ if __name__ == '__main__':
     train_dir = f"./training/results/{args.studyname}"
     targs = Namespace(**yaml.safe_load(open(f"{train_dir}/args.yaml")))
     assert targs.UniMolPocket > 0
-    if getattr(targs, 'pocket_atom_order', False):
+    if targs.pocket_format == 'ordered_atoms_coords':
         raise NotImplementedError
 
     out_dir = "./generate/pocket_structure/training"+(f"/{args.genname}" if args.genname is not None else "")+f"/{args.studyname}/{args.opt}"
     assert not targs.no_pocket_heavy_atom and not targs.no_pocket_heavy_coord
     pocket = UniMolPocketDataset('valid')
     pocket = CacheDataset(pocket)
-    pocket_token = PocketTokenizeDataset(pocket, heavy_atom=not targs.no_pocket_heavy_atom, heavy_coord=not targs.no_pocket_heavy_coord, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord, coord_follow_atom=targs.coord_follow_atom, atom_order=getattr(targs, 'pocket_atom_order', False), coord_range=targs.coord_range)
+    pocket_token = PocketTokenizeDataset(pocket, heavy_atom=not targs.no_pocket_heavy_atom, heavy_coord=not targs.no_pocket_heavy_coord, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord, format=targs.pocket_format, coord_range=targs.coord_range)
     protein_atom_token, _coord_token = TokenSplitDataset(pocket_token, '[XYZ]').untuple()
     sentence = SentenceDataset('[POCKET]', protein_atom_token, '[XYZ]')
     index, sentence = index_dataset(sentence)

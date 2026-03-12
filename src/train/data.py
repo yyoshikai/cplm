@@ -23,11 +23,6 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
 
     assert isinstance(args, Namespace) # not Dict
     args = deepcopy(args)
-    default_args = { 'lig_coord_follow_atom': False, 'lig_atoms': False, 'pocket_atom_order': False, 'lig_atom_order': False}
-    for name, value in default_args.items():
-        if not hasattr(args, name):
-            logs.append((f"args.{name} was not set and defaults to {value}.", logging.WARNING))
-            setattr(args, name, value)
 
     logs.append((f"{split} data actual_size/total_size=", logging.INFO))
     token_datas = []
@@ -61,7 +56,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             mol = MolProcessDataset(mol, args.seed+d_seed, not args.no_lig_h_atom, args.lig_randomize)
             mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, 
                 normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-            mol = MolTokenizeDataset(mol, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms, atom_order=args.lig_atom_order, coord_range=args.coord_range, no_h_coord=args.no_lig_h_coord)
+            mol = MolTokenizeDataset(mol, format=args.lig_format, coord_range=args.coord_range, no_h_coord=args.no_lig_h_coord)
             
             ### sentence
             sentence = ['[LIGAND]', mol, '[END]']
@@ -91,9 +86,9 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             protein = data
             protein = CoordTransformDataset(protein, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
             if cls == UniMolPocketDataset:
-                protein = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, atom_order=args.pocket_atom_order, coord_range=args.coord_range)
+                protein = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, format=args.pocket_format, coord_range=args.coord_range)
             else:
-                protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, atom_order=args.pocket_atom_order, coord_range=args.coord_range)
+                protein = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, format=args.pocket_format, coord_range=args.coord_range)
             sentence = SentenceDataset('[POCKET]', protein, '[END]')
             vocs |= sentence.vocs()
             token, position = sentence.untuple()
@@ -127,12 +122,8 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     # compatibility
     assert isinstance(args, Namespace) # Dict can't check hasattr
     args = deepcopy(args)
-    default_args = { 
-        'lig_coord_follow_atom': False, 
-        'lig_atoms': False, 
-        'targetdiff': True, 
-        'pocket_atom_order': False, 
-        'lig_atom_order': False
+    default_args = {
+        'targetdiff': True,
     }
     for name, value in default_args.items():
         if not hasattr(args, name):
@@ -175,11 +166,11 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     weights = []
     ## pocket
     if args.protein:
-        protein_tokens = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, atom_order=args.pocket_atom_order, coord_range=args.coord_range)
+        protein_tokens = ProteinTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, format=args.pocket_format, coord_range=args.coord_range)
     else:
-        protein_tokens = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, coord_follow_atom=args.coord_follow_atom, atom_order=args.pocket_atom_order, coord_range=args.coord_range)
+        protein_tokens = PocketTokenizeDataset(protein, heavy_atom=not args.no_pocket_heavy_atom, heavy_coord=not args.no_pocket_heavy_coord, h_atom=args.pocket_h_atom, h_coord=args.pocket_h_coord, format=args.pocket_format, coord_range=args.coord_range)
     sentence += ['[POCKET]', protein_tokens, '[END]']
-    if args.coord_follow_atom:
+    if args.pocket_format == 'atom_coords':
         assert args.pocket_atom_weight == args.pocket_coord_weight
         weights += [None, args.pocket_coord_weight, 0.0]
     else:
@@ -199,7 +190,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     weights.append(args.lig_smiles_weight)
     lig = MolProcessDataset(lig, args.seed, not args.no_lig_h_atom, args.lig_randomize)
     if add_ligand:
-        lig_tokens = MolTokenizeDataset(lig, coord_follow_atom=args.lig_coord_follow_atom, atoms=args.lig_atoms, atom_order=args.lig_atom_order, coord_range=args.coord_range, no_h_coord=args.no_lig_h_coord)
+        lig_tokens = MolTokenizeDataset(lig, format=args.lig_format, coord_range=args.coord_range, no_h_coord=args.no_lig_h_coord)
         sentence += [lig_tokens, '[END]']
         weights += [args.lig_coord_weight, 0.0]
     sentence = SentenceDataset(*sentence)

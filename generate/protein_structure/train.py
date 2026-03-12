@@ -105,10 +105,11 @@ if __name__ == '__main__':
     assert targs.PDBUniMolRandom > 0
     out_dir = "./generate/protein_structure/training"+(f"/{args.genname}" if args.genname is not None else "")+f"/{args.studyname}/{args.opt}"
     assert not targs.no_pocket_heavy_atom and not targs.no_pocket_heavy_coord
+    assert targs.pocket_format in ['ordered_atoms_coords', 'atoms_coords']
 
     protein = PDBUniMolRandomDataset('valid')
     protein = CacheDataset(protein)
-    protein_token = ProteinTokenizeDataset(protein, heavy_atom=not targs.no_pocket_heavy_atom, heavy_coord=not targs.no_pocket_heavy_coord, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord, coord_follow_atom=targs.coord_follow_atom, atom_order=getattr(targs, 'pocket_atom_order', False), coord_range=targs.coord_range)
+    protein_token = ProteinTokenizeDataset(protein, heavy_atom=not targs.no_pocket_heavy_atom, heavy_coord=not targs.no_pocket_heavy_coord, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord, format=targs.pocket_format)
     protein_atom_token, _coord_token = TokenSplitDataset(protein_token, '[XYZ]').untuple()
     sentence = SentenceDataset('[POCKET]', protein_atom_token, '[XYZ]')
     index, sentence = index_dataset(sentence)
@@ -119,13 +120,14 @@ if __name__ == '__main__':
 
     def streamer_fn(item, i_trial, voc_encoder):
         idx, protein, (token, position) = item
+        atom_order = targs.pocket_format == 'ordered_atoms_coords'
         streamer = ProteinStructureStreamer(
             prompt_pdb_path=f"{out_dir}/prompt_pdb/{idx}/{i_trial}.pdb", 
             prompt_atom_path=f"{out_dir}/prompt_atoms/{idx}/{i_trial}.csv",
             new_pdb_path=f"{out_dir}/new_pdb/{idx}/{i_trial}.pdb", 
             new_coord_path=f"{out_dir}/new_coord_csv/{idx}/{i_trial}.csv",
             protein=protein,
-            voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=getattr(targs, 'pocket_atom_order', False), h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
+            voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=atom_order, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
         )
         streamer = TokenWriteStreamer(streamer, voc_encoder,
             prompt_position=position,

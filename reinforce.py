@@ -30,7 +30,7 @@ from src.train import set_env, get_model, get_process_ranks
 from src.train.data import get_finetune_data
 from src.train.looper import Looper, Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
 from src.generate.streamer import WrapperStreamer, LigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
-from src.train.reinforce import ReinforceTrainer, DPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
+from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer, get_sample_stat, whiten_scores
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 ## Scoring function
@@ -190,62 +190,6 @@ def generate(
     error_recorder.record(**{str(i): error for i, error in enumerate(errors)})
     return input, output, position, weight, scores, errors
 
-def get_sample_stat(values: Tensor, idxs: Tensor) -> tuple[Tensor, Tensor]:
-    all_values = all_gather(values)
-    all_idxs = all_gather(idxs)
-    B, = values.shape
-
-    sample_means = torch.full_like(values, math.nan)
-    sample_stds = torch.full_like(values, math.nan)
-    for uidx in torch.unique(idxs):
-        uidx_all_values = all_values[all_idxs == uidx]
-        if torch.all(torch.isnan(uidx_all_values)):
-            continue
-        mean = torch.nanmean(uidx_all_values)
-        std = torch.nanmean((uidx_all_values-mean)**2).sqrt()
-        sample_means[idxs == uidx] = mean
-        sample_stds[idxs == uidx] = std
-    return sample_means, sample_stds
-
-def get_all_stat(values: Tensor) -> tuple[float, float]:
-    all_values = all_gather(values)
-    mean = torch.nanmean(all_values).item()
-    std = torch.nanmean((all_values-mean)**2).sqrt().item()
-    return mean, std
-
-def whiten_scores(scores: Tensor, idxs: Tensor, sample_whiten: list[Literal['mean', 'std']], all_whiten: list[Literal['mean', 'std']]):
-    world_size = dist.get_world_size()
-    # all_gather scores
-    all_scores = [torch.zeros_like(scores) for _ in range(world_size)]
-    dist.all_gather(all_scores, scores)
-    all_scores = torch.cat(all_scores)
-    
-    # sample whiten
-    sample_means, sample_stds = get_sample_stat(scores, idxs)
-    sample_stds+=1e-5
-    sample_mean = 'mean' in sample_whiten
-    sample_std = 'std' in sample_whiten
-    if sample_mean or sample_std:
-        if sample_mean and sample_std:
-            scores = (scores-sample_means)/sample_stds
-        elif sample_mean:
-            scores = scores-sample_means
-        elif sample_std:
-            scores = (scores-sample_means)/sample_stds+sample_mean
-
-    # all whiten
-    all_mean = 'mean' in all_whiten
-    all_std = 'std' in all_whiten
-    mean, std = get_all_stat(scores)
-    if (all_mean or all_std) and not torch.all(torch.isnan(scores)):
-        if all_mean and all_std:
-            scores = (scores - mean) / (std+1e-5)
-        elif sample_mean:
-            scores = scores - mean
-        elif sample_std:
-            scores = (scores - mean) / (std+1e-5) + mean
-    return scores
-
 def get_scores(
         errors: list[str|None],
         idxs: Tensor,
@@ -334,6 +278,10 @@ def main():
     parser.add_argument('--adv-all-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--adv-sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline', 'dpo', 'grpo', 'dapo'], required=True)
+    ## Trainer
+    ### PPO
+    parser.add_argument('--n-ppo-step', type=int, default=5)
+    parser.add_argument('--ppo-clip-eps', type=float, default=0.2)
     ## Data
     parser.add_argument('--max-prompt-len', type=int)
     parser.add_argument('--generate-per-sample', type=int, default=1)
@@ -472,6 +420,8 @@ def main():
         trainer = ReinforceTrainer(model_, baseline, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.adv_all_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)
     elif args.trainer == 'dpo':
         trainer = DPOTrainer(model_, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.kl_factor, train_looper, args.clip_grad_value, args.clip_grad_norm)
+    elif args.trainer == 'grpo':
+        trainer = GRPOTrainer(model_, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.kl_factor, args.clip_grad_value, args.clip_grad_norm, args.n_ppo_step, args.ppo_clip_eps)
     trainer = GetMemoryTrainer(trainer, device)
     trainer = SaveBatchTrainer(trainer, result_dir, do_save_steps, voc_encoder)
     trainer = SaveStepTrainer(trainer, result_dir, args.record_opt, args.max_opt)

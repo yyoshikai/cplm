@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from typing import Literal
 import numpy as np
+
 from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
 from torch.utils.data import Dataset
 from ..utils import slice_str
@@ -27,19 +29,16 @@ def pocket2pdb(pocket: Pocket, out_path: str):
 
 
 class ProteinTokenizer:
-    def __init__(self, *, heavy_atom, heavy_coord, h_atom, h_coord, coord_follow_atom, coord_range, atom_order):
+    def __init__(self, *, heavy_atom, heavy_coord, h_atom, h_coord, format, coord_range):
         self.heavy_atom = heavy_atom
         self.h_atom = h_atom
         self.heavy_coord = heavy_coord
         self.h_coord = h_coord
-        self.atom_order = atom_order
-
-        self.coord_follow_atom = coord_follow_atom
+        self.format = format
         self.atom_tokenizer = ProteinAtomTokenizer()
         self.coord_tokenizer = FloatTokenizer('protein', -coord_range, coord_range)
         assert not (self.heavy_coord and not self.heavy_atom)
         assert not (self.h_coord and not self.h_atom)
-        assert not (self.coord_follow_atom and self.atom_order)
 
     def __call__(self, atoms: np.ndarray, coords: np.ndarray):
         # calc mask
@@ -54,7 +53,7 @@ class ProteinTokenizer:
         coord_mask = is_ca | (is_heavy if self.heavy_coord else False) | (is_h if self.h_coord else False)
                     
 
-        if self.coord_follow_atom:
+        if self.format == 'atom_coords':
             tokens = []
             for i in range(len(atoms)):
                 if atom_mask[i]: 
@@ -62,7 +61,7 @@ class ProteinTokenizer:
                 if coord_mask[i]:
                     tokens += self.coord_tokenizer.tokenize_array(coords[i])
             order = list(range(len(tokens)))
-        elif self.atom_order:
+        elif self.format == 'ordered_atoms_coords':
             atom_tokens = []
             coord_tokens = []
             atom_order = []
@@ -81,15 +80,17 @@ class ProteinTokenizer:
                     x += len(coord_token)
             tokens = atom_tokens+['[XYZ]']+coord_tokens
             order = atom_order+[x]+coord_order
-        else:
+        elif self.format == 'atoms_coords':
             tokens = self.atom_tokenizer.tokenize(atoms[atom_mask]) \
                 +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords[coord_mask].ravel())
             order = list(range(len(tokens)))
+        else:
+            raise ValueError(f"Unknown {self.format=}")
         return tokens, order
     
     def vocs(self) -> set[str]:
         return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
-                | ({'[XYZ]'} if not self.coord_follow_atom else set())
+                | (set() if self.format == 'atom_coords' else {'[XYZ]'})
 
 class Protein2PDBDataset(WrapDataset[str]):
     def __init__(self, dataset: Dataset[OBMol]):
@@ -107,10 +108,10 @@ class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, pocket_data: Dataset[Pocket], *,
             heavy_atom: bool, heavy_coord: bool, 
             h_atom: bool, h_coord: bool, 
-            coord_follow_atom: bool, atom_order: bool, coord_range: int):
+            format: Literal['atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: int):
         super().__init__(pocket_data)
         self.pocket_data = pocket_data
-        self.protein_tokenizer = ProteinTokenizer(heavy_atom=heavy_atom, heavy_coord=heavy_coord, h_atom=h_atom, h_coord=h_coord, coord_follow_atom=coord_follow_atom, coord_range=coord_range, atom_order=atom_order)
+        self.protein_tokenizer = ProteinTokenizer(heavy_atom=heavy_atom, heavy_coord=heavy_coord, h_atom=h_atom, h_coord=h_coord, format=format, coord_range=coord_range)
         assert not h_atom, f"h_atom is not supported for Pocket"
         assert not h_coord, f"h_coord is not supported for Pocket"
 
@@ -125,11 +126,10 @@ class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
 class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, protein_data: Dataset[OBMol], *,
             heavy_atom: bool, heavy_coord: bool, 
-            h_atom: bool, h_coord: bool, 
-            coord_follow_atom: bool, atom_order: bool, coord_range: int):
+            h_atom: bool, h_coord: bool, format, coord_range: int):
         super().__init__(protein_data)
         self.protein_data = protein_data
-        self.protein_tokenizer = ProteinTokenizer(heavy_atom=heavy_atom, heavy_coord=heavy_coord, h_atom=h_atom, h_coord=h_coord, coord_follow_atom=coord_follow_atom, coord_range=coord_range, atom_order=atom_order)
+        self.protein_tokenizer = ProteinTokenizer(heavy_atom=heavy_atom, heavy_coord=heavy_coord, h_atom=h_atom, h_coord=h_coord, format=format, coord_range=coord_range)
         self.h_atom = h_atom
 
     def __getitem__(self, idx: int):
