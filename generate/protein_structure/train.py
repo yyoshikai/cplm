@@ -11,13 +11,13 @@ from torch.utils.data import StackDataset, Subset
 from src.utils.path import make_pardir
 from src.data import CacheDataset, index_dataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
-from src.data.protein import ProteinTokenizeDataset
+from src.data.protein import ProteinTokenizeDataset, AtomRepr
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
 from src.generate import generate
 from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer, RangeWriteStreamer
 
 class ProteinStructureStreamer(GeneratorStreamer):
-    def __init__(self, prompt_pdb_path: str, prompt_atom_path: str, new_pdb_path: str, new_coord_path: str, protein: ob.OBMol, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):
+    def __init__(self, prompt_pdb_path: str, prompt_atom_path: str, new_pdb_path: str, new_coord_path: str, protein: ob.OBMol, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h: AtomRepr):
         super().__init__()
         self.voc_encoder = voc_encoder
         self.prompt_pdb_path = prompt_pdb_path
@@ -28,8 +28,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
         self.new_coord_path = new_coord_path
         self.protein = protein
         self.atom_order = atom_order
-        self.h_atom = h_atom
-        self.h_coord = h_coord
+        self.h = h
         self.n_generated_atom = None
     def estimated_n_token(self):
         if self.n_generated_atom is not None:
@@ -43,10 +42,10 @@ class ProteinStructureStreamer(GeneratorStreamer):
         prompt_tokens = yield
         prompt_tokens = self.voc_encoder.decode(prompt_tokens)
         assert prompt_tokens[0] == '[POCKET]' and prompt_tokens[-1] == '[XYZ]'
-        if self.h_atom:
-            self.protein.AddHydrogens()
-        else:
+        if self.h == 'none':
             self.protein.DeleteHydrogens()
+        else:
+            self.protein.AddHydrogens()
         
         make_pardir(self.prompt_pdb_path)
         obc.WriteFile(self.protein, self.prompt_pdb_path)
@@ -57,7 +56,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
             atom_data.append((residue.GetIdx(), residue.GetName(), residue.GetAtomID(atom).strip(), ob.GetSymbol(atom.GetAtomicNum())))
         df = pd.DataFrame(atom_data, columns=['residue_idx', 'residue', 'name', 'element'])
         orders = np.argsort(df['residue_idx'].values, kind='stable')
-        if not self.h_coord:
+        if self.h == 'all':
             orders = orders[df['element'][orders] != 'H']
         df['order'] = -1
         df.loc[orders, 'order'] = np.arange(len(orders))
@@ -76,7 +75,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
                 except Exception as e:
                     print(f"{order=}, {i_coord=}", flush=True)
                     raise e
-            if not self.h_coord:
+            if self.h == 'atom':
                 self.protein.DeleteHydrogens()
             make_pardir(self.new_pdb_path)
             obc.WriteFile(self.protein, self.new_pdb_path)
@@ -104,12 +103,12 @@ if __name__ == '__main__':
     targs = Namespace(**yaml.safe_load(open(f"{train_dir}/args.yaml")))
     assert targs.PDBUniMolRandom > 0
     out_dir = "./generate/protein_structure/training"+(f"/{args.genname}" if args.genname is not None else "")+f"/{args.studyname}/{args.opt}"
-    assert not targs.no_pocket_heavy_atom and not targs.no_pocket_heavy_coord
+    assert targs.pocket_heavy == 'all'
     assert targs.pocket_format in ['ordered_atoms_coords', 'atoms_coords']
 
     protein = PDBUniMolRandomDataset('valid')
     protein = CacheDataset(protein)
-    protein_token = ProteinTokenizeDataset(protein, heavy_atom=not targs.no_pocket_heavy_atom, heavy_coord=not targs.no_pocket_heavy_coord, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord, format=targs.pocket_format)
+    protein_token = ProteinTokenizeDataset(protein, heavy=targs.pocket_heavy, h=targs.pocket_h, format=targs.pocket_format, coord_range=targs.coord_range)
     protein_atom_token, _coord_token = TokenSplitDataset(protein_token, '[XYZ]').untuple()
     sentence = SentenceDataset('[POCKET]', protein_atom_token, '[XYZ]')
     index, sentence = index_dataset(sentence)
@@ -127,7 +126,7 @@ if __name__ == '__main__':
             new_pdb_path=f"{out_dir}/new_pdb/{idx}/{i_trial}.pdb", 
             new_coord_path=f"{out_dir}/new_coord_csv/{idx}/{i_trial}.csv",
             protein=protein,
-            voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=atom_order, h_atom=targs.pocket_h_atom, h_coord=targs.pocket_h_coord
+            voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=atom_order, h=targs.pocket_h
         )
         streamer = TokenWriteStreamer(streamer, voc_encoder,
             prompt_position=position,

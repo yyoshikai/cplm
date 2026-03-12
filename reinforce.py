@@ -23,7 +23,7 @@ from src.utils.ddp import all_gather
 from src.utils.logger import NO_DUP
 from src.chem import rdmol2obmol, pdb2obmol
 from src.evaluate import eval_vina, eval_qvina
-from src.data.protein import Protein2PDBDataset
+from src.data.protein import Protein2PDBDataset, AtomRepr
 from src.data.tokenizer import VocEncoder
 from src.model import Model
 from src.train import set_env, get_model, get_process_ranks
@@ -135,8 +135,7 @@ def generate(
         result_dir: str, 
         max_new_token: int,
         coord_range: int,
-        lig_h_atom: bool,
-        lig_h_coord: bool,
+        lig_h: AtomRepr,
         device: torch.device,
         size_recorder: IterateRecorder,
 
@@ -154,7 +153,7 @@ def generate(
     rank = dist.get_rank()
 
     model.eval()
-    ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, coord_range, voc_encoder, False, lig_h_atom, lig_h_coord, None) for idx in range(len(prompt_tokens))]
+    ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, coord_range, voc_encoder, False, lig_h, None) for idx in range(len(prompt_tokens))]
     with cf.ProcessPoolExecutor(num_score_workers) as e:
         score_streamers = [
             GetScoreStreamer(streamer, e, target, pdb, f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}", cpu=cpu, print_prepare=step < 3) for idx, (streamer, pdb) in enumerate(zip(ligand_streamers, pdbs))
@@ -442,8 +441,7 @@ def main():
             result_dir,
             args.max_new_token,
             fargs.coord_range,
-            not fargs.no_lig_h_atom,
-            not fargs.no_lig_h_coord,
+            fargs.lig_h,
             device,
             size_recorder,
             step, 

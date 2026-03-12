@@ -75,7 +75,7 @@ if __name__ == '__main__':
                 mwrite(f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb", obmol2pdb(rec))
                 streamer = LigandStreamer(
                     new_sdf_path=f"{out_dir}/new_sdf/{idx}/{i_trial}.sdf", 
-                    coord_range=fargs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, h_atom=fargs.pocket_h_atom, h_coord=fargs.pocket_h_coord
+                    coord_range=fargs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, lig_h=fargs.lig_h
                 )
                 streamer = TokenWriteStreamer(streamer, voc_encoder,
                     prompt_position=position,

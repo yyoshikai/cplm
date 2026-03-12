@@ -611,13 +611,17 @@ class SaveBatchTrainer(WrapTrainer):
             
             os.makedirs(f"{self.result_dir}/batches/{self.step}", exist_ok=True)
             for b in (range(B) if self.step in [0, 100] else [0]):
-                pd.DataFrame(dict(
+                df = pd.DataFrame(dict(
                     input=[self.voc_encoder.i2voc[i] for i in input[:,b]], 
                     output=[self.voc_encoder.i2voc[i] for i in output[:,b]], 
                     position=position[:,b].float().cpu(),
                     weight=weight[:,b].float().cpu(),
                     **{k: v[:, b] for k, v in self.batch_info().items()})
-                ).to_csv(f"{self.result_dir}/batches/{self.step}/{self.rank}_{b}.csv")
+                )
+                df.to_csv(f"{self.result_dir}/batches/{self.step}/{self.rank}_{b}.csv")
+                with open(f"{self.result_dir}/batches/{self.step}/{self.rank}_{b}.txt") as f:
+                    f.write(df.to_string())
+                
         self.step += 1
 
 class GetMemoryTrainer(WrapTrainer):

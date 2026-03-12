@@ -39,10 +39,10 @@ class MolProcessDataset(WrapDataset[Chem.Mol]):
 
 
 class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], *, format: Literal['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: float, no_h_coord: bool=False):
+    def __init__(self, mol_data: Dataset[Chem.Mol], *, format: Literal['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: float, h_coord: bool=True):
         super().__init__(mol_data)
         self.mol_data = mol_data
-        self.h_coord = not no_h_coord
+        self.h_coord = h_coord
         self.format = format
         if self.format == 'smiles_coords':
             self.smi_tokenizer = SmilesTokenizer()

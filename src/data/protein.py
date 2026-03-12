@@ -9,6 +9,7 @@ from ..chem import get_coord_from_mol
 from .data import WrapDataset
 from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
 
+AtomRepr = Literal['none', 'atom', 'all']
 
 @dataclass
 class Pocket:
@@ -29,16 +30,14 @@ def pocket2pdb(pocket: Pocket, out_path: str):
 
 
 class ProteinTokenizer:
-    def __init__(self, *, heavy_atom, heavy_coord, h_atom, h_coord, format, coord_range):
-        self.heavy_atom = heavy_atom
-        self.h_atom = h_atom
-        self.heavy_coord = heavy_coord
-        self.h_coord = h_coord
+    def __init__(self, *, heavy: AtomRepr, h: AtomRepr, format, coord_range):
+        self.heavy = heavy
+        self.h = h
         self.format = format
         self.atom_tokenizer = ProteinAtomTokenizer()
         self.coord_tokenizer = FloatTokenizer('protein', -coord_range, coord_range)
-        assert not (self.heavy_coord and not self.heavy_atom)
-        assert not (self.h_coord and not self.h_atom)
+        assert self.heavy in ['all', 'atom', 'none']
+        assert self.h in ['all', 'atom', 'none']
 
     def __call__(self, atoms: np.ndarray, coords: np.ndarray):
         # calc mask
@@ -47,10 +46,10 @@ class ProteinTokenizer:
         is_heavy = (~is_ca)&(~is_h)
 
         # atoms 
-        atom_mask = is_ca | (is_heavy if self.heavy_atom else False) | (is_h if self.h_atom else False)
+        atom_mask = is_ca | (is_heavy if self.heavy in ['all', 'atom'] else False) | (is_h if self.h in ['all', 'atom'] else False)
 
         # coord
-        coord_mask = is_ca | (is_heavy if self.heavy_coord else False) | (is_h if self.h_coord else False)
+        coord_mask = is_ca | (is_heavy if self.heavy == 'all' else False) | (is_h if self.h == 'all' else False)
                     
 
         if self.format == 'atom_coords':
@@ -106,14 +105,12 @@ class Protein2PDBDataset(WrapDataset[str]):
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, pocket_data: Dataset[Pocket], *,
-            heavy_atom: bool, heavy_coord: bool, 
-            h_atom: bool, h_coord: bool, 
+            heavy: AtomRepr, h: AtomRepr, 
             format: Literal['atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: int):
         super().__init__(pocket_data)
         self.pocket_data = pocket_data
-        self.protein_tokenizer = ProteinTokenizer(heavy_atom=heavy_atom, heavy_coord=heavy_coord, h_atom=h_atom, h_coord=h_coord, format=format, coord_range=coord_range)
-        assert not h_atom, f"h_atom is not supported for Pocket"
-        assert not h_coord, f"h_coord is not supported for Pocket"
+        self.protein_tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
+        assert h == 'none', f"h must be none for pocket."
 
     def __getitem__(self, idx: int):
         protein = self.pocket_data[idx]
@@ -125,21 +122,20 @@ class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
 
 class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, protein_data: Dataset[OBMol], *,
-            heavy_atom: bool, heavy_coord: bool, 
-            h_atom: bool, h_coord: bool, format, coord_range: int):
+            heavy: AtomRepr, h: AtomRepr, format, coord_range: int):
         super().__init__(protein_data)
         self.protein_data = protein_data
-        self.protein_tokenizer = ProteinTokenizer(heavy_atom=heavy_atom, heavy_coord=heavy_coord, h_atom=h_atom, h_coord=h_coord, format=format, coord_range=coord_range)
-        self.h_atom = h_atom
+        self.protein_tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
+        self.h = h
 
     def __getitem__(self, idx: int):
         protein = self.protein_data[idx]
 
         # add/remove hydrogen
-        if self.h_atom:
-            success = protein.AddHydrogens()
-        else:
+        if self.h == 'none':
             success = protein.DeleteHydrogens()
+        else:
+            success = protein.AddHydrogens()
         assert success
         # Order atoms
         atoms = np.array([atom.GetResidue().GetAtomID(atom).strip() for atom in OBMolAtomIter(protein)])

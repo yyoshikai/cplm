@@ -184,12 +184,9 @@ def add_pretrain_args(parser: ArgumentParser):
     # pocket-heavy-coordはデフォルトで入れるようにした。
     parser.add_argument("--lig-randomize", action='store_true')
     parser.add_argument("--lig-format", choices=['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], default='smiles_coords')
-    parser.add_argument("--no-lig-h-atom", action='store_true')
-    parser.add_argument("--no-lig-h-coord", action='store_true')
-    parser.add_argument("--no-pocket-heavy-atom", action='store_true')
-    parser.add_argument("--no-pocket-heavy-coord", action='store_true')
-    parser.add_argument("--pocket-h-atom", action='store_true') # pocketには無効
-    parser.add_argument("--pocket-h-coord", action='store_true') # pocketには無効
+    parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
+    parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
+    parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
     parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_coords'], default='atoms_coords')
     parser.add_argument("--coord-range", type=int, default=250)
     # model
@@ -353,6 +350,8 @@ def save_batch(dir: str, logger: Logger, input: Tensor, target: Tensor, position
             'weight': weight[:,idx].cpu().numpy(),
         })
         df.to_csv(f"{dir}/{rank}_{idx}.tsv", index=False, sep='\t')
+        with open(f"{dir}/{rank}_{idx}.txt", 'w') as f:
+            f.write(df.to_string(index=False))
 
 
 def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_unk_logger: bool=True):
@@ -542,7 +541,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     
     # Times
     train_looper = Loopers([
-        LogLooper(logger, 10000, 5, 'step', 'trianing'), 
+        LogLooper(logger, 10000, 5, 'step', 'training'), 
         TimeLogLooper(logger, 'step', 10000), 
         TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 10000), 
         GPUUseLooper(logger, device, 'step', 5)

@@ -12,6 +12,7 @@ from ..utils import should_show
 from ..utils.path import make_pardir, mwrite
 from ..model import Streamer, WrapperStreamer
 from ..data.molecule import element_symbols
+from ..data.protein import AtomRepr
 from ..data.tokenizer import FloatTokenizer, SmilesTokenizer, VocEncoder
 from ..chem import obmol2pdb
 from ..evaluate import eval_vina, eval_qvina
@@ -168,7 +169,7 @@ class TimeLogStreamer(WrapperStreamer):
         return self.streamer.put(tokens)
 
 class LigandStreamer(GeneratorStreamer):
-    def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, h_atom: bool, h_coord: bool, center: np.ndarray|None=None):
+    def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, lig_h: AtomRepr, center: np.ndarray|None=None):
         self.voc_encoder = voc_encoder
         self.coord_range = coord_range
         smi_tokenizer = SmilesTokenizer()
@@ -219,7 +220,7 @@ class LigandStreamer(GeneratorStreamer):
         yield False, next(pos_iter), [self.voc_encoder.voc2i['[END]']]
 
 class AtomLigandStreamer(GeneratorStreamer):
-    def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h_atom: bool, h_coord: bool):
+    def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, lig_h: AtomRepr):
         super().__init__()
         self.voc_encoder = voc_encoder
         self.new_sdf_path = new_sdf_path
