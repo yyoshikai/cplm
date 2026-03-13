@@ -19,7 +19,6 @@ from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import IterateRecorder, get_git_hash
 from src.utils.rdkit import ignore_rdkit_warning
-from src.utils.ddp import all_gather
 from src.utils.logger import NO_DUP
 from src.chem import rdmol2obmol, pdb2obmol
 from src.evaluate import eval_vina, eval_qvina
@@ -28,7 +27,7 @@ from src.data.tokenizer import VocEncoder
 from src.model import Model
 from src.train import set_env, get_model, get_process_ranks
 from src.train.data import get_finetune_data
-from src.train.looper import Looper, Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
+from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
 from src.generate.streamer import WrapperStreamer, LigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
 from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer, get_sample_stat, whiten_scores
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
