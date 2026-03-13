@@ -481,7 +481,7 @@ def main():
 
         # Forward Get prob & reward loss
         train_looper.put('train')
-        trainer.train(input, output, position, weight, scores, idxs)
+        trainer.train(input, output, position, weight, scores, errors, idxs)
         
         if step % args.save_opt == 0:
             train_looper.put('save')

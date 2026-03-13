@@ -227,7 +227,7 @@ def get_mbatch_size(mbatch_size: int|None, L: int, gpu_size: float, model: Model
 class Trainer:
     def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
         raise NotImplementedError
-    def save(self):
+    def save(self, result_dir: str):
         raise NotImplementedError
     def policy_model(self) -> Model:
         raise NotImplementedError
@@ -507,6 +507,7 @@ class GRPOTrainer(Trainer):
         self._batch_info = self._step_info = {}
 
         self.rank = dist.get_rank()
+        _, self.save_rank, _ = get_process_ranks()
 
         self.init_model = copy.deepcopy(model)
         self.model = DistributedDataParallel(model)
@@ -521,10 +522,12 @@ class GRPOTrainer(Trainer):
         self.kl_factor = kl_factor
 
     def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
+        
+        L, B = input.shape
+        device = input.device
 
         advs = whiten_scores(scores, idxs, sample_whiten=['mean', 'std'], all_whiten=[])
-        all_weight = reduce_float(weight.sum().item())
-        L, B = input.shape
+        all_weight = reduce_float(weight.sum().item(), device)
         mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, True)
 
         init_log_probs = []
@@ -533,7 +536,7 @@ class GRPOTrainer(Trainer):
                 torch.inference_mode():
             for mb in range(0, B, mbatch_size):
                 mslice = slice(mb, mb+mbatch_size)
-                init_log_probs_m = get_log_prob(self.init_model(input[:,mslice], position[:,mslice]).detach(), output)
+                init_log_probs_m = get_log_prob(self.init_model(input[:,mslice], position[:,mslice]).detach(), output[:,mslice])
                 init_log_probs.append(init_log_probs_m)
         init_log_probs = torch.cat(init_log_probs, dim=1)
 
@@ -542,16 +545,21 @@ class GRPOTrainer(Trainer):
         self.init_model.train()
         self._batch_info = {}
         self._step_info = {}
+        reward_losses = []
+        kl_losses = []
         for step in range(self.n_ppo_step):
             log_probs = []
             grads = []
             self.optimizer.zero_grad()
             reward_loss = 0
             kl_loss = 0
-            with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-                for mb in range(0, B, mbatch_size):
+            for mb in range(0, B, mbatch_size):
+                with torch.autocast('cuda', torch.bfloat16), \
+                        sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
+                        self.model.no_sync() if mb+mbatch_size < B else nullcontext():
                     mslice = slice(mb, mb+mbatch_size)
-                    log_probs_m = get_log_prob(self.model(input[:,mslice], position[:,mslice]), output)
+                    log_probs_m = get_log_prob(self.model(input[:,mslice], position[:,mslice]), output[:,mslice])
+                    log_probs_m.retain_grad()
                     log_probs.append(log_probs_m.detach())
                     rs_m = log_probs_m - init_log_probs[:, mslice]
                     rs_clip_m = torch.clamp(rs_m, 1-self.eps, 1+self.eps) # [L, B]
@@ -563,11 +571,9 @@ class GRPOTrainer(Trainer):
                     loss = (reward_loss_m+kl_loss_m*self.kl_factor) / all_weight * dist.get_world_size()
                     loss.backward()
                     grads.append(log_probs_m.grad)
-            self._step_info['reward_loss', step] = reward_loss
-            self._step_info['kl_loss', step] = kl_loss
             if step == 0:
-                log_probs = torch.cat(log_probs, dim=0)
-                grads = torch.cat(grads, dim=0)
+                log_probs = torch.cat(log_probs, dim=1)
+                grads = torch.cat(grads, dim=1)
                 self._batch_info = {
                     'log_prob0': (log_probs / math.log(10)).float().cpu(),
                     'grad0': grads.float().cpu()
@@ -577,6 +583,21 @@ class GRPOTrainer(Trainer):
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
             self.optimizer.step()
             self.scheduler.step()
+        self._step_info['reward_loss'] = reward_losses
+        self._step_info['kl_loss'] = kl_losses
+    def save(self, result_dir):
+        if self.rank == self.save_rank:
+            os.makedirs(f"{result_dir}/models", exist_ok=True)
+            torch.save(self.model.module.state_dict(), f"{result_dir}/models/{self.step}.pth")
+            if self.step > 0:
+                cleardir(f"{result_dir}/optimizers")
+                torch.save(self.optimizer.state_dict(), f"{result_dir}/optimizers/{self.step}.pth")
+    def policy_model(self):
+        return self.model.module
+    def batch_info(self):
+        return self._batch_info
+    def step_info(self):
+        return self._step_info
 
 
 class WrapTrainer(Trainer):
@@ -619,7 +640,7 @@ class SaveBatchTrainer(WrapTrainer):
                     **{k: v[:, b] for k, v in self.batch_info().items()})
                 )
                 df.to_csv(f"{self.result_dir}/batches/{self.step}/{self.rank}_{b}.csv")
-                with open(f"{self.result_dir}/batches/{self.step}/{self.rank}_{b}.txt") as f:
+                with open(f"{self.result_dir}/batches/{self.step}/{self.rank}_{b}.txt", 'w') as f:
                     f.write(df.to_string())
                 
         self.step += 1
