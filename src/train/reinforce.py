@@ -460,9 +460,10 @@ class DPOTrainer(Trainer):
         self.model.train()
         log_probs = []
         mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, True)
-        with torch.autocast('cuda', torch.bfloat16), \
-                sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-            for mb in range(0, B, mbatch_size):
+        for mb in range(0, B, mbatch_size):
+            with torch.autocast('cuda', torch.bfloat16), \
+                    sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
+                    self.model.no_sync() if mb+mbatch_size < B else nullcontext():
                 mslice = slice(mb, mb+mbatch_size)
                 logits_m = self.model(input[:,mslice], position[:,mslice]) # [L, Bm, D]
                 log_probs_m = get_log_prob(logits_m, output[:,mslice])
