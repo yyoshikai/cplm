@@ -471,7 +471,7 @@ class DPOTrainer(Trainer):
                 rs_m = torch.sum(log_probs_m*weight[:,mslice], dim=0)
                 rs_m.backward(gradient=r_grads[mslice])
 
-        self.train_looper('train_update')
+        self.train_looper.put('train_update')
         self._batch_info = {
             'log_prob': (torch.cat(log_probs, dim=1)/math.log(10)).float().cpu(),
             'velocity': r_grads.float().cpu().unsqueeze(0).expand_as(input)
