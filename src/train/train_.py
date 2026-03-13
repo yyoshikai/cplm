@@ -206,8 +206,8 @@ def update_args(args: Namespace) -> Namespace:
     args = deepcopy(args)
 
     # 260312 lig_coord_follow_atom, lig_atoms, lig_atom_order をlig_formatにまとめる
+    lig_arg_names = ['lig_atoms', 'lig_coord_follow_atom', 'lig_atom_order']
     if not hasattr(args, 'lig_format'):
-        lig_arg_names = ['lig_atoms', 'lig_coord_follow_atom', 'lig_atom_order']
         lig_args = tuple(getattr(args, name, False) for name in lig_arg_names)
         lig_formats = {
             (True, True, False): 'atom_coords', 
@@ -217,12 +217,12 @@ def update_args(args: Namespace) -> Namespace:
         }
         lig_format = lig_formats[lig_args]
         logger.warning(f"lig_format was set to {lig_format} from "+', '.join([f"{name}={getattr(args, name)}" for name in lig_arg_names if hasattr(args, name)]))
-        [delattr(args, name) for name in lig_arg_names if hasattr(args, name)]
         args.lig_format = lig_format
+    [delattr(args, name) for name in lig_arg_names if hasattr(args, name)]
     
     # 260312 coord_follow_atom, pocket_atom_order を pocket_formatにまとめる
+    pocket_arg_names = ['coord_follow_atom', 'pocket_atom_order']
     if not hasattr(args, 'pocket_format'):
-        pocket_arg_names = ['coord_follow_atom', 'pocket_atom_order']
         pocket_args = tuple(getattr(args, name, False) for name in pocket_arg_names)
         pocket_formats = {
             (False, True): 'ordered_atoms_coords', 
@@ -231,14 +231,31 @@ def update_args(args: Namespace) -> Namespace:
         }
         pocket_format = pocket_formats[pocket_args]
         logger.warning(f"pocket_format was set to {pocket_format} from "+', '.join(f"{name}={getattr(args, name)}" for name in pocket_arg_names if hasattr(args, name)))
-        [delattr(args, name) for name in pocket_arg_names if hasattr(args, name)]
         args.pocket_format = pocket_format
+    [delattr(args, name) for name in pocket_arg_names if hasattr(args, name)]
 
     # 260312 d_model, n_layer
     if not hasattr(args, 'n_layer'):
         args.n_layer = None
     if not hasattr(args, 'd_model'):
         args.d_model = 768
+
+    # 260313 atom_reprs
+    atom_reprs = {
+        (True, True): 'all', 
+        (True, False): 'atom', 
+        (False, False): 'none'
+    }
+    if not hasattr(args, 'lig_h'):
+        args.lig_h = atom_reprs[not args.no_lig_h_atom, not args.no_lig_h_coord]
+    if not hasattr(args, 'pocket_h'):
+        args.pocket_h = atom_reprs[args.pocket_h_atom, args.pocket_h_coord]
+    if not hasattr(args, 'pocket_heavy'):
+        args.pocket_heavy = atom_reprs[not args.no_pocket_heavy_atom, args.no_pocket_heavy_coord]
+    for name in ['no_lig_h_atom', 'no_lig_h_coord', 'pocket_h_atom', 'pocket_h_coord', 'no_pocket_heavy_coord', 'no_pocket_heavy_atom']:
+        if hasattr(args, name):
+            delattr(args, name)
+    
     return args
 
 def update_pretrain_args(args: Namespace, targs: dict):
