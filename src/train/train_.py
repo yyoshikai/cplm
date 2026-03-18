@@ -30,7 +30,7 @@ from ..data.tokenizer import VocEncoder
 from .collator import DDPStringCollateLoader, InfiniteLoader
 from ..model import TransformerModel, MambaModel
 from ..model.model import Model
-from ..utils import git_commit, get_git_hash, reveal_data, should_show
+from ..utils import git_commit, get_git_hash, should_show
 from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, set_third_party_logger
 from ..utils.model import get_num_params, get_model_size
 from ..utils.path import cleardir
@@ -187,7 +187,8 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
-    parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_coords'], default='atoms_coords')
+    parser.add_argument("--pocket-format", choices=['smi_atoms_coords', 'atoms_coords', 'ordered_atoms_coords', 'atom_coords'], default='atoms_coords')
+    parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
     parser.add_argument("--coord-range", type=int, default=250)
     # model
     parser.add_argument('--mamba', action='store_true')
@@ -256,6 +257,10 @@ def update_args(args: Namespace) -> Namespace:
         if hasattr(args, name):
             delattr(args, name)
     
+    # 260314 residue
+    if not hasattr(args, 'pocket_order'):
+        args.pocket_order = 'residue'
+
     return args
 
 def update_pretrain_args(args: Namespace, targs: dict):

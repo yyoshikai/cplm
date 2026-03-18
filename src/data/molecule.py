@@ -2,12 +2,15 @@ from typing import Literal
 import numpy as np
 from torch.utils.data import Dataset
 from rdkit import Chem
+from ..chem import set_atom_order
 from .data import WrapDataset, get_rng
 from .tokenizer import SmilesTokenizer, FloatTokenizer
+from .protein import AtomRepr
 
 def element_symbols() -> list[str]:
     table = Chem.GetPeriodicTable()
     return [table.GetElementSymbol(i) for i in range(1, 119)]
+
 
 class MolProcessDataset(WrapDataset[Chem.Mol]):
     def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, h: bool, random: bool):
@@ -25,32 +28,21 @@ class MolProcessDataset(WrapDataset[Chem.Mol]):
         else:
             mol = Chem.RemoveHs(mol)
 
-        # randomize/canonicalize
-        # refer /workspace/cplm/experiments/tests/source.ipynb "260204 canonical"
-        if self.random:
-            rng = get_rng(self.base_seed, idx)
-            idxs = np.arange(mol.GetNumAtoms(), dtype=int)
-            rng.shuffle(idxs)
-            ran = Chem.MolToSmiles(mol, canonical=False)
-        else:
-            can = Chem.MolToSmiles(mol, canonical=True)
-        mol = Chem.RenumberAtoms(mol, eval(mol.GetProp('_smilesAtomOutputOrder')))
+        # MolTokenizeDatasetに移しても良いと思ったが、get_finetune_dataでRenumberAtoms後のmolが必要なのでこうしているっぽい。
+        rng = get_rng(self.base_seed, idx)
+        mol = set_atom_order(mol, self.random, rng)
         return mol
 
-
-class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], *, format: Literal['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: float, h_coord: bool=True):
-        super().__init__(mol_data)
-        self.mol_data = mol_data
+class MolTokenizer:
+    def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float):        
         self.h_coord = h_coord
         self.format = format
         if self.format == 'smiles_coords':
             self.smi_tokenizer = SmilesTokenizer()
         self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
-        
-    def __getitem__(self, idx: int):
-        mol = self.mol_data[idx]
 
+    def tokenize(self, mol: Chem.Mol):
+        
         smi = Chem.MolToSmiles(mol, canonical=False)
         atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
         
@@ -93,8 +85,7 @@ class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
             tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(shown_coords)
             order = list(range(len(tokens)))
         return tokens, order
-
-    def vocs(self) -> set[str]:
+    def vocs(self):
         if self.format == 'smiles_coords':
             vocs = self.smi_tokenizer.vocs()
         else:
@@ -103,6 +94,20 @@ class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
         if self.format != 'atom_coords':
             vocs.add('[XYZ]')
         return vocs
+
+
+
+class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
+    def __init__(self, mol_data: Dataset[Chem.Mol], *, format: Literal['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: float, h_coord: bool=True):
+        super().__init__(mol_data)
+        self.mol_data = mol_data
+        self.mol_tokenizer = MolTokenizer(format, h_coord, coord_range)
+        
+    def __getitem__(self, idx: int):
+        return self.mol_tokenizer.tokenize(self.mol_data[idx])
+
+    def vocs(self) -> set[str]:
+        return self.mol_tokenizer.vocs()
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):

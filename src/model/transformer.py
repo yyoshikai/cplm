@@ -225,7 +225,7 @@ class TransformerModel(Model):
         self.get_capture_rate = lru_cache(1)(self._get_capture_rate)
         
     
-    def get_pos_buffer(self, size_or_positions: int|list[int]) -> tuple[Tensor, Tensor]:
+    def get_pos_buffer(self, size_or_positions: int|list[int]|tuple[int]) -> tuple[Tensor, Tensor]:
         """
         Returns
         -------
@@ -233,10 +233,12 @@ class TransformerModel(Model):
         cos: Tensor[L, Dh](float)
         """
         sup_pos = size_or_positions if isinstance(size_or_positions, int) else max(size_or_positions)+1
+
         if sup_pos <= self.pos_buffer_len: # fast path
             if isinstance(size_or_positions, int):
                 return self.sin[:size_or_positions], self.cos[:size_or_positions]
             else:
+                size_or_positions = torch.tensor(size_or_positions, dtype=torch.long, device=self.sin.device)
                 return self.sin[size_or_positions], self.cos[size_or_positions]
         self.n_make_pos_buffer += 1
         positions = range(sup_pos) if isinstance(size_or_positions, int) else size_or_positions

@@ -13,7 +13,7 @@ def rdmol2obmol(rdmol: Chem.Mol) -> OBMol:
     obc.ReadString(obmol, sdf)
     return obmol
 
-def obmol2rdmol(obmol: OBMol) -> Chem.Mol:
+def obmol2rdmol(obmol: OBMol, sanitize: bool=True) -> Chem.Mol:
     """
     MolFromMolBlockだとPropが無視される。
     
@@ -22,7 +22,7 @@ def obmol2rdmol(obmol: OBMol) -> Chem.Mol:
     obc.SetOutFormat('sdf')
     sdf = obc.WriteString(obmol)
     ms = Chem.SDMolSupplier()
-    ms.SetData(sdf, removeHs=False)
+    ms.SetData(sdf, removeHs=False, sanitize=sanitize)
     return next(ms)
 
 def pdb2obmol(pdb: str) -> OBMol:
@@ -64,3 +64,16 @@ def array_to_conf(coord: np.ndarray) -> Conformer:
 def get_coord_from_mol(mol: OBMol) -> np.ndarray:
     coord = mol.GetCoordinates()
     return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
+
+# randomize/canonicalize
+# refer /workspace/cplm/experiments/tests/source.ipynb "260204 canonical"
+def set_atom_order(mol: Chem.Mol, random: bool, rng: np.random.Generator) -> Chem.Mol:
+    if random:
+        idxs = np.arange(mol.GetNumAtoms(), dtype=int)
+        rng.shuffle(idxs)
+        ran = Chem.MolToSmiles(mol, canonical=False)
+    else:
+        can = Chem.MolToSmiles(mol, canonical=True)
+    mol = Chem.RenumberAtoms(mol, eval(mol.GetProp('_smilesAtomOutputOrder')))
+    return mol
+

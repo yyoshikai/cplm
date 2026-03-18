@@ -5,8 +5,8 @@ import numpy as np
 from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
 from torch.utils.data import Dataset
 from ..utils import slice_str
-from ..chem import get_coord_from_mol
-from .data import WrapDataset
+from ..chem import get_coord_from_mol, obmol2rdmol, set_atom_order
+from .data import WrapDataset, get_rng
 from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
 
 AtomRepr = Literal['none', 'atom', 'all']
@@ -120,13 +120,21 @@ class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def vocs(self) -> set[str]:
         return self.protein_tokenizer.vocs()
 
+from .molecule import MolTokenizer
 class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, protein_data: Dataset[OBMol], *,
-            heavy: AtomRepr, h: AtomRepr, format, coord_range: int):
+            heavy: AtomRepr, h: AtomRepr, format, coord_range: int, order: Literal['residue', 'can', 'ran'], base_seed: int):
         super().__init__(protein_data)
         self.protein_data = protein_data
-        self.protein_tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
+
+        self.order = order
+        if order == 'residue':
+            self.tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
+        else:
+            self.tokenizer = MolTokenizer(format, h_coord=h == 'all', coord_range=coord_range)
+
         self.h = h
+        self.base_seed = base_seed
 
     def __getitem__(self, idx: int):
         protein = self.protein_data[idx]
@@ -137,16 +145,23 @@ class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
         else:
             success = protein.AddHydrogens()
         assert success
-        # Order atoms
-        atoms = np.array([atom.GetResidue().GetAtomID(atom).strip() for atom in OBMolAtomIter(protein)])
-        residue_idxs = np.array([atom.GetResidue().GetIdx() for atom in OBMolAtomIter(protein)])
-        coords = get_coord_from_mol(protein)
-        orders = np.argsort(residue_idxs, kind='stable')
-        atoms = atoms[orders]
-        coords = coords[orders]
 
-        # tokenize
-        return self.protein_tokenizer(atoms, coords)
-
+        if self.order == 'residue':
+            # Order atoms
+            atoms = np.array([atom.GetResidue().GetAtomID(atom).strip() for atom in OBMolAtomIter(protein)])
+            residue_idxs = np.array([atom.GetResidue().GetIdx() for atom in OBMolAtomIter(protein)])
+            coords = get_coord_from_mol(protein)
+            orders = np.argsort(residue_idxs, kind='stable')
+            atoms = atoms[orders]
+            coords = coords[orders]
+            # tokenize
+            tokens, orders = self.tokenizer(atoms, coords)
+        else:
+            protein = obmol2rdmol(protein, sanitize=False) # sanitize=True raises errors but not needed for following processes
+            protein = set_atom_order(protein, self.order == 'ran', get_rng(self.base_seed, idx))
+            tokens, orders = self.tokenizer.tokenize(protein)
+        return tokens, orders
     def vocs(self) -> set[str]:
-        return self.protein_tokenizer.vocs()
+        return self.tokenizer.vocs()
+
+        
