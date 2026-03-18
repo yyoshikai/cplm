@@ -189,6 +189,7 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
     parser.add_argument("--pocket-format", choices=['smi_atoms_coords', 'atoms_coords', 'ordered_atoms_coords', 'atom_coords'], default='atoms_coords')
     parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
+    parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion', 'ligand', 'water'])
     parser.add_argument("--coord-range", type=int, default=250)
     # model
     parser.add_argument('--mamba', action='store_true')
@@ -257,9 +258,13 @@ def update_args(args: Namespace) -> Namespace:
         if hasattr(args, name):
             delattr(args, name)
     
-    # 260314 residue
+    # 260314 pocket_order
     if not hasattr(args, 'pocket_order'):
         args.pocket_order = 'residue'
+
+    # 260318 pocket_hetatm
+    if not hasattr(args, 'pocket_hetatm'):
+        args.pocket_hetatm = ['ion', 'ligand', 'water']
 
     return args
 

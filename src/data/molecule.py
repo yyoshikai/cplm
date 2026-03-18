@@ -1,4 +1,5 @@
 from typing import Literal
+from logging import getLogger
 import numpy as np
 from torch.utils.data import Dataset
 from rdkit import Chem
@@ -34,6 +35,7 @@ class MolProcessDataset(WrapDataset[Chem.Mol]):
         return mol
 
 class MolTokenizer:
+    logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float):        
         self.h_coord = h_coord
         self.format = format
@@ -41,9 +43,14 @@ class MolTokenizer:
             self.smi_tokenizer = SmilesTokenizer()
         self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
 
+        self.logged = False
+
     def tokenize(self, mol: Chem.Mol):
         
         smi = Chem.MolToSmiles(mol, canonical=False)
+        if not self.logged:
+            self.logger.debug(f"{smi=}")
+            self.logged = True
         atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
         
         coords = mol.GetConformer().GetPositions()

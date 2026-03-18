@@ -14,7 +14,7 @@ from ..data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCD
 from ..data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from ..data.datasets.crossdocked import CDDataset, CDProteinDataset
 from ..data.datasets.pdb import PDBUniMolRandomDataset
-from ..data.protein import Pocket, PocketTokenizeDataset, ProteinTokenizeDataset
+from ..data.protein import Pocket, ProteinProcessDataset, PocketTokenizeDataset, ProteinTokenizeDataset
 from ..data.molecule import MolProcessDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset
 from ..data.coord import CoordTransformDataset
 
@@ -88,6 +88,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             if cls == UniMolPocketDataset:
                 protein = PocketTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range)
             else:
+                protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
                 protein = ProteinTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range, order=args.pocket_order, base_seed=args.seed+d_seed)
             sentence = SentenceDataset('[POCKET]', protein, '[END]')
             vocs |= sentence.vocs()
@@ -166,6 +167,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     weights = []
     ## pocket
     if args.protein:
+        protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
         protein_tokens = ProteinTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range, order=args.pocket_order, base_seed=args.seed)
     else:
         protein_tokens = PocketTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range)

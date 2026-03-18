@@ -11,7 +11,7 @@ from torch.utils.data import StackDataset, Subset
 from src.utils.path import make_pardir
 from src.data import CacheDataset, index_dataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
-from src.data.protein import ProteinTokenizeDataset, AtomRepr
+from src.data.protein import ProteinProcessDataset, ProteinTokenizeDataset, AtomRepr
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
 from src.generate import generate
 from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer, RangeWriteStreamer
@@ -107,6 +107,7 @@ if __name__ == '__main__':
     assert targs.pocket_format in ['ordered_atoms_coords', 'atoms_coords']
 
     protein = PDBUniMolRandomDataset('valid')
+    protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
     protein = CacheDataset(protein)
     protein_token = ProteinTokenizeDataset(protein, heavy=targs.pocket_heavy, h=targs.pocket_h, format=targs.pocket_format, coord_range=targs.coord_range, order=targs.pocket_order, base_seed=args.seed)
     protein_atom_token, _coord_token = TokenSplitDataset(protein_token, '[XYZ]').untuple()

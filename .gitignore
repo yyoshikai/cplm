@@ -17,7 +17,7 @@ tmp
 !/generate/*.py
 !/generate/rec_ligand/eval.py
 !/generate/redock/eval.py
-
+temp.py
 # system
 __pycache__/
 .ipynb_checkpoints

@@ -1,11 +1,14 @@
+import io
 from dataclasses import dataclass
 from typing import Literal
 import numpy as np
 
 from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
+from Bio import PDB
+from Bio.PDB.Residue import Residue
 from torch.utils.data import Dataset
 from ..utils import slice_str
-from ..chem import get_coord_from_mol, obmol2rdmol, set_atom_order
+from ..chem import get_coord_from_mol, obmol2rdmol, set_atom_order, obmol2pdb, pdb2obmol
 from .data import WrapDataset, get_rng
 from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
 
@@ -28,6 +31,42 @@ def pocket2pdb(pocket: Pocket, out_path: str):
             if atom == 'H': continue
             f.write(f"ATOM  {ia:5}  {atom:<3} UNK A   1    {coord[0]:8.03f}{coord[1]:8.03f}{coord[1]:8.03f}  1.00 40.00           {atom[0]}  \n")
 
+class _ProteinProcessSelect(PDB.Select):
+    def __init__(self, ion: bool, ligand: bool, water: bool):
+        self.ion = ion
+        self.ligand = ligand
+        self.water = water
+    def accept_residue(self, residue: Residue):
+        id0 = residue.get_id()[0]
+        if id0 == ' ': # amino acid
+            return True
+        elif id0 == 'W':
+            return self.water
+        elif id0[:2] == 'H_':
+            if len(id0[2:]) <= 2:
+                return self.ion
+            else:
+                return self.ligand
+        else:
+            raise ValueError
+
+
+class ProteinProcessDataset(WrapDataset[OBMol]):
+    def __init__(self, protein_data: Dataset[OBMol], ion: bool, ligand: bool, water: bool):
+        super().__init__(protein_data)
+        self.select = _ProteinProcessSelect(ion, ligand, water)
+
+    def __getitem__(self, idx: int):
+        protein = self.dataset[idx]
+        pdb = obmol2pdb(protein)
+        parser = PDB.PDBParser(QUIET=True)
+        protein = parser.get_structure('a', io.StringIO(pdb))
+        pdbio = PDB.PDBIO()
+        string_io = io.StringIO()
+        pdbio.set_structure(protein)
+        pdbio.save(string_io, self.select)
+        pdb = string_io.getvalue()
+        return pdb2obmol(pdb)
 
 class ProteinTokenizer:
     def __init__(self, *, heavy: AtomRepr, h: AtomRepr, format, coord_range):
