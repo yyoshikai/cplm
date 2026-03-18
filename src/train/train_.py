@@ -189,7 +189,7 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
     parser.add_argument("--pocket-format", choices=['smi_atoms_coords', 'atoms_coords', 'ordered_atoms_coords', 'atom_coords'], default='atoms_coords')
     parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
-    parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion', 'ligand', 'water'])
+    parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion', 'ligand', 'water'], nargs='*')
     parser.add_argument("--coord-range", type=int, default=250)
     # model
     parser.add_argument('--mamba', action='store_true')
