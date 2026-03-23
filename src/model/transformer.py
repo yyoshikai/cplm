@@ -22,6 +22,8 @@ from .model import Streamer, Model
 
 logger = logging.getLogger(__name__)
 
+KVCache = tuple[Tensor, Tensor, int]
+
 class MultiheadAttention(nn.Module):
 
     def __init__(self, embed_dim, num_heads, dropout=0., device=None, dtype=None) -> None:
@@ -44,15 +46,16 @@ class MultiheadAttention(nn.Module):
         
         self.n_forward = 0
 
-    def forward(self, x: Tensor, sin: Tensor, cos: Tensor, is_causal: bool=True, src_mask: Tensor|None=None, cache: dict[str, Tensor]|None=None) -> tuple[Tensor, Optional[Tensor]]:
+    def forward(self, x: Tensor, sin: Tensor, cos: Tensor, is_causal: bool=True, src_mask: Tensor|None=None, cache: KVCache|None=None) -> tuple[Tensor, Optional[Tensor]]:
         """
         x: Tensor[L, B, D](float)
         src_mask: Tensor expandable to [B, H, Lx, Lc]
         sin: Tensor[L, Dh/2](float) or [B, L, Dh]
         cos: Tensor[L, Dh/2](float) or [B, L, Dh]
         cache:
-            'k': Tensor[B, H, L, Dh]
-            'v': Tensor[B, H, L, Dh] 
+            key Tensor[B, H, L, Dh]
+            value Tensor[B, H, L, Dh]
+            size int
 
         """
         self.n_forward += 1
@@ -69,20 +72,24 @@ class MultiheadAttention(nn.Module):
         k = k.view(L, B * self.num_heads, Dh).transpose(0, 1).view(B, self.num_heads, L, Dh) # [B, H, L, Dh]
         v = v.view(L, B * self.num_heads, Dh).transpose(0, 1).view(B, self.num_heads, L, Dh) # [B, H, L, Dh]
             
-        sin_pos = torch.stack([sin, sin], dim=-1).reshape(-1, 1, L, Dh) # [1/B, 1, L, Dh]
-        cos_pos = torch.stack([cos, cos], dim=-1).reshape(-1, 1, L, Dh) # [1/B, 1, L, Dh]
+        sin_pos = torch.stack([sin, sin], dim=-1).reshape(-1, 1, L, Dh) # [1 or B, 1, L, Dh]
+        cos_pos = torch.stack([cos, cos], dim=-1).reshape(-1, 1, L, Dh) # [1 or B, 1, L, Dh]
 
         rotate_half_q = torch.stack([-q[..., 1::2], q[..., ::2]], dim=-1).reshape_as(q)
         q = q * cos_pos + rotate_half_q * sin_pos
         rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
         k = k * cos_pos + rotate_half_k * sin_pos
+        cache = (k, v, L)
 
         if cache is not None:
-            k = torch.cat([cache['k'], k], dim=2)
-            v = torch.cat([cache['v'], v], dim=2)
+            cache_k, cache_v, cache_size = cache
+            cache_k[:, :, cache_size:cache_size+L, :].fill_(k)
+            cache_v[:, :, cache_size:cache_size+L, :].fill_(v)
+            k = cache_k[:,:,:cache_size+1, :]
+            v = cache_v[:,:,:cache_size+1, :]
+            cache = (cache_k, cache_v, cache_size+L)
         if src_mask is not None:
             src_mask = src_mask.contiguous()
-        cache = {'k': k, 'v': v}
         attn_output = scaled_dot_product_attention(q.contiguous(), k.contiguous(), v.contiguous(), dropout_p = self.dropout if self.training else 0.0, attn_mask=src_mask, is_causal=is_causal)
         attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(B * L, D)
 
@@ -117,7 +124,7 @@ class TransformerEncoderLayer(nn.Module):
             activation = _get_activation_fn(activation)
         self.activation = activation
 
-    def forward(self, src: Tensor, sin: Tensor, cos: Tensor, is_causal: bool, src_mask: Tensor|None=None, cache: dict[str, Tensor]|None=None) -> Tensor:
+    def forward(self, src: Tensor, sin: Tensor, cos: Tensor, is_causal: bool, src_mask: Tensor|None=None, cache: KVCache|None=None) -> Tensor:
 
         x = src
         if self.norm_first:
@@ -304,33 +311,57 @@ class TransformerModel(Model):
         for context_size, position in zip(context_sizes, positions):
             assert len(position) == context_size
 
+        # get unique contexts
+        ucontext_positions: list[tuple[Tensor, Tensor]] = []
+        b2iuc = []
+        for context, position in zip(contexts, positions):
+            for iuc, (ucontext, uposition) in enumerate(ucontext_positions):
+                if ucontext.shape == context.shape and torch.all(ucontext == context) and uposition == position:
+                    b2iuc.append(iuc)
+                    break
+            else:
+                b2iuc.append(len(ucontext_positions))
+                ucontext_positions.append((context, position))
+        iuc2bs = {iuc: [b for b, iuc0 in enumerate(b2iuc) if iuc0 == iuc] for iuc in set(b2iuc)}
+        
+
         # Initial forward
-        caches = [{'k': [], 'v': []} for layer in self.layers] # caches[i_layer][k/v][i_data]
-        cur_inputs = []
-        is_continues = []
-        next_positions = []
-        for b in range(B):
-            is_continue, next_position, next_token_range = streamers[b].put(contexts[b].tolist()) # [L], list[int]
-            is_continues.append(is_continue)
+        ucaches = [] # [iuc][layer]
+        ucur_inputs = []
+        uis_continues = []
+        unext_positions = []
+        for iuc, (ucontext, uposition) in enumerate(ucontext_positions):
+            outs = [streamers[b].put(ucontext.tolist()) for b in iuc2bs[iuc]]
+            assert all(outs[0] == out for out in outs[1:])
+            is_continue, next_position, next_token_range = outs[0]
+            uis_continues.append(is_continue)
             if not is_continue: continue
-            sin, cos = self.get_pos_buffer(positions[b]) # [L, Dh], [L, Dh]
-            x = contexts[b].unsqueeze(-1) # [L, 1(B)]
+            sin, cos = self.get_pos_buffer(uposition) # [L, Dh], [L, Dh]
+            x = ucontext.unsqueeze(-1) # [L, 1(B)]
             x = self.embedding(x)
+            cache = []
             for il, layer in enumerate(self.layers):
-                x, cache = layer(x, sin, cos, is_causal=True, cache=None) # [L, 1, D], {'k': [1, H, L, Dh]}
-                for k, v in cache.items():
-                    v = v.squeeze(0).transpose(0, 1) # [L, H, Dh]
-                    caches[il][k].append(v.detach().clone())
+                x, layer_cache = layer(x, sin, cos, is_causal=True, cache=None) # [L, 1, D]
+                cache.append(layer_cache)
+            ucaches.append(cache)
             logit = self.predictor(self.norm(x[-1, 0])) # [L, 1, D] -> [D]
             range_logit = logit[next_token_range]
             range_output = torch.multinomial(F.softmax(range_logit, dim=0), num_samples=1).item()
             output = next_token_range[range_output]
-            cur_inputs.append(output)
-            next_positions.append(next_position)
+            ucur_inputs.append(output)
+            unext_positions.append(next_position)
+        caches = [{
+            'k': [ucache['k'][iuc] for iuc in b2iuc], 
+            'v': [ucache['v'][iuc] for iuc in b2iuc], 
+        } for ucache in ucaches]
+        cur_inputs = [ucur_inputs[iuc] for iuc in b2iuc]
+        is_continues = [uis_continues[iuc] for iuc in b2iuc]
+        next_positions = [unext_positions[iuc] for iuc in b2iuc]
+
         streamers = list(itr.compress(streamers, is_continues))
         cache = [{k: pad_sequence(v, batch_first=True).transpose(1, 2) for k, v in cache.items()} for cache in caches] # [i_layer][k,v][B, H, L, Dh]
         Bc, _, L, _ = cache[0]['k'].shape
-        src_mask = torch.zeros((Bc, L), device=device) # [B, Lkv]
+        src_mask = torch.zeros((Bc, L), device=device) # [B, L_context]
         for b, context in enumerate(contexts):
             src_mask[b, len(context):] = -torch.inf
 
