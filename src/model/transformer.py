@@ -314,8 +314,7 @@ class TransformerModel(Model):
         context_sizes = [len(context) for context in contexts]
         Lcontext = max(context_sizes)
         Lmax = Lcontext+max_new_token-1
-        print(f"{context_sizes=}, {Lcontext=}, {Lmax=}")
-
+        
         # check shape
         assert len(streamers) == B
         assert max_new_token >= 1
@@ -333,7 +332,6 @@ class TransformerModel(Model):
             else:
                 b2iuc.append(len(ucontext_positions))
                 ucontext_positions.append((context, position))
-        print(f"{b2iuc=}")
         nuc = len(ucontext_positions)
         iuc2bs = {iuc: [b for b, iuc0 in enumerate(b2iuc) if iuc0 == iuc] for iuc in set(b2iuc)}
         
@@ -342,7 +340,6 @@ class TransformerModel(Model):
             [(torch.zeros((1, H, Lmax, Dh), device=device), torch.zeros((1, H, Lmax, Dh), device=device)) for _ in self.layers]
             for iuc in range(nuc)
         ]
-        print(len(ucaches), len(self.layers))
         ucur_inputs = []
         uis_continues = []
         unext_positions = []

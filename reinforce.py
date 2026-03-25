@@ -164,7 +164,7 @@ def generate(
         streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in token_streamers]
         if step < 5:
             streamers = [TimeLogStreamer(streamer, str(b), 10.0) for b, streamer in enumerate(streamers)]
-            streamers[0] = TqdmStreamer(streamers[0], total=max_new_token, desc="generate")
+            # streamers[0] = TqdmStreamer(streamers[0], total=max_new_token, desc="generate")
         with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
             model.generate2(prompt_tokens, positions, streamers, max_new_token)
         for streamer in score_streamers:
