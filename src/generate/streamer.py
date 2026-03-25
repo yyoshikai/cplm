@@ -5,6 +5,7 @@ from time import time
 from collections.abc import Generator
 from logging import getLogger
 import numpy as np, pandas as pd
+from tqdm import tqdm
 from rdkit import Chem
 from rdkit.Chem.rdDetermineBonds import DetermineBondOrders
 from openbabel.openbabel import OBMol
@@ -166,6 +167,15 @@ class TimeLogStreamer(WrapperStreamer):
                 else:
                     est_t = self.mean_dt*(est_n-self.n)
                     self.logger.info(f"[{self.name}]generated {self.n}/{est_n} token in {t:02f}s (estimated to end in {est_t:.02f}s)")
+        return self.streamer.put(tokens)
+
+class TqdmStreamer(WrapperStreamer):
+    def __init__(self, streamer: Streamer, total: int|None=None, desc: str|None=None):
+        super().__init__(streamer)
+        self.pbar = tqdm(total=total, desc=desc)
+    
+    def put(self, tokens: list[int]):
+        self.pbar.update()
         return self.streamer.put(tokens)
 
 class LigandStreamer(GeneratorStreamer):

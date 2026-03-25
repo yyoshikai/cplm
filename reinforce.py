@@ -28,7 +28,7 @@ from src.model import Model
 from src.train import set_env, get_model, get_process_ranks
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
-from src.generate.streamer import WrapperStreamer, LigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
+from src.generate.streamer import WrapperStreamer, LigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer, TqdmStreamer
 from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer, get_sample_stat, whiten_scores
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
@@ -164,6 +164,7 @@ def generate(
         streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in token_streamers]
         if step < 5:
             streamers = [TimeLogStreamer(streamer, str(b), 10.0) for b, streamer in enumerate(streamers)]
+            streamers[0] = TqdmStreamer(streamers[0], total=max_new_token, desc="generate")
         with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
             model.generate2(prompt_tokens, positions, streamers, max_new_token)
         for streamer in score_streamers:
