@@ -336,8 +336,9 @@ class TransformerModel(Model):
         iuc2bs = {iuc: [b for b, iuc0 in enumerate(b2iuc) if iuc0 == iuc] for iuc in set(b2iuc)}
         
         # Initial forward
+        kwargs = dict(device=device, dtype=self.embedding.weight.dtype)
         ucaches = [
-            [(torch.zeros((1, H, Lmax, Dh), device=device), torch.zeros((1, H, Lmax, Dh), device=device)) for _ in self.layers]
+            [(torch.zeros((1, H, Lmax, Dh), **kwargs), torch.zeros((1, H, Lmax, Dh), **kwargs)) for _ in self.layers]
             for iuc in range(nuc)
         ]
         ucur_inputs = []
@@ -374,7 +375,7 @@ class TransformerModel(Model):
         next_positions = [unext_positions[iuc] for iuc in b2iuc]
 
         streamers = list(itr.compress(streamers, is_continues))
-        src_mask = torch.zeros((B, 1, 1, Lmax), device=device) # [B, L]
+        src_mask = torch.zeros((B, 1, 1, Lmax), **kwargs) # [B, L]
         for b, context in enumerate(contexts):
             src_mask[b, :, :, len(context):Lcontext] = -torch.inf
 
