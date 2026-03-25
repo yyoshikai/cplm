@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-from torch.nn.utils.rnn import pad_sequence
 from torch.nn.modules.transformer import _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.functional import scaled_dot_product_attention
@@ -46,7 +45,7 @@ class MultiheadAttention(nn.Module):
         
         self.n_forward = 0
 
-    def forward(self, x: Tensor, sin: Tensor, cos: Tensor, is_causal: bool=True, src_mask: Tensor|None=None, cache: KVCache|None=None) -> tuple[Tensor, Optional[Tensor]]:
+    def forward(self, x: Tensor, sin: Tensor, cos: Tensor, is_causal: bool=True, src_mask: Tensor|None=None, cache: KVCache|None=None, cache_size: int|None=None) -> tuple[Tensor, Optional[Tensor]]:
         """
         x: Tensor[L, B, D](float)
         src_mask: Tensor expandable to [B, H, Lx, Lc]
@@ -61,6 +60,7 @@ class MultiheadAttention(nn.Module):
         self.n_forward += 1
 
         # set up shape vars
+        assert (cache is None) == (cache_size is None)
         L, B, D = x.shape
         Dh = D // self.num_heads
 
@@ -79,18 +79,24 @@ class MultiheadAttention(nn.Module):
         q = q * cos_pos + rotate_half_q * sin_pos
         rotate_half_k = torch.stack([-k[..., 1::2], k[..., ::2]], dim=-1).reshape_as(k)
         k = k * cos_pos + rotate_half_k * sin_pos
-        cache = (k, v, L)
+        q = q.contiguous()
 
         if cache is not None:
-            cache_k, cache_v, cache_size = cache
-            cache_k[:, :, cache_size:cache_size+L, :].fill_(k)
-            cache_v[:, :, cache_size:cache_size+L, :].fill_(v)
-            k = cache_k[:,:,:cache_size+1, :]
-            v = cache_v[:,:,:cache_size+1, :]
-            cache = (cache_k, cache_v, cache_size+L)
+            cache_k, cache_v = cache
+            cache_k[:, :, cache_size:cache_size+L, :].copy_(k, non_blocking=True)
+            cache_v[:, :, cache_size:cache_size+L, :].copy_(v, non_blocking=True)
+            k = cache_k[:,:,:cache_size+L, :]
+            v = cache_v[:,:,:cache_size+L, :]
+            cache = cache_k, cache_v
+            if src_mask is not None:
+                src_mask = src_mask[:,:,:,:cache_size+L]
+        else:
+            cache = k, v
         if src_mask is not None:
             src_mask = src_mask.contiguous()
-        attn_output = scaled_dot_product_attention(q.contiguous(), k.contiguous(), v.contiguous(), dropout_p = self.dropout if self.training else 0.0, attn_mask=src_mask, is_causal=is_causal)
+            k = k.contiguous()
+
+        attn_output = scaled_dot_product_attention(q, k, v, dropout_p = self.dropout if self.training else 0.0, attn_mask=src_mask, is_causal=is_causal)
         attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(B * L, D)
 
         attn_output = F.linear(attn_output, self.out_proj.weight, self.out_proj.bias)
@@ -124,21 +130,21 @@ class TransformerEncoderLayer(nn.Module):
             activation = _get_activation_fn(activation)
         self.activation = activation
 
-    def forward(self, src: Tensor, sin: Tensor, cos: Tensor, is_causal: bool, src_mask: Tensor|None=None, cache: KVCache|None=None) -> Tensor:
+    def forward(self, src: Tensor, sin: Tensor, cos: Tensor, is_causal: bool, src_mask: Tensor|None=None, cache: KVCache|None=None, cache_size: int|None=None) -> Tensor:
 
         x = src
         if self.norm_first:
-            d_x, cache = self._sa_block(self.norm1(x), sin, cos, is_causal, src_mask, cache)
+            d_x, cache = self._sa_block(self.norm1(x), sin, cos, is_causal, src_mask, cache, cache_size)
             x = x + d_x
             x = x + self._ff_block(self.norm2(x))
         else:
-            d_x, cache = self._sa_block(x, sin, cos, is_causal, src_mask, cache)
+            d_x, cache = self._sa_block(x, sin, cos, is_causal, src_mask, cache, cache_size)
             x = self.norm1(x + d_x)
             x = self.norm2(x + self._ff_block(x))
         return x, cache
 
-    def _sa_block(self, x: Tensor, sin, cos, is_causal, src_mask, cache) -> Tensor:
-        x, cache = self.self_attn(x, sin, cos, is_causal, src_mask, cache)
+    def _sa_block(self, x: Tensor, sin, cos, is_causal, src_mask, cache, cache_size) -> Tensor:
+        x, cache = self.self_attn(x, sin, cos, is_causal, src_mask, cache, cache_size)
         return self.dropout1(x), cache
 
     def _ff_block(self, x: Tensor) -> Tensor:
@@ -294,7 +300,7 @@ class TransformerModel(Model):
         return output[0] if len(output) == 1 else output
 
     @torch.inference_mode()
-    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int|None):
+    def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int):
         """
         contexts: list[Tensor(L, torch.long)]
         positions: list[Tensor(L, torch.long)]
@@ -302,12 +308,17 @@ class TransformerModel(Model):
 
         # get shape
         B = len(contexts)
-        context_sizes = [len(context) for context in contexts]
+        H = self.layers[0].self_attn.num_heads
+        Dh = self.layers[0].self_attn.head_dim
         device = contexts[0].device
+        context_sizes = [len(context) for context in contexts]
+        Lcontext = max(context_sizes)
+        Lmax = Lcontext+max_new_token-1
+        print(f"{context_sizes=}, {Lcontext=}, {Lmax=}")
 
         # check shape
         assert len(streamers) == B
-        assert max_new_token is None or max_new_token >= 1
+        assert max_new_token >= 1
         for context_size, position in zip(context_sizes, positions):
             assert len(position) == context_size
 
@@ -322,48 +333,53 @@ class TransformerModel(Model):
             else:
                 b2iuc.append(len(ucontext_positions))
                 ucontext_positions.append((context, position))
+        print(f"{b2iuc=}")
+        nuc = len(ucontext_positions)
         iuc2bs = {iuc: [b for b, iuc0 in enumerate(b2iuc) if iuc0 == iuc] for iuc in set(b2iuc)}
         
-
         # Initial forward
-        ucaches = [] # [iuc][layer]
+        ucaches = [
+            [(torch.zeros((1, H, Lmax, Dh), device=device), torch.zeros((1, H, Lmax, Dh), device=device)) for _ in self.layers]
+            for iuc in range(nuc)
+        ]
+        print(len(ucaches), len(self.layers))
         ucur_inputs = []
         uis_continues = []
         unext_positions = []
         for iuc, (ucontext, uposition) in enumerate(ucontext_positions):
             outs = [streamers[b].put(ucontext.tolist()) for b in iuc2bs[iuc]]
-            assert all(outs[0] == out for out in outs[1:])
+            assert all(out == outs[0] for out in outs[1:])
             is_continue, next_position, next_token_range = outs[0]
             uis_continues.append(is_continue)
             if not is_continue: continue
             sin, cos = self.get_pos_buffer(uposition) # [L, Dh], [L, Dh]
             x = ucontext.unsqueeze(-1) # [L, 1(B)]
             x = self.embedding(x)
-            cache = []
             for il, layer in enumerate(self.layers):
-                x, layer_cache = layer(x, sin, cos, is_causal=True, cache=None) # [L, 1, D]
-                cache.append(layer_cache)
-            ucaches.append(cache)
+                x, _ = layer(x, sin, cos, is_causal=True, cache=ucaches[iuc][il], cache_size=0) # [L, 1, D]
             logit = self.predictor(self.norm(x[-1, 0])) # [L, 1, D] -> [D]
             range_logit = logit[next_token_range]
             range_output = torch.multinomial(F.softmax(range_logit, dim=0), num_samples=1).item()
             output = next_token_range[range_output]
             ucur_inputs.append(output)
             unext_positions.append(next_position)
-        caches = [{
-            'k': [ucache['k'][iuc] for iuc in b2iuc], 
-            'v': [ucache['v'][iuc] for iuc in b2iuc], 
-        } for ucache in ucaches]
+        caches = [ucaches[iuc] for iuc in b2iuc]
+        cache = [
+            (
+                torch.cat([caches[b][il][0] for b in range(B)], dim=0),
+                torch.cat([caches[b][il][1] for b in range(B)], dim=0), 
+            ) for il in range(self.num_layers)
+        ] # [i_layer][k,v][B, H, L, Dh]
+        cache_size = Lcontext
+        del caches
         cur_inputs = [ucur_inputs[iuc] for iuc in b2iuc]
         is_continues = [uis_continues[iuc] for iuc in b2iuc]
         next_positions = [unext_positions[iuc] for iuc in b2iuc]
 
         streamers = list(itr.compress(streamers, is_continues))
-        cache = [{k: pad_sequence(v, batch_first=True).transpose(1, 2) for k, v in cache.items()} for cache in caches] # [i_layer][k,v][B, H, L, Dh]
-        Bc, _, L, _ = cache[0]['k'].shape
-        src_mask = torch.zeros((Bc, L), device=device) # [B, L_context]
+        src_mask = torch.zeros((B, 1, 1, Lmax), device=device) # [B, L]
         for b, context in enumerate(contexts):
-            src_mask[b, len(context):] = -torch.inf
+            src_mask[b, :, :, len(context):Lcontext] = -torch.inf
 
         for i_gen in (range(1, max_new_token) if max_new_token is not None else itr.count(1)):
             positions = next_positions
@@ -380,21 +396,23 @@ class TransformerModel(Model):
                 is_continues = torch.tensor(is_continues, device=device)
                 ## src_mask
                 src_mask = src_mask[is_continues]
-                length_mask = torch.any(src_mask == 0, dim=0) # [Lkv]
-                src_mask = src_mask[:, length_mask]
+                length_mask = torch.any(src_mask.squeeze(1, 2) == 0, dim=0) # [Lmax, ]
+                src_mask = src_mask[:, :, :, length_mask].contiguous()
                 ## cache
-                cache = [{k: v[is_continues][:, :, length_mask] for k, v in layer_cache.items()}
-                        for layer_cache in cache]
+                cache = [(
+                    k[is_continues][:, :, length_mask], 
+                    v[is_continues][:,:,length_mask],
+                ) for k, v in cache]
 
             # make position
             sin, cos = self.get_pos_buffer(positions) # [B, Dh], [B, Dh]
             sin, cos = sin.unsqueeze(1), cos.unsqueeze(1) # [B, 1, Dh], # [B, 1, Dh]
-            src_mask = torch.cat([src_mask, torch.zeros((len(src_mask), 1), device=device)], dim=-1)
 
             x = torch.tensor(cur_inputs, dtype=torch.long, device=device).unsqueeze(0) # [1(L), B]
             x = self.embedding(x)
             for il, layer in enumerate(self.layers):
-                x, cache[il] = layer(x, sin, cos, is_causal=False, cache=cache[il], src_mask=src_mask.unsqueeze(1).unsqueeze(2))
+                x, _ = layer(x, sin, cos, is_causal=False, cache=cache[il], cache_size=cache_size, src_mask=src_mask)
+            cache_size += 1
             logits = self.predictor(self.norm(x[0])) # [1(L), B, D] -> [B, D]
             cur_inputs = []
             for b, (logit, next_token_range) in enumerate(zip(logits, next_token_ranges)):
@@ -402,6 +420,7 @@ class TransformerModel(Model):
                 range_output = torch.multinomial(F.softmax(range_logit, dim=-1), num_samples=1).item()
                 output = next_token_range[range_output]
                 cur_inputs.append(output)
+                
 
     def _get_mname(self, bf16: bool, kernel: str):        
         mname = f'tf_{kernel.lower()}'

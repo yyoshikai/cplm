@@ -253,7 +253,7 @@ def update_args(args: Namespace) -> Namespace:
     if not hasattr(args, 'pocket_h'):
         args.pocket_h = atom_reprs[args.pocket_h_atom, args.pocket_h_coord]
     if not hasattr(args, 'pocket_heavy'):
-        args.pocket_heavy = atom_reprs[not args.no_pocket_heavy_atom, args.no_pocket_heavy_coord]
+        args.pocket_heavy = atom_reprs[not args.no_pocket_heavy_atom, not args.no_pocket_heavy_coord]
     for name in ['no_lig_h_atom', 'no_lig_h_coord', 'pocket_h_atom', 'pocket_h_coord', 'no_pocket_heavy_coord', 'no_pocket_heavy_atom']:
         if hasattr(args, name):
             delattr(args, name)

@@ -89,6 +89,8 @@ def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
     else:
         return grads, grads
 
+
+
 class ReinforceDataIter:
     def __init__(self, train_data: Dataset, device: torch.device, batch_size: int, generate_per_sample: int, max_prompt_len: int, fix_pocket: bool, num_workers: int, seed: int):
         _, _, DATA_RANK = get_process_ranks()
@@ -116,7 +118,8 @@ class ReinforceDataIter:
         if self.rank == self.data_rank:
             all_items = []
             for si in range(self.batch_size*self.ddp_size // self.generate_per_sample):
-                all_items += [self.train_fixed_item if self.fix_pocket else self.train_iter.__next__()] * self.generate_per_sample
+                item = self.train_fixed_item if self.fix_pocket else self.train_iter.__next__()
+                all_items += [item] * self.generate_per_sample
             batched_items = [all_items[r*self.batch_size:(r+1)*self.batch_size] for r in range(self.ddp_size)]
         else:
             batched_items = None

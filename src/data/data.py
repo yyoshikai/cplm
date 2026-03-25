@@ -2,7 +2,7 @@ import os
 import queue
 import itertools as itr
 import multiprocessing as mp
-from functools import lru_cache
+from functools import lru_cache, wraps
 from typing import TypeVar, Generic, Optional
 from collections.abc import Callable, Iterable
 from logging import getLogger
@@ -15,6 +15,7 @@ from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
+logger = getLogger()
 
 class TupleDataset(Dataset[T_co]):
     def __init__(self, tuple_size: int):
@@ -232,3 +233,23 @@ class ReadDataset(IterableDataset[str]):
                 f = itr.islice(f, worker_info.id, None, worker_info.num_workers)
             for line in f:
                 yield line.rstrip()
+
+# 260325 Datasetに異様な時間がかかっていることがあったので、その解決用に作った。
+class TimeProxyDataset(WrapDataset[T_co]):
+    def __getitem__(self, idx: int):
+        logger.info(f"{type(self.dataset)}.__getitem__({idx}) started.")
+        output = self.dataset[idx]
+        logger.info(f"{type(self.dataset)}.__getitem__({idx}) ended.")
+        return output
+
+def add_time_hook(dataset: Dataset):
+    if not isinstance(dataset, TimeProxyDataset):
+        print(f"Added time hook: {type(dataset)}")
+        dataset = TimeProxyDataset(dataset)
+        
+        for k, v in vars(dataset.dataset).items():
+            if isinstance(v, Dataset):
+                v = add_time_hook(v)
+                setattr(dataset.dataset, k, v)
+    return dataset
+    
