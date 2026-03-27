@@ -8,7 +8,7 @@ from src.data import StackDataset, Subset, index_dataset
 from src.data.tokenizer import SmilesTokenizer
 from src.train.data import get_finetune_data
 from src.generate import generate
-from src.generate.streamer import LigandStreamer, TokenWriteStreamer, RangeWriteStreamer
+from src.generate.streamer import get_ligand_streamer, SaveLigandStreamer, TokenWriteStreamer, RangeWriteStreamer
 from src.chem import obmol2pdb
 
 
@@ -73,10 +73,8 @@ if __name__ == '__main__':
             def streamer_fn(item, i_trial, voc_encoder):
                 idx, rec, prompt_token, position = item
                 mwrite(f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb", obmol2pdb(rec))
-                streamer = LigandStreamer(
-                    new_sdf_path=f"{out_dir}/new_sdf/{idx}/{i_trial}.sdf", 
-                    coord_range=fargs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, lig_h=fargs.lig_h
-                )
+                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, args.no_token_range, fargs.lig_h)
+                streamer = SaveLigandStreamer(streamer)
                 streamer = TokenWriteStreamer(streamer, voc_encoder,
                     prompt_position=position,
                     prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv",

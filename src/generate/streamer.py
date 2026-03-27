@@ -7,7 +7,7 @@ from logging import getLogger
 import numpy as np, pandas as pd
 from tqdm import tqdm
 from rdkit import Chem
-from rdkit.Chem.rdDetermineBonds import DetermineBondOrders
+from rdkit.Chem.rdDetermineBonds import DetermineBondOrders, DetermineBonds
 from openbabel.openbabel import OBMol
 from ..utils import should_show
 from ..utils.path import make_pardir, mwrite
@@ -15,8 +15,6 @@ from ..model import Streamer, WrapperStreamer
 from ..data.molecule import element_symbols
 from ..data.protein import AtomRepr
 from ..data.tokenizer import FloatTokenizer, SmilesTokenizer, VocEncoder
-from ..chem import obmol2pdb
-from ..evaluate import eval_vina, eval_qvina
 from ..chem import array_to_conf
 
 def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool, center: np.ndarray|None) -> Generator[tuple[bool, list[int], list[int]], list[int], tuple[np.ndarray|None, int, str|None]]:
@@ -178,8 +176,12 @@ class TqdmStreamer(WrapperStreamer):
         self.pbar.update()
         return self.streamer.put(tokens)
 
-class LigandStreamer(GeneratorStreamer):
-    def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, lig_h: AtomRepr, center: np.ndarray|None=None):
+class LigandStreamer(Streamer):
+    def ligand(self) -> Chem.Mol|None:
+        raise NotImplementedError
+
+class SmilesLigandStreamer(GeneratorStreamer, LigandStreamer):
+    def __init__(self, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, lig_h: AtomRepr, center: np.ndarray|None=None):
         self.voc_encoder = voc_encoder
         self.coord_range = coord_range
         smi_tokenizer = SmilesTokenizer()
@@ -188,10 +190,11 @@ class LigandStreamer(GeneratorStreamer):
         if no_token_range:
             self.smi_token_range = list(range(self.voc_encoder.voc_size))
         self.no_token_range = no_token_range
-        self.new_sdf_path = new_sdf_path
         self.center = center
         self.mol = None
         self.error = 'PARSE_NOT_ENDED'
+        if lig_h not in ['all', 'none']:
+            raise NotImplementedError
         super().__init__()
 
     def put_generator(self):
@@ -221,27 +224,29 @@ class LigandStreamer(GeneratorStreamer):
                 coord, pos, self.error = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, self.no_token_range, False, self.center)
                 if coord is not None:
                     self.mol.AddConformer(array_to_conf(coord))
-                    if self.new_sdf_path is not None:
-                        make_pardir(self.new_sdf_path)
-                        with Chem.SDWriter(self.new_sdf_path) as w:
-                            w.write(self.mol)
         else:
             self.error = 'SMILES'
         yield False, next(pos_iter), [self.voc_encoder.voc2i['[END]']]
 
-class AtomLigandStreamer(GeneratorStreamer):
-    def __init__(self, new_sdf_path: str|None, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, lig_h: AtomRepr):
-        super().__init__()
+    def ligand(self):
+        return self.mol
+
+class AtomsCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
+    def __init__(self, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, lig_h: AtomRepr, center: np.ndarray|None = None):
         self.voc_encoder = voc_encoder
-        self.new_sdf_path = new_sdf_path
         self.coord_range = coord_range
         self.no_token_range = no_token_range
         self.atom_token_range = sorted(self.voc_encoder.encode(element_symbols()+['[XYZ]']))
-        self.atom_order = atom_order
         if self.no_token_range:
             self.all_token_range = list(range(voc_encoder.voc_size))
+        self.atom_order = atom_order
         self.n_generated_atom = None
         self.mol = None
+        if lig_h not in ['all', 'none']:
+            raise NotImplementedError
+        if center is not None:
+            raise NotImplementedError
+        super().__init__()
     def put_generator(self):
         prompt_tokens = yield
         prompt_tokens = self.voc_encoder.decode(prompt_tokens)
@@ -270,64 +275,135 @@ class AtomLigandStreamer(GeneratorStreamer):
                     self.mol.AddAtom(Chem.Atom(symbol))
                 self.mol.AddConformer(array_to_conf(coords))
                 DetermineBondOrders(self.mol)
-                if self.new_sdf_path is not None:
-                    make_pardir(self.new_sdf_path)
-                    with Chem.SDWriter(self.new_sdf_path) as w:
-                        w.write(self.mol)
             except Exception as e:
                 self.logger.warning(f"Error while making atom: {e.args[0]}")
                 self.mol = None
         yield False, pos, [self.voc_encoder.voc2i['[END]']]
 
-class EvaluateStreamer(WrapperStreamer):
+    def ligand(self):
+        return self.mol
+    
+class AtomCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, streamer: LigandStreamer|AtomLigandStreamer, e: cf.ProcessPoolExecutor, rec: OBMol, rec_pdbqt_path: str, vina_error_path: str|None, qvina_out_dir: str, qvina_cpu: int):
-        super().__init__(streamer)
-        self.rec = rec
-        self.rec_pdbqt_path = rec_pdbqt_path
-        self.vina_error_path = vina_error_path
-        self.qvina_out_dir = qvina_out_dir
-        self.vina_future = self.qvina_future = None
-        self.vina = self.min_vina = self.qvina = None
-        self.e = e
-        self.qvina_cpu = qvina_cpu
-    def put(self, tokens: list[int]):
-        is_remain, positions, token_range = self.streamer.put(tokens)
-        if not is_remain:
-            self.logger.debug("Evaluating vina...")
-            sdf_path = self.streamer.new_sdf_path
-            if os.path.exists(sdf_path):
-                with open(sdf_path) as f:
-                    lig_sdf = f.read()
-                rec_pdb = obmol2pdb(self.rec)
-                os.makedirs(self.qvina_out_dir, exist_ok=True)
-                with open(f"{self.qvina_out_dir}/rec.pdb", 'w') as f:
-                    f.write(rec_pdb)
-                self.vina_future = self.e.submit(eval_vina, 
-                    ligand=lig_sdf, 
-                    rec=rec_pdb, 
-                    rec_pdbqt_path=self.rec_pdbqt_path
-                )
-                self.qvina_future = self.e.submit(eval_qvina, 
-                    ligand=lig_sdf, 
-                    rec_pdb_path=f"{self.qvina_out_dir}/rec.pdb", 
-                    out_dir=self.qvina_out_dir,
-                    cpu=self.qvina_cpu
-                )
-        return is_remain, positions, token_range
-    def result(self):
-        if self.vina_future is not None:
-            self.vina, self.min_vina, e = self.vina_future.result()
-            if e is not None and self.vina_error_path is not None:
-                with open(self.vina_error_path, 'w') as f:
-                    tb = traceback.extract_tb(sys.exc_info()[2])
-                    f.write(''.join(traceback.format_list(tb)))
-                    f.write(f"{type(e).__name__}: {str(e)}")
-        if self.qvina_future is not None:
-            self.qvina, e, stdout, stderr = self.qvina_future.result()
-            if isinstance(e, Exception):
-                with open(f"{self.qvina_out_dir}/stdout.txt", 'w') as f:
-                    f.write(stdout)
-                with open(f"{self.qvina_out_dir}/stderr.txt", 'w') as f:
-                    f.write(stderr)
 
+    def __init__(self, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, lig_h: AtomRepr, center: np.ndarray|None=None):
+        self.voc_encoder = voc_encoder
+        self.coord_range = coord_range
+        self.no_token_range = no_token_range
+        self.n_generated_atom = None
+        self.mol = None
+        self.center = center
+        self.error = 'PARSE_NOT_ENDED'
+        if lig_h not in ['all', 'none']:
+            raise NotImplementedError
+        super().__init__()
+
+    def put_generator(self):
+        prompt_tokens = yield
+        prompt_tokens = self.voc_encoder.decode(prompt_tokens)
+        n_prompt_token = len(prompt_tokens)
+        assert prompt_tokens[-1] == '[LIGAND]'
+
+
+        coord_tokenizer = FloatTokenizer('', -self.coord_range, self.coord_range)
+        atom_tokens = set(self.voc_encoder.encode(element_symbols()+['[END]']))
+        int_tokens = set(self.voc_encoder.encode(coord_tokenizer.int_vocs()))
+        frac_tokens = set(self.voc_encoder.encode(coord_tokenizer.frac_vocs()))
+        if self.no_token_range:
+            atom_token_range = int_token_range = frac_token_range \
+                = list(range(self.voc_encoder.voc_size))
+        else:
+            atom_token_range = sorted(atom_tokens)
+            int_token_range = sorted(int_tokens)
+            frac_token_range = sorted(frac_tokens)
+
+
+        atoms = []
+        coordss = []
+        pos = n_prompt_token
+        end_token = self.voc_encoder.voc2i['[END]']
+        while True:
+            atom_token = yield True, pos, atom_token_range
+            assert len(atom_token) == 1
+            atom_token = atom_token[0]
+            pos += 1
+
+            if atom_token == end_token:
+                self.mol = Chem.RWMol()
+                for atom in atoms:
+                    self.mol.AddAtom(Chem.Atom(atom))
+                try:
+                    self.mol.AddConformer(array_to_conf(np.array(coordss)))
+                except Exception as e:
+                    self.logger.info(f"Error at AddConformer: {type(e).__name__}{e.args}")
+                    self.error = 'ADD_CONFORMER'
+                    self.mol = None
+                    break
+                try:
+                    DetermineBonds(self.mol)
+                except Exception as e:
+                    self.logger.info(f"Error at DetermineBondOrders: {type(e)}{e.args}")
+                    self.error = 'DETERMINE_BOND_ORDERS'
+                    self.mol = None
+                    break
+                self.error = None
+                break
+            elif atom_token not in atom_tokens:
+                self.error = 'ATOM'
+                break
+            else:
+                atoms.append(self.voc_encoder.i2voc[atom_token])
+                coords = []
+                for dim in range(3):
+                    int_token = yield True, pos, int_token_range
+                    frac_token = yield True, pos+1, frac_token_range
+                    pos += 2
+                    coord_str = ''.join(self.voc_encoder.decode(int_token+frac_token))
+                    try:
+                        coord = float(coord_str)
+                    except Exception:
+                        self.error = 'COORD_NOT_FLOAT'
+                        yield False, pos, [end_token]
+                        return
+                    if self.center is not None:
+                        coord += self.center[dim]
+                    coords.append(coord)
+                coordss.append(coords)
+        yield False, pos, [end_token]
+        return 
+    def ligand(self):
+        return self.mol
+
+def get_ligand_streamer(
+        format: str, 
+        coord_range: float, 
+        voc_encoder: VocEncoder, 
+        no_token_range: bool,
+        lig_h: AtomRepr, 
+        center: np.ndarray|None=None
+) -> LigandStreamer:
+    kwargs = dict(coord_range=coord_range, voc_encoder=voc_encoder, no_token_range=no_token_range, lig_h=lig_h, center=center)
+    if format == 'smiles_coords':
+        return SmilesLigandStreamer(**kwargs)
+    elif format in ['atoms_coords', 'ordered_atoms_coords']:
+        atom_order = format == 'ordered_atoms_coords'
+        return AtomsCoordsLigandStreamer(**kwargs, atom_order=atom_order)
+    elif format == 'atom_coords':
+        return AtomCoordsLigandStreamer(**kwargs)
+    else:
+        raise ValueError(f"Unknown {format=}")
+    
+class SaveLigandStreamer(WrapperStreamer):
+    def __init__(self, streamer: LigandStreamer, new_sdf_path: str):
+        super().__init__(streamer)
+        self.streamer = streamer
+        self.new_sdf_path = new_sdf_path
+    
+    def put(self, tokens: list[int]):
+        output = self.streamer.put(tokens)
+        mol = self.streamer.ligand()
+        if mol is not None and mol.GetNumConformers() > 0:
+            make_pardir(self.new_sdf_path)
+            with Chem.SDWriter(self.new_sdf_path) as w:
+                w.write(mol)
+        return output

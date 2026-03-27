@@ -28,7 +28,7 @@ from src.model import Model
 from src.train import set_env, get_model, get_process_ranks
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
-from src.generate.streamer import WrapperStreamer, LigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer, TqdmStreamer
+from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
 from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer, get_sample_stat, whiten_scores
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
@@ -138,6 +138,7 @@ def generate(
         max_new_token: int,
         coord_range: int,
         lig_h: AtomRepr,
+        lig_format: str,
         device: torch.device,
         size_recorder: IterateRecorder,
 
@@ -155,10 +156,13 @@ def generate(
     rank = dist.get_rank()
 
     model.eval()
-    ligand_streamers = [LigandStreamer(f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf" if do_save else None, coord_range, voc_encoder, False, lig_h, None) for idx in range(len(prompt_tokens))]
+    streamers = ligand_streamers = [get_ligand_streamer(lig_format, coord_range, voc_encoder, False, lig_h) for idx in range(len(prompt_tokens))]
+    if do_save:
+        streamers = [SaveLigandStreamer(streamer, f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf")
+                for idx, streamer in enumerate(streamers)]
     with cf.ProcessPoolExecutor(num_score_workers) as e:
         score_streamers = [
-            GetScoreStreamer(streamer, e, target, pdb, f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}", cpu=cpu, print_prepare=step < 3) for idx, (streamer, pdb) in enumerate(zip(ligand_streamers, pdbs))
+            GetScoreStreamer(streamer, e, target, pdb, f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}", cpu=cpu, print_prepare=step < 3) for idx, (streamer, pdb) in enumerate(zip(streamers, pdbs))
         ]
         token_streamers = [TokenSaveStreamer(streamer) for streamer in score_streamers]
         streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in token_streamers]
@@ -445,6 +449,7 @@ def main():
             args.max_new_token,
             fargs.coord_range,
             fargs.lig_h,
+            fargs.lig_format,
             device,
             size_recorder,
             step, 

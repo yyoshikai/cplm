@@ -1,7 +1,7 @@
 from argparse import ArgumentParser, Namespace
 import yaml
 from src.generate import generate
-from src.generate.streamer import LigandStreamer, AtomLigandStreamer, TokenWriteStreamer, RangeWriteStreamer
+from src.generate.streamer import SaveLigandStreamer, get_ligand_streamer, TokenWriteStreamer, RangeWriteStreamer
 
 if __name__ == '__main__':
     # arguments
@@ -35,22 +35,13 @@ if __name__ == '__main__':
             f"{f'/{args.genname}' if args.genname is not None else ''}/{args.studyname}/{args.opt}"
 
     def streamer_fn(item, i_trial, voc_encoder):
-        if targs.format == 'atoms_coords':
-            atom_order = targs.format == 'ordered_atoms_coords'
-            streamer = AtomLigandStreamer(
-                new_sdf_path=f"{out_dir}/new_sdf/{item}.txt",
-                coord_range=targs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, atom_order=atom_order, lig_h=targs.lig_h,
-            )
-        elif targs.format in ['atoms_coords', 'ordered_atoms_coords']:
-            streamer = LigandStreamer(
-                new_sdf_path=f"{out_dir}/new_sdf/{item}.sdf",
-                coord_range=targs.coord_range, voc_encoder=voc_encoder, no_token_range=args.no_token_range, lig_h=targs.lig_h
-            )
-        streamer = TokenWriteStreamer(streamer, voc_encoder,
+        streamer = get_ligand_streamer(targs.lig_format, targs.coord_range, voc_encoder, args.no_token_range, targs.lig_h)
+        streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf/{item}.sdf")
+        streamer = TokenWriteStreamer(streamer,
+            voc_encoder=voc_encoder,
             prompt_position=[0],
             prompt_csv_path=f"{out_dir}/prompt_token/{item}.csv",
             new_csv_path=f"{out_dir}/new_token/{item}.csv",
-            voc_encoder=voc_encoder
         )
         if args.check_token_range and (item*5//args.n) > ((item-1)*5//args.n):
             streamer = RangeWriteStreamer(streamer, voc_encoder,
@@ -60,5 +51,8 @@ if __name__ == '__main__':
     get_token_position_fn = lambda item: (['[LIGAND]'], [0])
 
     prompt_data = list(range(args.n))
-    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, 1, 1, args.max_new_token, args.batch_size, args.seed)
+    streamerss = generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt_data, streamer_fn, get_token_position_fn, 1, 1, args.max_new_token, args.batch_size, args.seed)
 
+    for i, streamer in enumerate(streamerss):
+        streamer = streamer[0].streamer.streamer
+        print(streamer.error)

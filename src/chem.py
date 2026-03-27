@@ -77,3 +77,12 @@ def set_atom_order(mol: Chem.Mol, random: bool, rng: np.random.Generator) -> Che
     mol = Chem.RenumberAtoms(mol, eval(mol.GetProp('_smilesAtomOutputOrder')))
     return mol
 
+def mol_from_atoms_coords(atoms: list[str], coords: np.ndarray) -> tuple[Chem.Mol|None, str|None]:
+    """
+    原子の元素記号と座標からChem.Molを作成
+    
+    Returns:
+        Chem.Mol|None: 分子、エラーの場合None
+        str|None: エラーの場合その内容、エラーでない場合None
+    """
+    

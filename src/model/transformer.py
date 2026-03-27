@@ -1,4 +1,4 @@
-import logging
+import math, logging
 import itertools as itr
 from typing import Optional, Union, Callable
 from collections import defaultdict
@@ -106,18 +106,25 @@ class MultiheadAttention(nn.Module):
 class TransformerEncoderLayer(nn.Module):
     __constants__ = ['norm_first']
 
-    def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
-                 activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
+    def __init__(self, d_model: int, nhead: int, activation: Union[str, Callable[[Tensor], Tensor]], dim_feedforward: int = 2048, dropout: float = 0.1,
                  layer_norm_eps: float = 1e-5, norm_first: bool = False,
-                 device=None, dtype=None) -> None:
+                 device=None, dtype=None, use_swiglu_ffn: bool=False) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout,
                                             **factory_kwargs)
+        
         # Implementation of Feedforward model
-        self.linear1 = nn.Linear(d_model, dim_feedforward, **factory_kwargs)
+        self.use_swiglu_ffn = use_swiglu_ffn
+        if use_swiglu_ffn:
+            # 通常のFFNと計算量を揃える
+            hidden_size = math.ceil(dim_feedforward*2/3 / 8)*8
+            self.linear1 = nn.Linear(d_model, hidden_size*2, **factory_kwargs)
+            self.linear2 = nn.Linear(hidden_size, d_model, **factory_kwargs)
+        else:
+            self.linear1 = nn.Linear(d_model, dim_feedforward, **factory_kwargs)
+            self.linear2 = nn.Linear(dim_feedforward, d_model, **factory_kwargs)
         self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_model, **factory_kwargs)
 
         self.norm_first = norm_first
         self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
@@ -148,7 +155,13 @@ class TransformerEncoderLayer(nn.Module):
         return self.dropout1(x), cache
 
     def _ff_block(self, x: Tensor) -> Tensor:
-        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        if self.use_swiglu_ffn:
+            x = self.linear1(x)
+            x1, x2 = x.chunk(2, dim=-1)
+            x = F.silu(x1)*x2
+            x = self.linear2(self.dropout(x))
+        else:
+            x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         return self.dropout2(x)
 
 def save_vocs(module, state_dict, prefix, local_metadata):
@@ -206,8 +219,8 @@ class TransformerModel(Model):
         self.d_ff_factor = d_ff_factor
         self.layers = nn.ModuleList([
             TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=d_model*d_ff_factor,
-            dropout=dropout, activation=activation,
+            d_model=d_model, nhead=nhead, activation=activation, dim_feedforward=d_model*d_ff_factor,
+            dropout=dropout, 
             norm_first=True) for i in range(num_layers)])
 
         self.num_layers = num_layers
