@@ -507,6 +507,14 @@ class TransformerModel(Model):
             max_gpuuse = max_gpuuse / self.get_capture_rate(bf16=bf16, kernel=kernel)
         return max_gpuuse
 
+    def get_gen_gpuuse(self, batch_size: int, length: int, max_new_token: int, n_prompt: int):
+        with open("src/model/gpuuse/generate/tf_efficient.yaml") as f:
+            elem2coef = yaml.safe_load(f)
+        g = 0
+        for elem, coef in elem2coef.items():
+            g += eval(elem, {'B': batch_size, 'L': length, 'P': n_prompt, 'N': max_new_token})*coef
+        return g
+
     @property
     def state_size(self):
         return self.d_model

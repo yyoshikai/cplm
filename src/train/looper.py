@@ -39,6 +39,10 @@ class Looper:
         pass
     def end_loops(self):
         pass
+    def state_dict(self) -> dict:
+        raise NotImplementedError
+    def load_state_dict(self):
+        raise NotImplementedError
 
 class Loopers(list[Looper], Looper):
     def start_loops(self):
@@ -82,7 +86,6 @@ class TimeLooper(Looper):
     
         self.cur_process = None
         self.cur_start_t = None
-    
         self.process_graph = defaultdict(set) # {later process: {former processes}}
         self.process_graph['init'] = set()
         self.process2t = defaultdict(float)
@@ -114,6 +117,21 @@ class TimeLooper(Looper):
 
     def time_end_loop(self):
         pass
+
+    def state_dict(self) -> dict:
+        return {
+            'start_loops_called': self.start_loops_called,
+            'cur_process': self.cur_process, 
+            'process_graph': dict(self.process_graph),
+            'process2t': dict(self.process2t)
+        }
+
+    def load_state_dict(self, state: dict):
+        self.start_loops_called = state['start_loops_called']
+        self.cur_start_t = time() if self.start_loops_called else None
+        self.process_graph = defaultdict(set, state['process_graph'])
+        self.process2t = defaultdict(float, state['process2t'])
+
 
 class TimeWriteLooper(TimeLooper):
     def __init__(self, path: str, write_max_interval: int):
@@ -160,11 +178,11 @@ class TimeWriteLooper(TimeLooper):
 class TimeLogLooper(TimeLooper):
     def __init__(self, logger: Logger, loop_name: str, max_interval: int):
         super().__init__()
+        self.logger = logger
         self.max_interval = max_interval
         self.loop_name = loop_name
 
         self.process2t_total = defaultdict(float)
-        self.logger = logger
         self.i_loop = 0
         self.last_log_loop = None
 
@@ -188,6 +206,20 @@ class TimeLogLooper(TimeLooper):
             self.logger.debug(f"    {process:>{max_process_width}}: "
                     f"{self.process2t_total[process]:>{max_t_width}.03f}s")
         self.last_log_loop = self.i_loop
+
+    def state_dict(self):
+        return {
+            'super': super().state_dict(), 
+            'process2t_total': dict(self.process2t_total), 
+            'i_loop': self.i_loop, 
+            'last_log_loop': self.last_log_loop,
+        }
+    
+    def load_state_dict(self, state: dict):
+        super().load_state_dict(state['super'])
+        self.process2t_total = defaultdict(float, state['process2t_total'])
+        self.i_loop = state['i_loop']
+        self.last_log_loop = state['last_log_loop']
 
 
 def iter_loop(it: Iterable[T], loop_streamer: Looper) -> Iterable[T]:

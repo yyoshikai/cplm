@@ -24,7 +24,7 @@ from src.chem import rdmol2obmol, pdb2obmol
 from src.evaluate import eval_vina, eval_qvina
 from src.data.protein import Protein2PDBDataset, AtomRepr
 from src.data.tokenizer import VocEncoder
-from src.model import Model
+from src.model import Model, Streamer
 from src.train import set_env, get_model, get_process_ranks
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
@@ -55,23 +55,29 @@ def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int,
 error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}
 
 class GetScoreStreamer(WrapperStreamer):
-    def __init__(self, streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool):
+    def __init__(self, streamer: Streamer, ligand_streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool):
         super().__init__(streamer)
+        self.ligand_streamer = ligand_streamer
         self.e = e
         self.kwargs = dict(target=target, rec_pdb=rec_pdb, out_dir=out_dir, cpu=cpu, print_prepare=print_prepare)
         self.future = None
         self.out = np.nan
     def put(self, tokens):
         is_remain, position, token_range = self.streamer.put(tokens)
-        if not is_remain and self.streamer.error is None:
-            self.future = self.e.submit(get_score, lig_rdmol=self.streamer.mol, **self.kwargs)
+        if not is_remain and self.ligand_streamer.error() is None:
+            self.future = self.e.submit(get_score, lig_rdmol=self.ligand_streamer.ligand(), **self.kwargs)
         return is_remain, position, token_range
     def result(self):
         if self.future is not None:
             self.out = self.future.result()
-            if np.isnan(self.out):
-                self.streamer.error = 'VINA'
-
+    def error(self):
+        ligand_error = self.ligand_streamer.error()
+        if ligand_error is not None:
+            return ligand_error
+        elif np.isnan(self.out):
+            return 'VINA'
+        else:
+            return None
 
 def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
     grads = { name: param.grad.clone() if param.grad is not None else None 
@@ -162,7 +168,16 @@ def generate(
                 for idx, streamer in enumerate(streamers)]
     with cf.ProcessPoolExecutor(num_score_workers) as e:
         score_streamers = [
-            GetScoreStreamer(streamer, e, target, pdb, f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}", cpu=cpu, print_prepare=step < 3) for idx, (streamer, pdb) in enumerate(zip(streamers, pdbs))
+            GetScoreStreamer(
+                streamer, 
+                ligand_streamer, 
+                e, 
+                target, 
+                pdb, 
+                f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}", 
+                cpu=cpu, 
+                print_prepare=step < 3
+            ) for idx, (streamer, ligand_streamer, pdb) in enumerate(zip(streamers, ligand_streamers, pdbs))
         ]
         token_streamers = [TokenSaveStreamer(streamer) for streamer in score_streamers]
         streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in token_streamers]
@@ -191,7 +206,7 @@ def generate(
     ], padding_value=0).to(device=device, dtype=torch.long)[:-2]
     size_recorder.record(prompt=[len(s.prompt_tokens) for s in token_streamers], output=[len(s.new_tokens) for s in token_streamers])
     
-    errors = [streamer.error for streamer in ligand_streamers]
+    errors = [streamer.error() for streamer in score_streamers]
     scores = [streamer.out for streamer in score_streamers]
     error_recorder.record(**{str(i): error for i, error in enumerate(errors)})
     return input, output, position, weight, scores, errors

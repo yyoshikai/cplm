@@ -34,6 +34,8 @@ class MolProcessDataset(WrapDataset[Chem.Mol]):
         mol = set_atom_order(mol, self.random, rng)
         return mol
 
+MAX_VALENCE = 10
+
 class MolTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float):        
@@ -54,7 +56,8 @@ class MolTokenizer:
         atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
         
         coords = mol.GetConformer().GetPositions()
-        symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
+        atoms = list(mol.GetAtoms())
+        symbols = [atom.GetSymbol() for atom in atoms]
         tokens = []
         if self.format == 'atom_coords':
             for i in range(mol.GetNumAtoms()):
@@ -63,6 +66,21 @@ class MolTokenizer:
                 if self.h_coord or symbols[ai] != 'H':
                     tokens += self.coord_tokenizer.tokenize_array(coords[ai])
             order = list(range(len(tokens)))
+        elif self.format == 'atom_valence_coords':
+            tokenized_atom_idxs = []
+            for ai in atom_idxs:
+                tokens.append(symbols[ai])
+                remain_valence = 0
+                for bond in atoms[ai].GetBonds():
+                    other_idx = bond.GetBeginAtomIdx()
+                    if other_idx == ai:
+                        other_idx = bond.GetEndAtomIdx()
+                    if other_idx not in tokenized_atom_idxs:
+                        remain_valence += 1
+                tokens.append(str(remain_valence))
+                if self.h_coord or symbols[ai] != 'H':
+                    tokens += self.coord_tokenizer.tokenize_array(coords[ai])
+                tokenized_atom_idxs.append(ai)
         elif self.format == 'ordered_atoms_coords':
             atom_tokens = []
             coord_tokens = []
@@ -93,14 +111,14 @@ class MolTokenizer:
             order = list(range(len(tokens)))
         return tokens, order
     def vocs(self):
-        if self.format == 'smiles_coords':
-            vocs = self.smi_tokenizer.vocs()
-        else:
-            vocs = set(element_symbols())
-        vocs |= self.coord_tokenizer.vocs()
-        if self.format != 'atom_coords':
-            vocs.add('[XYZ]')
-        return vocs
+        if self.format == 'atom_coords':
+            return set(element_symbols()) | self.coord_tokenizer.vocs()
+        elif self.format == 'atom_valence_coords':
+            return set(element_symbols()) | self.coord_tokenizer.vocs() | {str(i) for i in range(MAX_VALENCE)}
+        elif self.format in ['ordered_atoms_coords', 'atoms_coords']:
+            return set(element_symbols()) | self.coord_tokenizer.vocs() | {'[XYZ]'}
+        elif self.format == 'smiles_coords':
+            return self.smi_tokenizer.vocs() | self.coord_tokenizer.vocs() | {'[XYZ]'}
 
 
 

@@ -10,23 +10,27 @@ def set_random_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-def set_deterministic():
+def set_deterministic(warn_only: bool=True):
     torch.backends.cudnn.deterministic = True
-    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.use_deterministic_algorithms(True, warn_only=warn_only)
     torch.backends.cudnn.benchmark = False
 
 def random_state_dict():
+    numpy_state = list(np.random.get_state())
+    numpy_state[1] = numpy_state[1].tolist() 
     state_dict = {
         'random': random.getstate(),
-        'numpy': np.random.get_state(),
+        'numpy': numpy_state,
         'torch': torch.get_rng_state(),
         'cuda': torch.cuda.get_rng_state_all()
     }
     return state_dict
 
 def load_random_state_dict(state_dict: dict):
+    numpy_state = state_dict['numpy']
+    numpy_state[1] = np.array(numpy_state[1], dtype=np.uint32)
     random.setstate(state_dict['random'])
-    np.random.set_state(state_dict['numpy'])
+    np.random.set_state(numpy_state)
     torch.set_rng_state(state_dict['torch'])
     torch.cuda.set_rng_state_all(state_dict['cuda'])
 
