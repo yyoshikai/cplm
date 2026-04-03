@@ -4,13 +4,16 @@ from contextlib import contextmanager
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from logging import getLogger
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, ParamSpec, TypeVar
 import numpy as np
 import pandas as pd
 try:    
     import torch
 except ImportError:
     torch = None
+
+P = ParamSpec('P')
+T = TypeVar('T')
 
 # others
 def load_gninatypes(path, struct_fmt='fffi'):
@@ -275,3 +278,11 @@ def silence_print(silence: bool=True):
             yield sys.stdout
         finally:
             pass
+
+# 
+def wraps(f: Callable[P, T]):
+    def wrap_inner(g) -> Callable[P, T]:
+        def inner(*args: P.args, **kwargs: P.kwargs) -> T:
+            return g(*args, **kwargs)
+        return inner
+    return wrap_inner

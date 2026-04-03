@@ -1,9 +1,8 @@
-import os, yaml, psutil, math, random, copy
+import os, yaml, math, random
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 from logging import getLogger
-from typing import Literal
 import numpy as np, pandas as pd
 import torch
 import torch.nn as nn
@@ -17,7 +16,7 @@ from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
-from src.utils import IterateRecorder, get_git_hash
+from src.utils import get_git_hash, wraps
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
 from src.chem import rdmol2obmol, pdb2obmol
@@ -29,7 +28,8 @@ from src.train import set_env, get_model, get_process_ranks
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
 from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
-from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer, get_sample_stat, whiten_scores
+from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
+from src.train.reinforce import EmptyNorm, ClampNorm, FillNorm, SampleDevFillNorm, SampleWhitenNorm, AllWhitenNorm, RecordNorm
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 ## Scoring function
@@ -96,7 +96,6 @@ def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
         return grads, grads
 
 
-
 class ReinforceDataIter:
     def __init__(self, train_data: Dataset, device: torch.device, batch_size: int, generate_per_sample: int, max_prompt_len: int, fix_pocket: bool, num_workers: int, seed: int):
         _, _, DATA_RANK = get_process_ranks()
@@ -137,145 +136,132 @@ class ReinforceDataIter:
         idxs = torch.tensor(idxs, dtype=torch.long, device=self.device)
         return idxs, pdbs, prompt_tokens, positions
 
-def generate(
-        model: Model, 
-        voc_encoder: VocEncoder,
-        result_dir: str, 
-        max_new_token: int,
-        coord_range: int,
-        lig_h: AtomRepr,
-        lig_format: str,
-        device: torch.device,
-        size_recorder: IterateRecorder,
+class Generator:
+    def __init__(self, 
+            voc_encoder: VocEncoder,
+            result_dir: str, 
+            max_new_token: int,
+            coord_range: int,
+            lig_h: AtomRepr,
+            lig_format: str,
+            cpu: int,
+            num_score_workers: int,
+            target: str,
+            device: torch.device,):
+        self.voc_encoder = voc_encoder
+        self.result_dir = result_dir
+        self.max_new_token = max_new_token
+        self.coord_range = coord_range
+        self.lig_h = lig_h
+        self.lig_format = lig_format
+        self.num_score_workers = num_score_workers
+        self.cpu = cpu
+        self.target = target
+        self.device = device
 
-        step: int,
-        prompt_tokens,
-        positions,
-        do_save: bool,
+    def generate(
+            self,
+            model: Model, 
 
-        num_score_workers: int,
-        target: str,
-        cpu: int,
-        pdbs: list[str],
-        error_recorder: IterateRecorder,
-) -> tuple[Tensor, Tensor, Tensor, Tensor, list[float], list[str|None]]:
-    rank = dist.get_rank()
+            step: int,
+            prompt_tokens: list[Tensor],
+            positions,
+            do_save: bool,
 
-    model.eval()
-    streamers = ligand_streamers = [get_ligand_streamer(lig_format, coord_range, voc_encoder, False, lig_h) for idx in range(len(prompt_tokens))]
-    if do_save:
-        streamers = [SaveLigandStreamer(streamer, f"{result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf")
-                for idx, streamer in enumerate(streamers)]
-    with cf.ProcessPoolExecutor(num_score_workers) as e:
-        score_streamers = [
-            GetScoreStreamer(
+            pdbs: list[str],
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, list[float], list[str|None]]:
+        rank = dist.get_rank()
+
+        model.eval()
+        streamers = ligand_streamers = [get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, False, self.lig_h) for idx in range(len(prompt_tokens))]
+        if do_save:
+            streamers = [SaveLigandStreamer(
                 streamer, 
-                ligand_streamer, 
-                e, 
-                target, 
-                pdb, 
-                f"{result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}", 
-                cpu=cpu, 
-                print_prepare=step < 3
-            ) for idx, (streamer, ligand_streamer, pdb) in enumerate(zip(streamers, ligand_streamers, pdbs))
-        ]
-        token_streamers = [TokenSaveStreamer(streamer) for streamer in score_streamers]
-        streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in token_streamers]
-        if step < 5:
-            streamers = [TimeLogStreamer(streamer, str(b), 10.0) for b, streamer in enumerate(streamers)]
-            # streamers[0] = TqdmStreamer(streamers[0], total=max_new_token, desc="generate")
-        with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
-            model.generate2(prompt_tokens, positions, streamers, max_new_token)
-        for streamer in score_streamers:
-            streamer.result()
+                f"{self.result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf"
+            ) for idx, streamer in enumerate(streamers)]
+        with cf.ProcessPoolExecutor(self.num_score_workers) as e:
+            score_streamers = [
+                GetScoreStreamer(
+                    streamer, 
+                    ligand_streamer, 
+                    e, 
+                    self.target, 
+                    pdb, 
+                    f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}", 
+                    cpu=self.cpu, 
+                    print_prepare=step < 3
+                ) for idx, (streamer, ligand_streamer, pdb) in enumerate(zip(streamers, ligand_streamers, pdbs))
+            ]
+            token_streamers = [TokenSaveStreamer(streamer) for streamer in score_streamers]
+            streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in token_streamers]
+            if step < 5:
+                streamers = [TimeLogStreamer(streamer, str(b), 10.0) for b, streamer in enumerate(streamers)]
+                # streamers[0] = TqdmStreamer(streamers[0], total=max_new_token, desc="generate")
+            with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+                model.generate2(prompt_tokens, positions, streamers, self.max_new_token)
+            for streamer in score_streamers:
+                streamer.result()
 
-    tokens = pad_sequence([
-        torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens)
-        for token_streamer in token_streamers
-    ], padding_value=voc_encoder.pad_token).to(device=device, dtype=torch.long)
-    input = tokens[:-1] # [L, B]
-    output = tokens[1:]
+        tokens = pad_sequence([
+            torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens)
+            for token_streamer in token_streamers
+        ], padding_value=self.voc_encoder.pad_token).to(device=self.device, dtype=torch.long)
+        input = tokens[:-1] # [L, B]
+        output = tokens[1:]
 
-    weight = torch.zeros_like(output, dtype=torch.float) # [L, B]
-    for b, token_streamer in enumerate(token_streamers):
-        prompt_size, new_size = len(token_streamer.prompt_tokens), len(token_streamer.new_tokens)
-        weight[prompt_size-1:prompt_size+new_size-1, b] = 1.0
-    position = pad_sequence([
-        torch.tensor(position+position_streamer.new_positions) for position, position_streamer
-        in zip(positions, position_streamers)
-    ], padding_value=0).to(device=device, dtype=torch.long)[:-2]
-    size_recorder.record(prompt=[len(s.prompt_tokens) for s in token_streamers], output=[len(s.new_tokens) for s in token_streamers])
+        weight = torch.zeros_like(output, dtype=torch.float) # [L, B]
+        for b, token_streamer in enumerate(token_streamers):
+            prompt_size, new_size = len(token_streamer.prompt_tokens), len(token_streamer.new_tokens)
+            weight[prompt_size-1:prompt_size+new_size-1, b] = 1.0
+        position = pad_sequence([
+            torch.tensor(position+position_streamer.new_positions) for position, position_streamer
+            in zip(positions, position_streamers)
+        ], padding_value=0).to(device=self.device, dtype=torch.long)[:-2]
+        
+        errors = [streamer.error() for streamer in score_streamers]
+        scores = [streamer.out for streamer in score_streamers]
+        return input, output, position, weight, scores, errors
+
+class SizeRecordGenerator(Generator):
+    def __init__(self, generator: Generator, result_dir: str):
+        self.generator = generator
+        self.path = f"{result_dir}/scores/{dist.get_rank()}.csv"
+        self.is_empty = True
+
+    @wraps(Generator.generate)
+    def generate(self, model, step, prompt_tokens, positions, do_save, device, num_score_workers, target, cpu, pdbs):
+        input, output, position, weight, scores, errors = self.generator.generate(model, step, prompt_tokens, positions, do_save, device, num_score_workers, target, cpu, pdbs)
+        if self.is_empty:
+            batch_size = len(prompt_tokens)
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, 'w') as f:
+                f.write(','.join(['prompt']*batch_size+['output']*batch_size)+'\n')
+                f.write((','.join(list(str(i) for i in range(batch_size))*2))+'\n')
+            self.is_empty = False
+        with open(self.path, 'a') as f:
+            f.write(','.join([str(len(prompt)) for prompt in prompt_tokens]
+                    +[str(len(i)-len(prompt)) for i, prompt in zip(input, prompt_tokens)])+'\n')
+
+        return input, output, position, weight, scores, errors
+
+class ErrorRecordGenerator(Generator):
+    def __init__(self, generator: Generator, result_dir: str):
+        self.generator = generator
+        self.path = f"{result_dir}/errors/{dist.get_rank()}.csv"
+        self.is_empty = True
     
-    errors = [streamer.error() for streamer in score_streamers]
-    scores = [streamer.out for streamer in score_streamers]
-    error_recorder.record(**{str(i): error for i, error in enumerate(errors)})
-    return input, output, position, weight, scores, errors
-
-def get_scores(
-        errors: list[str|None],
-        idxs: Tensor,
-        scores: list[float],
-
-        score_recorder: IterateRecorder,
-        device: torch.device,
-
-        min_valid_score: float,
-        gen_error_score: float,
-        vina_error_score: float,
-        gen_error_sample_deviation: float,
-        vina_error_sample_deviation: float,
-        sample_whiten: list[Literal['mean', 'std']],
-        all_whiten: list[Literal['mean', 'std']],
-        gen_error_white_score: float, 
-        vina_error_white_score: float,
-        sample_rewhiten: list[Literal['mean', 'std']],
-        all_rewhiten: list[Literal['mean', 'std']],
-
-) -> Tensor:
-    """
-    1. nanでない報酬を(--min-valid-score, default=-math.inf)でclip
-    2. generation errorに(--gen-error-score, default=np.nan)を代入
-       vina errorに(--vina-error-score, default=np.nan)を代入
-    3. gen_error_sample_deviation, vina_error_sample_deviationがnanでない場合これらを代入
-        mean+std*gen_error_sample_deviation 等を代入
-    4. (--sample-whiten, default=[])に従ってサンプルごとの正規化
-        'mean': 平均=0とする
-        'std': 分散=1とする
-    5. (--all-whiten, default=[])に従って全体の正規化
-    6. (--gen-error-white-score, default=np.nan)がnp.nanでない場合, generationerrorに代入
-       (--vina-error-white-score, default=np.nan)がnp.nanでない場合, vina errorに代入
-    7. (--sample-rewhiten, default=[])に従ってサンプルごとの正規化
-    8. (--all-rewhiten, default=[])に従って全体の正規化
-    9. np.nanに0.0を代入
-    """
-
-    scores = torch.tensor(scores, dtype=torch.float, device=device)
-    raw_scores = scores.detach().clone()
-    is_vina_error = torch.tensor([error == 'VINA' for error in errors], dtype=torch.bool, device=device)
-    is_gen_error = torch.tensor([error is not None for error in errors], dtype=torch.bool, device=device) & (~is_vina_error)
-    
-    if math.isfinite(min_valid_score):
-        torch.clamp_(scores, min=min_valid_score) # nan is ignored
-    scores[is_gen_error] = gen_error_score
-    scores[is_vina_error] = vina_error_score
-    sample_mean, sample_std = get_sample_stat(scores, idxs) # out of IF for DDP
-    if math.isfinite(gen_error_sample_deviation) and torch.any(is_gen_error):
-        scores[is_gen_error] = sample_mean[is_gen_error]+sample_std[is_gen_error]*gen_error_sample_deviation
-
-    sample_mean, sample_std = get_sample_stat(scores, idxs)
-    if math.isfinite(vina_error_sample_deviation) and torch.any(is_vina_error):
-        scores[is_vina_error] = sample_mean[is_vina_error]+sample_std[is_vina_error]*vina_error_sample_deviation
-
-
-    scores = whiten_scores(scores, idxs, sample_whiten, all_whiten)
-    if math.isfinite(gen_error_white_score):
-        scores[is_gen_error] = gen_error_white_score
-    if math.isfinite(vina_error_white_score):
-        scores[is_vina_error] = vina_error_white_score
-    scores = whiten_scores(scores, idxs, sample_rewhiten, all_rewhiten)
-    scores[torch.isnan(scores)] = 0.0
-    score_recorder.record(raw=raw_scores.tolist(), normalized=scores.tolist())
-    return scores
+    @wraps(Generator.generate)
+    def generate(self, *args, **kwargs):
+        input, output, position, weight, scores, errors = self.generator.generate(*args, **kwargs)
+        if self.is_empty:
+            batch_size = len(errors)
+            os.makedirs(os.path.dirname(self.path))
+            with open(self.path, 'w') as f:
+                f.write(','.join(str(i) for i in range(batch_size))+'\n')
+            self.is_empty = False
+        with open(self.path, 'a') as f:
+            f.write(','.join(str(e) for e in errors)+'\n')
+        return input, output, position, weight, scores, errors
 
 @record
 def main():
@@ -360,7 +346,6 @@ def main():
     else:
         assert args.gpu_size_gb is None
         args.gpu_size = None
-    
     args.sdp_kernel = 'FLASH'
 
     logs = []
@@ -370,13 +355,11 @@ def main():
     with open(f"{finetune_dir}/args.yaml") as f:
         fargs = yaml.safe_load(f)
     fargs = Namespace(**fargs)
+    assert fargs.no_score
     pname = fargs.pretrain_name
     pretrain_dir = f"training/results/{pname}"
     with open(f"{pretrain_dir}/args.yaml") as f:
         pargs = Namespace(**yaml.safe_load(f))
-
-    ## check finetuning
-    assert fargs.no_score
 
     ## set finetune opt
     if args.finetune_opt is None:
@@ -422,9 +405,6 @@ def main():
     data_iter = ReinforceDataIter(train_data, device, args.batch_size, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
 
     ## records
-    error_recorder = IterateRecorder(f"{result_dir}/errors/{rank}.csv", args.record_opt)
-    score_recorder = IterateRecorder(f"{result_dir}/scores/{rank}.csv", args.record_opt)
-    size_recorder = IterateRecorder(f"{result_dir}/sizes/{rank}.csv", args.record_opt)
     train_looper = Loopers([
         LogLooper(logger, 1000, 5, 'step', 'training'),
         TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 1000),
@@ -433,7 +413,21 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-
+    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, )
+    generator = SizeRecordGenerator(generator, result_dir)
+    generator = ErrorRecordGenerator(generator, result_dir)
+    norm = EmptyNorm()
+    if math.isfinite(args.min_valid_score):
+        norm = ClampNorm(norm, args.min_valid_score)
+    norm = FillNorm(norm, args.gen_error_score, args.vina_error_score)
+    norm = SampleDevFillNorm(norm, args.gen_error_sample_deviation, args.vina_error_sample_deviation)
+    norm = SampleWhitenNorm(norm, 'mean' in args.sample_whiten, 'std' in args.sample_whiten)
+    norm = AllWhitenNorm(norm, 'mean' in args.all_whiten, 'std' in args.all_whiten)
+    norm = FillNorm(norm, args.gen_error_whiten_score, args.gen_error_vina_score)
+    norm = SampleWhitenNorm(norm, 'mean' in args.sample_rewhiten, 'std' in args.sample_rewhiten)
+    norm = AllWhitenNorm(norm, 'mean' in args.all_rewhiten, 'std' in args.all_rewhiten)
+    norm = RecordNorm(norm, result_dir)
+    
     # save at step 0
     log_optimizer = 'optimizer' in args.check
     if args.trainer in ['reinforce', 'reinforce_no_baseline']:
@@ -457,51 +451,17 @@ def main():
         idxs, pdbs, prompt_tokens, positions = data_iter.get()
 
         train_looper.put('generate')
-        input, output, position, weight, scores, errors = generate(
-            trainer.policy_model(), 
-            voc_encoder,
-            result_dir,
-            args.max_new_token,
-            fargs.coord_range,
-            fargs.lig_h,
-            fargs.lig_format,
-            device,
-            size_recorder,
+        input, output, position, weight, scores, errors = generator.generate(
+            trainer.policy_model(),
             step, 
             prompt_tokens, 
             positions, 
             do_save,
-            args.num_score_workers,
-            args.target,
-            args.cpu, 
-            pdbs,
-            error_recorder,
+            pdbs
         )
         if is_starting:
             logger.info(f"step {step} raw scores={scores}")
-
-        train_looper.put('get_score')
-        scores = get_scores(
-            errors,
-            idxs,
-            scores,
-
-            score_recorder,
-            device,
-
-            args.min_valid_score,
-            args.gen_error_score,
-            args.vina_error_score,
-            args.gen_error_sample_deviation,
-            args.vina_error_sample_deviation,
-            args.sample_whiten,
-            args.all_whiten,
-            args.gen_error_white_score, 
-            args.vina_error_white_score,
-            args.sample_rewhiten,
-            args.all_rewhiten,
-
-        )
+        scores = norm(scores)
 
         # Forward Get prob & reward loss
         train_looper.put('train')
@@ -517,7 +477,6 @@ def main():
 
         train_looper.end_loop()
     train_looper.end_loops()
-    error_recorder.flush()
     dist.destroy_process_group()
 
 if __name__ == '__main__':
