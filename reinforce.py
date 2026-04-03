@@ -173,30 +173,28 @@ class Generator:
         rank = dist.get_rank()
 
         model.eval()
-        streamers = ligand_streamers = [get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, False, self.lig_h) for idx in range(len(prompt_tokens))]
-        if do_save:
-            streamers = [SaveLigandStreamer(
-                streamer, 
-                f"{self.result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf"
-            ) for idx, streamer in enumerate(streamers)]
         with cf.ProcessPoolExecutor(self.num_score_workers) as e:
-            score_streamers = [
-                GetScoreStreamer(
-                    streamer, 
-                    ligand_streamer, 
-                    e, 
-                    self.target, 
-                    pdb, 
+            score_streamers: list[GetScoreStreamer]= []
+            token_streamers: list[TokenSaveStreamer] = []
+            position_streamers: list[PositionSaveStreamer] = []
+            streamers = []
+            for idx, pdb in enumerate(pdbs):
+                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, False, self.lig_h)
+                if do_save:
+                    streamer = SaveLigandStreamer(streamer, f"{self.result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf")
+                streamer = GetScoreStreamer(streamer, ligand_streamer, e, self.target, pdb, 
                     f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}", 
-                    cpu=self.cpu, 
-                    print_prepare=step < 3
-                ) for idx, (streamer, ligand_streamer, pdb) in enumerate(zip(streamers, ligand_streamers, pdbs))
-            ]
-            token_streamers = [TokenSaveStreamer(streamer) for streamer in score_streamers]
-            streamers = position_streamers = [PositionSaveStreamer(streamer) for streamer in token_streamers]
-            if step < 5:
-                streamers = [TimeLogStreamer(streamer, str(b), 10.0) for b, streamer in enumerate(streamers)]
-                # streamers[0] = TqdmStreamer(streamers[0], total=max_new_token, desc="generate")
+                    cpu=self.cpu, print_prepare=step < 3) 
+                score_streamers.append(streamer)
+                streamer = TokenSaveStreamer(streamer)
+                token_streamers.append(streamer)
+                streamer = PositionSaveStreamer(streamer)
+                position_streamers.append(streamer)
+                if step < 5:
+                    streamer = TimeLogStreamer(streamer, str(idx), 10.0)
+                    # if idx == 0:
+                    # streamer = TqdmStreamer(streamer, total=max_new_token, desc="generate")
+                streamers.append(streamer)
             with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
                 model.generate2(prompt_tokens, positions, streamers, self.max_new_token)
             for streamer in score_streamers:
@@ -347,7 +345,6 @@ def main():
         assert args.gpu_size_gb is None
         args.gpu_size = None
     args.sdp_kernel = 'FLASH'
-
     logs = []
 
     # get finetune info
@@ -378,14 +375,12 @@ def main():
         logs.append(f"finetune_opt was set to {args.finetune_opt}")
     else:
         assert args.finetune_patience_val is None
-
     do_save_steps = [0, 1, 100, 200, 400, 700]+list(range(1000, args.max_opt, 1000))
     
     # Environment
     result_dir = f"reinforce/results/{args.studyname}"
     logger, rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
     ignore_rdkit_warning()
-    ## check generate_per_sample
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
 
     # model
@@ -393,15 +388,12 @@ def main():
     model_, voc_encoder = get_model(pargs, None, init_state_path, device)
 
     # data
-    ## vocs from state_dict
     _voc_encoder, _raw_data, protein_data, _lig, token_data, position_data, _weight_data, _center_data, data_log \
             = get_finetune_data(fargs, 'train', 1.0, False, True, set(voc_encoder.i2voc[1:]), 'none')
     protein_pdb_data = Protein2PDBDataset(protein_data)
     logs += data_log
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
-
-    # DataLoader
     data_iter = ReinforceDataIter(train_data, device, args.batch_size, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
 
     ## records
@@ -428,7 +420,6 @@ def main():
     norm = AllWhitenNorm(norm, 'mean' in args.all_rewhiten, 'std' in args.all_rewhiten)
     norm = RecordNorm(norm, result_dir)
     
-    # save at step 0
     log_optimizer = 'optimizer' in args.check
     if args.trainer in ['reinforce', 'reinforce_no_baseline']:
         baseline = args.trainer == 'reinforce'
@@ -440,6 +431,7 @@ def main():
     trainer = GetMemoryTrainer(trainer, device)
     trainer = SaveBatchTrainer(trainer, result_dir, do_save_steps, voc_encoder)
     trainer = SaveStepTrainer(trainer, result_dir, args.record_opt, args.max_opt)
+    # save at step 0
     trainer.save(result_dir)
 
     train_looper.start_loops()
@@ -451,14 +443,7 @@ def main():
         idxs, pdbs, prompt_tokens, positions = data_iter.get()
 
         train_looper.put('generate')
-        input, output, position, weight, scores, errors = generator.generate(
-            trainer.policy_model(),
-            step, 
-            prompt_tokens, 
-            positions, 
-            do_save,
-            pdbs
-        )
+        input, output, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
         if is_starting:
             logger.info(f"step {step} raw scores={scores}")
         scores = norm(scores)

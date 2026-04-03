@@ -640,42 +640,6 @@ class SaveStepTrainer(WrapTrainer):
         if self.step == self.max_opt:
             self.step_recorder.flush()
 
-class WrapScoreTrainer(WrapTrainer):
-    def __init__(self, trainer):
-        super().__init__(trainer)
-        self._raw_scores = None
-
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        self._raw_scores = scores
-        scores = self.wrap_scores(scores, idxs, errors)
-        self.trainer.train(input, output, position, weight, scores, errors, idxs)
-
-    def step_info(self):
-        info = self.trainer.step_info()
-        info.update({('raw_score', i): raw_score for i, raw_score in enumerate(self._raw_scores.tolist())})
-        return info
-    
-    def wrap_scores(self, scores: Tensor, idxs: Tensor, errors: list[str]):
-        raise NotImplementedError
-
-class SampleWhitenTrainer(WrapScoreTrainer):
-    def __init__(self, trainer: Trainer, mean: bool, std: bool, eps: float=1e-5):
-        super().__init__(trainer)
-        self.mean = mean
-        self.std = std
-        self.eps = eps
-
-    def wrap_scores(self, scores: Tensor, idxs: Tensor, errors: list[str]):
-        sample_means, sample_stds = get_sample_stat(scores, idxs)
-        sample_stds+=1e-5
-        if self.mean and self.std:
-            scores = (scores-sample_means)/sample_stds
-        elif self.mean:
-            scores = scores-sample_means
-        elif self.std:
-            scores = (scores-sample_means)/sample_stds+sample_means
-        return scores
-
 
 # Score normalizer
 class Norm:
