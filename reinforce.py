@@ -20,7 +20,7 @@ from src.data import index_dataset
 from src.utils import solve_increasing_fn_left, solve_increasing_fn
 from src.utils import get_git_hash, wraps
 from src.utils.rdkit import ignore_rdkit_warning
-from src.utils.logger import NO_DUP
+from src.utils.logger import NO_DUP, add_file_handler
 from src.chem import rdmol2obmol, pdb2obmol
 from src.evaluate import eval_vina, eval_qvina
 from src.data.protein import Protein2PDBDataset, AtomRepr
@@ -380,6 +380,9 @@ def main():
     logger, ddp_rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
     ignore_rdkit_warning()
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
+    plogger = getLogger("process") # for ddp check
+    plogger.propagate = False
+    add_file_handler(plogger, f"{result_dir}/logs/")
 
     # model
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
@@ -453,7 +456,7 @@ def main():
         do_save = step in do_save_steps
 
         train_looper.put('get_batch')
-        # calc distribution
+        ## get data
         check_data_dist = is_starting and 'data_dist' in args.check
         if ddp_rank == DATA_RANK['train']:
             items = [train_iter.__next__() for _ in range(args.prompt_per_opt)]
@@ -463,8 +466,8 @@ def main():
         items = broadcast_object(items, DATA_RANK['train'])
         prompt_sizes = [len(item[2]) for item in items]
 
-        policy = trainer.policy_model()
         ## calc n_iter
+        policy = trainer.policy_model()
         n_gen = args.gen_per_prompt*args.prompt_per_opt
         n_job = 0
         next_i_gen = 0
@@ -481,6 +484,8 @@ def main():
             if next_i_gen >= n_gen:
                 break
         n_iter = math.ceil(n_job / ddp_size)
+
+        ## calc minimum possible t
         n_job = n_iter*ddp_size
         def is_ok(t: float):
             next_i_gen = 0
@@ -501,11 +506,14 @@ def main():
         left_idxs = itr.chain(*[[i]*args.gen_per_prompt for i in range(args.prompt_per_opt)])
         idx2cached_rank = {}
         idx2cache = {}
-        idx2generation = defaultdict(list)
+        idx2generations = defaultdict(list)
         for i_iter in range(n_iter):
+            ## delete unnecessary cache
             for idx in idx2cache:
                 if idx < left_idxs[0]:
                     del idx2cache[idx]
+
+            ## distribute idx
             batch_idxss = []
             for i_gpu in range(ddp_size):
                 b = min(
@@ -519,12 +527,16 @@ def main():
                 if len(left_idxs) == 0:
                     break
             batch_idxss += [[]]*(ddp_size-len(batch_idxss))
+
+            ## calc cache
             idxs_to_cache = sorted(set(itr.chain(*batch_idxss)) - set(idx2cached_rank.keys()))
             for i, idx in enumerate(idxs_to_cache):
                 idx2cached_rank[idx] = i % ddp_size if (i % (ddp_size*2) < ddp_size) else (-i-1)%ddp_size
             for idx, rank in idx2cached_rank.items():
                 if ddp_rank == rank and idx not in idx2cache:
                     idx2cache[idx] = policy.get_cache(items[idx])
+            
+            ## send cache
             for rank, batch_idxs in enumerate(batch_idxss):
                 for idx in batch_idxs:
                     if idx2cached_rank[idx] != rank:
@@ -532,27 +544,47 @@ def main():
                             idx2cache[idx] = receive_cache(idx2cached_rank[idx])
                         elif idx2cached_rank[idx] == rank:
                             send_cache(idx2cache[idx])
-            del rank
+            
+            ## generate
             batch_idxs = batch_idxss[ddp_rank]
             batch_caches = [idx2cache[idx] for idx in batch_idxs]
             batch_items = [items[idx] for idx in batch_idxs]
             generations = generator.generate(policy, step, i_iter, batch_caches, do_save, batch_items)
             for idx, generation in zip(batch_idxs, generations):
-                idx2generation[idx].append(generation)
-
-        n_major = 
-
-
-
-
+                idx2generations[idx].append(generation)
+        
+        ## distribute forward idx
+        minor_bsz, n_rank_major = divmod(args.prompt_per_opt, ddp_size)
+        n_rank_minor = ddp_size - n_rank_major
+        major_bsz = minor_bsz+1
+        idx2forward_rank = []
+        for idx in range(n_rank_minor*minor_bsz):
+            rank = idx % minor_bsz if (idx % (minor_bsz*2)) else (-idx-1) % minor_bsz
+            idx2forward_rank.append(rank)
+        for didx in range(n_rank_major*major_bsz):
+            drank = didx % minor_bsz if (didx % (minor_bsz*2)) else (-didx-1) % minor_bsz
+            idx2forward_rank.append(drank+n_rank_minor)
+        
+        ## send generation
+        for idx, forward_rank in enumerate(idx2forward_rank):
+            for gen_rank, batch_idxs in enumerate(batch_idxss):
+                if idx in batch_idxs:
+                    if gen_rank == forward_rank:
+                        continue
+                    elif gen_rank == ddp_rank:
+                        send_generation(idx2generations[idx])
+                    elif forward_rank == ddp_rank:
+                        idx2generations[idx] += recv_generation(idx2generations[idx])
+        
+        ## forward
         train_looper.put('generate')
         if is_starting:
             logger.info(f"step {step} raw scores={scores}")
         scores = norm(scores)
 
-        # Forward Get prob & reward loss
+        idx2generations = {idx: generation for idx, generation in idx2generations.items() if idx2forward_rank[idx] == ddp_rank}
         train_looper.put('train')
-        trainer.train(input, output, position, weight, scores, errors, idxs)
+        trainer.train(idx2generations, idx2items)
         
         if step % args.save_opt == 0:
             train_looper.put('save')
