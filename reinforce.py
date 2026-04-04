@@ -29,7 +29,7 @@ from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
 from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
 from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
-from src.train.reinforce import EmptyNorm, ClampNorm, FillNorm, SampleDevFillNorm, SampleWhitenNorm, AllWhitenNorm, RecordNorm
+from src.train.reinforce import EmptyNorm, ClampNorm, FillNorm, SampleDevFillNorm, SampleWhitenNorm, AllWhitenNorm, RecordNorm, Fill0Norm
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 ## Scoring function
@@ -227,8 +227,8 @@ class SizeRecordGenerator(Generator):
         self.is_empty = True
 
     @wraps(Generator.generate)
-    def generate(self, model, step, prompt_tokens, positions, do_save, device, num_score_workers, target, cpu, pdbs):
-        input, output, position, weight, scores, errors = self.generator.generate(model, step, prompt_tokens, positions, do_save, device, num_score_workers, target, cpu, pdbs)
+    def generate(self, model, step, prompt_tokens, positions, do_save, pdbs):
+        input, output, position, weight, scores, errors = self.generator.generate(model, step, prompt_tokens, positions, do_save, pdbs)
         if self.is_empty:
             batch_size = len(prompt_tokens)
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -405,7 +405,7 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, )
+    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, args.cpu, args.num_score_workers, args.target, device)
     generator = SizeRecordGenerator(generator, result_dir)
     generator = ErrorRecordGenerator(generator, result_dir)
     norm = EmptyNorm()
@@ -415,9 +415,10 @@ def main():
     norm = SampleDevFillNorm(norm, args.gen_error_sample_deviation, args.vina_error_sample_deviation)
     norm = SampleWhitenNorm(norm, 'mean' in args.sample_whiten, 'std' in args.sample_whiten)
     norm = AllWhitenNorm(norm, 'mean' in args.all_whiten, 'std' in args.all_whiten)
-    norm = FillNorm(norm, args.gen_error_whiten_score, args.gen_error_vina_score)
+    norm = FillNorm(norm, args.gen_error_white_score, args.vina_error_white_score)
     norm = SampleWhitenNorm(norm, 'mean' in args.sample_rewhiten, 'std' in args.sample_rewhiten)
     norm = AllWhitenNorm(norm, 'mean' in args.all_rewhiten, 'std' in args.all_rewhiten)
+    norm = Fill0Norm(norm)
     norm = RecordNorm(norm, result_dir)
     
     log_optimizer = 'optimizer' in args.check
@@ -446,7 +447,7 @@ def main():
         input, output, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
         if is_starting:
             logger.info(f"step {step} raw scores={scores}")
-        scores = norm(scores)
+        scores = norm(torch.tensor(scores, device=device), errors, idxs)
 
         # Forward Get prob & reward loss
         train_looper.put('train')
