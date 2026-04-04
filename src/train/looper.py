@@ -194,17 +194,20 @@ class TimeLogLooper(TimeLooper):
             self.log()
     
     def end_loops(self):
+        for process, t in self.process2t.items():
+            self.process2t_total[process] += t
         if self.last_log_loop != self.i_loop:
             self.log()
     
     def log(self):
         processes = self.processes()
-        self.logger.debug(f"Times in {self.i_loop} {self.loop_name}:")
-        max_process_width = max(len(process) for process in processes)
-        max_t_width = max(len(str(int(t))) for t in self.process2t_total.values())
-        for process in processes:
-            self.logger.debug(f"    {process:>{max_process_width}}: "
-                    f"{self.process2t_total[process]:>{max_t_width}.03f}s")
+        if len(processes) > 0:
+            self.logger.debug(f"Times in {self.i_loop} {self.loop_name}:")
+            max_process_width = max(len(process) for process in processes)
+            max_t_width = max(len(str(int(t))) for t in self.process2t_total.values())
+            for process in processes:
+                self.logger.debug(f"    {process:>{max_process_width}}: "
+                        f"{self.process2t_total[process]:>{max_t_width}.03f}s")
         self.last_log_loop = self.i_loop
 
     def state_dict(self):
