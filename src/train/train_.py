@@ -183,11 +183,11 @@ def add_pretrain_args(parser: ArgumentParser):
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
     # pocket-heavy-coordはデフォルトで入れるようにした。
     parser.add_argument("--lig-randomize", action='store_true')
-    parser.add_argument("--lig-format", choices=['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], default='smiles_coords')
+    parser.add_argument("--lig-format", choices=['smiles_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
     parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
-    parser.add_argument("--pocket-format", choices=['smi_atoms_coords', 'atoms_coords', 'ordered_atoms_coords', 'atom_coords'], default='atoms_coords')
+    parser.add_argument("--pocket-format", choices=['smi_atoms_coords', 'smi_atom_coords', 'smi_atom_valence_coords', 'atoms_coords', 'ordered_atoms_coords', 'atom_coords'], default='atoms_coords')
     parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
     parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion', 'ligand', 'water'], nargs='*')
     parser.add_argument("--coord-range", type=int, default=250)

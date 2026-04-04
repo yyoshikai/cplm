@@ -1,9 +1,12 @@
 from ctypes import c_double
+from logging import getLogger
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
 from openbabel.openbabel import OBMol, OBConversion
+
+logger = getLogger(__name__)
 
 def rdmol2obmol(rdmol: Chem.Mol) -> OBMol:
     sdf = Chem.MolToMolBlock(rdmol) # hydrogens remain
@@ -65,13 +68,27 @@ def get_coord_from_mol(mol: OBMol) -> np.ndarray:
     coord = mol.GetCoordinates()
     return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
 
+def _randomize(mol: Chem.Mol, rng: np.random.Generator):
+    for i in range(100): # ランダムに失敗する場合がある
+        try:
+            idxs = np.arange(mol.GetNumAtoms(), dtype=int)
+            rng.shuffle(idxs)
+            mol = Chem.RenumberAtoms(mol, idxs.tolist())
+            return mol, Chem.MolToSmiles(mol, canonical=False)
+        except Exception as e:
+            pass
+    else:
+        logger.warning("randomize_smiles failed for 100 times.")
+        return mol, ""
+
+def randomize_smiles(mol: Chem.Mol, rng: np.random.Generator):
+    return _randomize(mol, rng)[1]
+
 # randomize/canonicalize
 # refer /workspace/cplm/experiments/tests/source.ipynb "260204 canonical"
 def set_atom_order(mol: Chem.Mol, random: bool, rng: np.random.Generator) -> Chem.Mol:
     if random:
-        idxs = np.arange(mol.GetNumAtoms(), dtype=int)
-        rng.shuffle(idxs)
-        ran = Chem.MolToSmiles(mol, canonical=False)
+        mol, ran = _randomize(mol, rng)
     else:
         can = Chem.MolToSmiles(mol, canonical=True)
     mol = Chem.RenumberAtoms(mol, eval(mol.GetProp('_smilesAtomOutputOrder')))

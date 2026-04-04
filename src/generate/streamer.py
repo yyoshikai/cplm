@@ -179,6 +179,8 @@ class TqdmStreamer(WrapperStreamer):
 class LigandStreamer(Streamer):
     def ligand(self) -> Chem.Mol|None:
         raise NotImplementedError
+    def error(self) -> str|None:
+        raise NotImplementedError
 
 class SmilesLigandStreamer(GeneratorStreamer, LigandStreamer):
     def __init__(self, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, lig_h: AtomRepr, center: np.ndarray|None=None):
@@ -192,7 +194,7 @@ class SmilesLigandStreamer(GeneratorStreamer, LigandStreamer):
         self.no_token_range = no_token_range
         self.center = center
         self.mol = None
-        self.error = 'PARSE_NOT_ENDED'
+        self._error = 'PARSE_NOT_ENDED'
         if lig_h not in ['all', 'none']:
             raise NotImplementedError
         super().__init__()
@@ -218,18 +220,20 @@ class SmilesLigandStreamer(GeneratorStreamer, LigandStreamer):
         if self.mol is not None:
             smi_out = Chem.MolToSmiles(self.mol, canonical=False)
             if smi_out != smi:
-                self.error = 'SMILES_MISMATCH'
+                self._error = 'SMILES_MISMATCH'
             else:
                 n_atom = self.mol.GetNumAtoms()
-                coord, pos, self.error = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, self.no_token_range, False, self.center)
+                coord, pos, self._error = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, self.no_token_range, False, self.center)
                 if coord is not None:
                     self.mol.AddConformer(array_to_conf(coord))
         else:
-            self.error = 'SMILES'
+            self._error = 'SMILES'
         yield False, next(pos_iter), [self.voc_encoder.voc2i['[END]']]
 
     def ligand(self):
         return self.mol
+    def error(self):
+        return self._error
 
 class AtomsCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
     def __init__(self, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, lig_h: AtomRepr, center: np.ndarray|None = None):
@@ -246,6 +250,7 @@ class AtomsCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
             raise NotImplementedError
         if center is not None:
             raise NotImplementedError
+        self._error = 'PARSE_NOT_ENDED'
         super().__init__()
     def put_generator(self):
         prompt_tokens = yield
@@ -293,7 +298,7 @@ class AtomCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
         self.n_generated_atom = None
         self.mol = None
         self.center = center
-        self.error = 'PARSE_NOT_ENDED'
+        self._error = 'PARSE_NOT_ENDED'
         if lig_h not in ['all', 'none']:
             raise NotImplementedError
         super().__init__()
@@ -336,20 +341,20 @@ class AtomCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
                     self.mol.AddConformer(array_to_conf(np.array(coordss)))
                 except Exception as e:
                     self.logger.info(f"Error at AddConformer: {type(e).__name__}{e.args}")
-                    self.error = 'ADD_CONFORMER'
+                    self._error = 'ADD_CONFORMER'
                     self.mol = None
                     break
                 try:
                     DetermineBonds(self.mol)
                 except Exception as e:
                     self.logger.info(f"Error at DetermineBondOrders: {type(e)}{e.args}")
-                    self.error = 'DETERMINE_BOND_ORDERS'
+                    self._error = 'DETERMINE_BOND_ORDERS'
                     self.mol = None
                     break
-                self.error = None
+                self._error = None
                 break
             elif atom_token not in atom_tokens:
-                self.error = 'ATOM'
+                self._error = 'ATOM'
                 break
             else:
                 atoms.append(self.voc_encoder.i2voc[atom_token])
@@ -362,7 +367,7 @@ class AtomCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
                     try:
                         coord = float(coord_str)
                     except Exception:
-                        self.error = 'COORD_NOT_FLOAT'
+                        self._error = 'COORD_NOT_FLOAT'
                         yield False, pos, [end_token]
                         return
                     if self.center is not None:
@@ -373,6 +378,8 @@ class AtomCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
         return 
     def ligand(self):
         return self.mol
+    def error(self):
+        return self._error
 
 def get_ligand_streamer(
         format: str, 

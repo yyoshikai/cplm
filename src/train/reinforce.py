@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from src.utils import IterateRecorder
+from src.utils import IterateRecorder, wraps
 from src.utils.path import cleardir
 from src.utils.ddp import reduce_float, all_gather
 from src.train.collator import solve_increasing_fn_left
@@ -58,39 +58,6 @@ def get_sample_stat(values: Tensor, idxs: Tensor) -> tuple[Tensor, Tensor]:
         sample_means[idxs == uidx] = mean
         sample_stds[idxs == uidx] = std
     return sample_means, sample_stds
-
-def whiten_scores(scores: Tensor, idxs: Tensor, sample_whiten: list[Literal['mean', 'std']], all_whiten: list[Literal['mean', 'std']]):
-    world_size = dist.get_world_size()
-    # all_gather scores
-    all_scores = [torch.zeros_like(scores) for _ in range(world_size)]
-    dist.all_gather(all_scores, scores)
-    all_scores = torch.cat(all_scores)
-    
-    # sample whiten
-    sample_means, sample_stds = get_sample_stat(scores, idxs)
-    sample_stds+=1e-5
-    sample_mean = 'mean' in sample_whiten
-    sample_std = 'std' in sample_whiten
-    if sample_mean or sample_std:
-        if sample_mean and sample_std:
-            scores = (scores-sample_means)/sample_stds
-        elif sample_mean:
-            scores = scores-sample_means
-        elif sample_std:
-            scores = (scores-sample_means)/sample_stds+sample_mean
-
-    # all whiten
-    all_mean = 'mean' in all_whiten
-    all_std = 'std' in all_whiten
-    mean, std = get_all_stat(scores)
-    if (all_mean or all_std) and not torch.all(torch.isnan(scores)):
-        if all_mean and all_std:
-            scores = (scores - mean) / (std+1e-5)
-        elif sample_mean:
-            scores = scores - mean
-        elif sample_std:
-            scores = (scores - mean) / (std+1e-5) + mean
-    return scores
 
 def all_gather_counter(c: dict) -> dict:
     cs = [None]*dist.get_world_size()
@@ -673,32 +640,69 @@ class SaveStepTrainer(WrapTrainer):
         if self.step == self.max_opt:
             self.step_recorder.flush()
 
-class WrapScoreTrainer(WrapTrainer):
-    def __init__(self, trainer):
-        super().__init__(trainer)
-        self._raw_scores = None
 
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        self._raw_scores = scores
-        scores = self.wrap_scores(scores, idxs, errors)
-        self.trainer.train(input, output, position, weight, scores, errors, idxs)
-
-    def step_info(self):
-        info = self.trainer.step_info()
-        info.update({('raw_score', i): raw_score for i, raw_score in enumerate(self._raw_scores.tolist())})
-        return info
-    
-    def wrap_scores(self, scores: Tensor, idxs: Tensor, errors: list[str]):
+# Score normalizer
+class Norm:
+    def __call__(self, raw_scores: Tensor, errors: list[str], idxs: Tensor) -> Tensor:
         raise NotImplementedError
+    
+    def get_error_mask(self, errors: list[str], device: torch.device):
+        is_vina_error = torch.tensor([error == 'VINA' for error in errors], dtype=torch.bool, device=device)
+        is_gen_error = torch.tensor([error is not None for error in errors], dtype=torch.bool, device=device) & (~is_vina_error)
+        return is_vina_error, is_gen_error
 
-class SampleWhitenTrainer(WrapScoreTrainer):
-    def __init__(self, trainer: Trainer, mean: bool, std: bool, eps: float=1e-5):
-        super().__init__(trainer)
+class EmptyNorm(Norm):
+    def __call__(self, raw_scores, errors, idxs):
+        return raw_scores
+
+class ClampNorm(Norm):
+    def __init__(self, norm: Norm, min: float):
+        self.norm = norm
+        self.min = min
+
+    def __call__(self, raw_scores, errors, idxs):
+        scores = self.norm(raw_scores, errors, idxs)
+        return torch.clamp(scores, min=self.min)
+
+class FillNorm(Norm):
+    def __init__(self, norm: Norm, gen_error_score: float, vina_error_score: float):
+        self.norm = norm
+        self.gen_error_score = gen_error_score
+        self.vina_error_score = vina_error_score
+    
+    def __call__(self, raw_scores, errors, idxs):
+        scores = self.norm(raw_scores, errors, idxs)
+        is_gen_error, is_vina_error = self.get_error_mask(errors, scores.device)
+        scores[is_gen_error] = self.gen_error_score
+        scores[is_vina_error] = self.vina_error_score
+        return scores
+
+class SampleDevFillNorm(Norm):
+    def __init__(self, norm: Norm, gen_error_dev: float, vina_error_dev: float):
+        self.norm = norm
+        self.gen_error_dev = gen_error_dev
+        self.vina_error_dev = vina_error_dev
+
+    def __call__(self, raw_scores, errors, idxs):
+        scores = self.norm(raw_scores, errors, idxs)
+        is_gen_error, is_vina_error = self.get_error_mask(errors, scores.device)
+        sample_mean, sample_std = get_sample_stat(scores, idxs)
+        if math.isfinite(self.gen_error_dev) and torch.any(is_gen_error):
+            scores[is_gen_error] = sample_mean[is_gen_error]+sample_std[is_gen_error]*self.gen_error_dev
+        if math.isfinite(self.vina_error_dev):
+            scores[is_vina_error] = sample_mean[is_vina_error]+sample_std[is_vina_error]*self.vina_error_dev
+
+class SampleWhitenNorm(Norm):
+    def __init__(self, norm: Norm, mean: bool, std: bool):
+        self.norm = norm
         self.mean = mean
         self.std = std
-        self.eps = eps
-
-    def wrap_scores(self, scores: Tensor, idxs: Tensor, errors: list[str]):
+    def __call__(self, raw_scores, errors, idxs):
+        scores = self.norm(raw_scores, errors, idxs)
+        if not self.mean and not self.std:
+            return scores
+        
+        # sample whiten
         sample_means, sample_stds = get_sample_stat(scores, idxs)
         sample_stds+=1e-5
         if self.mean and self.std:
@@ -706,5 +710,53 @@ class SampleWhitenTrainer(WrapScoreTrainer):
         elif self.mean:
             scores = scores-sample_means
         elif self.std:
-            scores = (scores-sample_means)/sample_stds+sample_means
+            scores = (scores-sample_means)/sample_stds+self.mean
+        return scores
+
+class AllWhitenNorm(Norm):
+    def __init__(self, norm: Norm, mean: bool, std: bool):
+        self.norm = norm
+        self.mean = mean
+        self.std = std
+
+
+    def __call__(self, raw_scores, errors, idxs):
+        scores = self.norm(raw_scores, errors, idxs)
+        world_size = dist.get_world_size()
+        # all_gather scores
+        all_scores = [torch.zeros_like(scores) for _ in range(world_size)]
+        dist.all_gather(all_scores, scores)
+        all_scores = torch.cat(all_scores)
+        
+        # all whiten
+        mean, std = get_all_stat(scores)
+        if not torch.all(torch.isnan(scores)):
+            if self.mean and self.std:
+                scores = (scores - mean) / (std+1e-5)
+            elif self.mean:
+                scores = scores - mean
+            elif self.std:
+                scores = (scores - mean) / (std+1e-5) + mean
+        return scores
+
+class RecordNorm(Norm):
+    def __init__(self, norm: Norm, result_dir: str):
+        self.norm = norm
+        self.path = f"{result_dir}/scores/{dist.get_rank()}.csv"
+        self.is_empty = True
+    
+    def __call__(self, raw_scores, errors, idxs):
+        scores = self.norm(raw_scores, errors, idxs)
+
+        if self.is_empty:
+            B = len(scores)
+            os.makedirs(os.path.dirname(self.path))
+            with open(self.path, 'w') as f:
+                f.write(','.join(['raw']*B+['normamized']*B)+'\n')
+                f.write(','.join([str(i%B) for i in range(B*2)])+'\n')
+            self.is_empty = False
+        with open(self.path, 'a') as f:
+            f.write(','.join(str(s) for s in raw_scores.tolist())+',')
+            f.write(','.join(str(s) for s in scores.tolist())+'\n')
+
         return scores
