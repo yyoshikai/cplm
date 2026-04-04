@@ -85,7 +85,7 @@ def _sync_result_dir(result_dir, subdirs):
     dist.broadcast_object_list(result_dirs, src=main_rank)
     result_dir = result_dirs[0]
     if result_dir is None:
-        raise ValueError
+        raise ValueError(f"{result_dir} is not empty.")
 
 def _set_sdp_kernel(sdp_kernel: str|None):
     if sdp_kernel is not None:
