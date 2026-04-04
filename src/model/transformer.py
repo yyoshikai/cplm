@@ -55,6 +55,8 @@ class MultiheadAttention(nn.Module):
             key Tensor[B, H, L, Dh]
             value Tensor[B, H, L, Dh]
             size int
+        Lx: input size
+        Lc: input size+cache size
 
         """
         self.n_forward += 1
@@ -382,7 +384,7 @@ class TransformerModel(Model):
             ) for il in range(self.num_layers)
         ] # [i_layer][k,v][B, H, L, Dh]
         cache_size = Lcontext
-        del caches
+        del caches, ucaches
         cur_inputs = [ucur_inputs[iuc] for iuc in b2iuc]
         is_continues = [uis_continues[iuc] for iuc in b2iuc]
         next_positions = [unext_positions[iuc] for iuc in b2iuc]

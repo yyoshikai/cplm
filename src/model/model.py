@@ -34,6 +34,9 @@ class Model(nn.Module):
     def get_gpuuse(self, batch_size: int, length: int, bf16: bool, kernel: str, capture_rate: bool=True):
         raise NotImplementedError
     
+    def get_gen_gpuuse(self, batch_size: int, length: int, max_new_token: int, n_prompt: int):
+        raise NotImplementedError
+    
     @property
     def state_size(self) -> int:
         raise NotImplementedError

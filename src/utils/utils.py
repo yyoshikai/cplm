@@ -263,6 +263,24 @@ def solve_increasing_fn_left(func: Callable[[int], float], start_sup: int) -> in
             sup = v
     return min
 
+def solve_increasing_fn(f: Callable[[float], float], start_sup: float, eps: float) -> tuple[float, float]:
+    min = 0.0
+    sup = start_sup
+
+    # get max
+    while f(sup) <= 0:
+        min = sup
+        sup = sup*2
+
+    # narrow down
+    while sup - min >= eps:
+        v = (sup+min) / 2
+        if f(v) <= 0:
+            min = v
+        else:
+            sup = v
+    return min, sup
+
 @contextmanager
 def silence_print(silence: bool=True):
     if silence:

@@ -2,6 +2,7 @@ import os, yaml, math, random
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
+from collections import defaultdict
 from logging import getLogger
 import numpy as np, pandas as pd
 import torch
@@ -16,6 +17,7 @@ from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
+from src.utils import solve_increasing_fn_left, solve_increasing_fn
 from src.utils import get_git_hash, wraps
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
@@ -106,7 +108,6 @@ class ReinforceDataIter:
         self.device = device
         self.batch_size = batch_size
         self.generate_per_sample = generate_per_sample
-        self.fix_pocket = fix_pocket
         assert self.batch_size * self.ddp_size % self.generate_per_sample == 0
         if self.rank == self.data_rank:
             loader = DataLoader(train_data, batch_size=None, 
@@ -115,15 +116,16 @@ class ReinforceDataIter:
             self.train_iter = loader.__iter__()
             if max_prompt_len is not None:
                 self.train_iter = itr.filterfalse(lambda x: len(x[2]) > max_prompt_len, self.train_iter)
-            if self.fix_pocket:
-                self.train_fixed_item = self.train_iter.__next__()
+            if fix_pocket:
+                fixed_item = self.train_iter.__next__()
                 del self.train_iter
+                self.train_iter = itr.repeat(fixed_item)
 
     def get(self) -> tuple[Tensor, list[str], list[Tensor], list[list[int]]]:
         if self.rank == self.data_rank:
             all_items = []
             for si in range(self.batch_size*self.ddp_size // self.generate_per_sample):
-                item = self.train_fixed_item if self.fix_pocket else self.train_iter.__next__()
+                item = self.train_iter.__next__()
                 all_items += [item] * self.generate_per_sample
             batched_items = [all_items[r*self.batch_size:(r+1)*self.batch_size] for r in range(self.ddp_size)]
         else:
@@ -289,12 +291,12 @@ def main():
     parser.add_argument('--ppo-clip-eps', type=float, default=0.2)
     ## Data
     parser.add_argument('--max-prompt-len', type=int)
-    parser.add_argument('--generate-per-sample', type=int, default=1)
+    parser.add_argument('--prompt-per-opt', type=int, default=8)
+    parser.add_argument('--gen-per-prompt', type=int, default=16)
     parser.add_argument('--train-sample', type=float, default=1.0)
     parser.add_argument('--valid-sample', type=float, default=1.0)
     ## training
     parser.add_argument('--studyname', required=True)
-    parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--max-opt', type=int, default=10000)
     ## optimizer
     parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
@@ -338,12 +340,7 @@ def main():
     if args.test: args.studyname+='_test'
     if args.save_opt is None:
         args.save_opt = 1 if args.test else 500
-    if args.mbatch_size is None:
-        assert args.gpu_size_gb is not None
-        args.gpu_size = args.gpu_size_gb * (2**30)
-    else:
-        assert args.gpu_size_gb is None
-        args.gpu_size = None
+    args.gpu_size = args.gpu_size_gb * (2**30)
     args.sdp_kernel = 'FLASH'
     logs = []
 
@@ -379,7 +376,8 @@ def main():
     
     # Environment
     result_dir = f"reinforce/results/{args.studyname}"
-    logger, rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
+    ddp_size = dist.get_world_size()
+    logger, ddp_rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
     ignore_rdkit_warning()
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
 
@@ -394,12 +392,27 @@ def main():
     logs += data_log
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
-    data_iter = ReinforceDataIter(train_data, device, args.batch_size, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
+    # data_iter = ReinforceDataIter(train_data, device, args.batch_size, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
+
+    _, _, DATA_RANK = get_process_ranks()
+    data_rank = DATA_RANK['train']
+    if ddp_rank == data_rank:
+        loader = DataLoader(train_data, batch_size=None, 
+            sampler=InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed)),
+            num_workers=args.num_workers, pin_memory=True, prefetch_factor=10 if args.num_workers > 0 else None)
+        train_iter = loader.__iter__()
+        if args.max_prompt_len is not None:
+            train_iter = itr.filterfalse(lambda x: len(x[2]) > args.max_prompt_len, train_iter)
+        if args.fix_pocket:
+            fixed_item = train_iter.__next__()
+            del train_iter
+            train_iter = itr.repeat(fixed_item)
+
 
     ## records
     train_looper = Loopers([
         LogLooper(logger, 1000, 5, 'step', 'training'),
-        TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 1000),
+        TimeWriteLooper(f"{result_dir}/steps/times/{ddp_rank}.csv", 1000),
         TimeLogLooper(logger, 'step', 1000), 
         GPUUseLooper(logger, device, 'step', 5)
     ])
@@ -440,10 +453,99 @@ def main():
         do_save = step in do_save_steps
 
         train_looper.put('get_batch')
-        idxs, pdbs, prompt_tokens, positions = data_iter.get()
+        # calc distribution
+        check_data_dist = is_starting and 'data_dist' in args.check
+        if ddp_rank == DATA_RANK['train']:
+            items = [train_iter.__next__() for _ in range(args.prompt_per_opt)]
+            items = sorted(items, key=lambda item: -len(item[2])) # [40000, 30000, 20000, ...]
+        else:
+            items = None
+        items = broadcast_object(items, DATA_RANK['train'])
+        prompt_sizes = [len(item[2]) for item in items]
+
+        policy = trainer.policy_model()
+        ## calc n_iter
+        n_gen = args.gen_per_prompt*args.prompt_per_opt
+        n_job = 0
+        next_i_gen = 0
+        while True:
+            i_prompt = next_i_gen // args.gen_per_prompt
+            prompt_size = prompt_sizes[i_prompt]
+            b_prompt = math.ceil((next_i_gen+b)/args.gen_per_prompt)-i_prompt
+            b = solve_increasing_fn_left(lambda b: policy.get_gen_gpuuse(
+                b, prompt_size, args.max_new_token, b_prompt)-args.gpu_size)
+            if check_data_dist:
+                logger.debug(f"{n_job=}, {next_i_gen=}, {prompt_size=}, {b=}")
+            next_i_gen += b
+            n_job += 1
+            if next_i_gen >= n_gen:
+                break
+        n_iter = math.ceil(n_job / ddp_size)
+        n_job = n_iter*ddp_size
+        def is_ok(t: float):
+            next_i_gen = 0
+            for i_job in range(n_job):
+                i_prompt = next_i_gen // args.gen_per_prompt
+                b_prompt = math.ceil((next_i_gen+b)/args.gen_per_prompt)-i_prompt
+                b_gpu = solve_increasing_fn_left(lambda b: policy.get_gen_gpuuse(
+                    b, prompt_size, args.max_new_token, b_prompt)-args.gpu_size)
+                b_t = solve_increasing_fn_left(lambda b: policy.get_gen_time(
+                    b, prompt_size, args.max_new_token, b_prompt)-t)
+                b = min(b_gpu, b_t)
+                next_i_gen += b
+                if next_i_gen >= n_gen: 
+                    return -1
+            return 1
+        t, _ = solve_increasing_fn(is_ok, 10, 0.5)
+
+        left_idxs = itr.chain(*[[i]*args.gen_per_prompt for i in range(args.prompt_per_opt)])
+        idx2cached_rank = {}
+        idx2cache = {}
+        idx2generation = defaultdict(list)
+        for i_iter in range(n_iter):
+            for idx in idx2cache:
+                if idx < left_idxs[0]:
+                    del idx2cache[idx]
+            batch_idxss = []
+            for i_gpu in range(ddp_size):
+                b = min(
+                    solve_increasing_fn_left(lambda b: policy.get_gen_gpuuse(
+                        b, prompt_size, args.max_new_token, b_prompt)-args.gpu_size),
+                    solve_increasing_fn_left(lambda b: policy.get_gen_time(
+                        b, prompt_size, args.max_new_token, b_prompt)-t)
+                )
+                batch_idxss.append(left_idxs[:b])
+                left_idxs = left_idxs[b:]
+                if len(left_idxs) == 0:
+                    break
+            batch_idxss += [[]]*(ddp_size-len(batch_idxss))
+            idxs_to_cache = sorted(set(itr.chain(*batch_idxss)) - set(idx2cached_rank.keys()))
+            for i, idx in enumerate(idxs_to_cache):
+                idx2cached_rank[idx] = i % ddp_size if (i % (ddp_size*2) < ddp_size) else (-i-1)%ddp_size
+            for idx, rank in idx2cached_rank.items():
+                if ddp_rank == rank and idx not in idx2cache:
+                    idx2cache[idx] = policy.get_cache(items[idx])
+            for rank, batch_idxs in enumerate(batch_idxss):
+                for idx in batch_idxs:
+                    if idx2cached_rank[idx] != rank:
+                        if rank == ddp_rank:
+                            idx2cache[idx] = receive_cache(idx2cached_rank[idx])
+                        elif idx2cached_rank[idx] == rank:
+                            send_cache(idx2cache[idx])
+            del rank
+            batch_idxs = batch_idxss[ddp_rank]
+            batch_caches = [idx2cache[idx] for idx in batch_idxs]
+            batch_items = [items[idx] for idx in batch_idxs]
+            generations = generator.generate(policy, step, i_iter, batch_caches, do_save, batch_items)
+            for idx, generation in zip(batch_idxs, generations):
+                idx2generation[idx].append(generation)
+
+        n_major = 
+
+
+
 
         train_looper.put('generate')
-        input, output, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
         if is_starting:
             logger.info(f"step {step} raw scores={scores}")
         scores = norm(scores)
