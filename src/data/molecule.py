@@ -81,6 +81,7 @@ class MolTokenizer:
                 if self.h_coord or symbols[ai] != 'H':
                     tokens += self.coord_tokenizer.tokenize_array(coords[ai])
                 tokenized_atom_idxs.append(ai)
+            order = list(range(len(tokens)))
         elif self.format == 'ordered_atoms_coords':
             atom_tokens = []
             coord_tokens = []
@@ -109,6 +110,8 @@ class MolTokenizer:
                     for ai in atom_idxs if (symbols[ai] != 'H' or self.h_coord)])
             tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(shown_coords)
             order = list(range(len(tokens)))
+        else:
+            raise ValueError(f"Unknown format={self.format}")
         return tokens, order
     def vocs(self):
         if self.format == 'atom_coords':
