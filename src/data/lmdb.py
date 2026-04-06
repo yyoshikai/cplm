@@ -29,7 +29,11 @@ class LMDBDataset(Dataset[bytes]):
 
     def __getitem__(self, idx: int) -> bytes:
         env, txn = load_lmdb(self.path)
-        item = txn.get(self.idx_to_key(idx))
+        try:
+            item = txn.get(self.idx_to_key(idx))
+        except Exception as e:
+            print(f"{self.path=}, {idx=}", flush=True)
+            raise e
         if item is None:
             raise ValueError(f"Key not found: {idx}, {self.idx_to_key(idx)}, {self.path}")
         return item

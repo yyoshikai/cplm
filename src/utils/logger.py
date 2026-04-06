@@ -1,5 +1,6 @@
 import sys, os, logging
 from logging import Logger, Formatter, Handler, StreamHandler, FileHandler, Filter, LogRecord, getLogger
+from logging.handlers import RotatingFileHandler
 from collections.abc import Callable
 from tqdm import tqdm as _tqdm
 from .utils import get_git_hash
@@ -52,6 +53,18 @@ def add_file_handler(logger: Logger, path: str, level=logging.DEBUG, mode: str='
     if not os.path.exists(os.path.dirname(path)):
         os.makedirs(os.path.dirname(path))
     handler = FileHandler(path, mode)
+    handler.setFormatter(Formatter(fmt, datefmt, style='{'))
+    handler.setLevel(level)
+    if logger.level > level and not keep_level:
+        logger.setLevel(level)
+    logger.addHandler(handler)
+    return handler
+
+def add_rotating_handler(logger: Logger, path: str, level=logging.DEBUG, mode: str='w', 
+        fmt: str=DEFAULT_FMT, datefmt=DEFAULT_DATEFMT, keep_level: bool=False, maxBytes: int=50000, backupCount: int=1) -> FileHandler:
+    if not os.path.exists(os.path.dirname(path)):
+        os.makedirs(os.path.dirname(path))
+    handler = RotatingFileHandler(path, mode, maxBytes, backupCount)
     handler.setFormatter(Formatter(fmt, datefmt, style='{'))
     handler.setLevel(level)
     if logger.level > level and not keep_level:
