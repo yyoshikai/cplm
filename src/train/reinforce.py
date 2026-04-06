@@ -691,6 +691,7 @@ class SampleDevFillNorm(Norm):
             scores[is_gen_error] = sample_mean[is_gen_error]+sample_std[is_gen_error]*self.gen_error_dev
         if math.isfinite(self.vina_error_dev):
             scores[is_vina_error] = sample_mean[is_vina_error]+sample_std[is_vina_error]*self.vina_error_dev
+        return scores
 
 class SampleWhitenNorm(Norm):
     def __init__(self, norm: Norm, mean: bool, std: bool):
@@ -739,6 +740,17 @@ class AllWhitenNorm(Norm):
                 scores = (scores - mean) / (std+1e-5) + mean
         return scores
 
+class Fill0Norm(Norm):
+    def __init__(self, norm):
+        self.norm = norm
+
+
+    def __call__(self, raw_scores, errors, idxs):
+        scores = self.norm(raw_scores, errors, idxs)
+        scores[torch.isnan(scores)] = 0.0
+        return scores
+
+
 class RecordNorm(Norm):
     def __init__(self, norm: Norm, result_dir: str):
         self.norm = norm
@@ -750,7 +762,7 @@ class RecordNorm(Norm):
 
         if self.is_empty:
             B = len(scores)
-            os.makedirs(os.path.dirname(self.path))
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, 'w') as f:
                 f.write(','.join(['raw']*B+['normamized']*B)+'\n')
                 f.write(','.join([str(i%B) for i in range(B*2)])+'\n')
@@ -760,3 +772,4 @@ class RecordNorm(Norm):
             f.write(','.join(str(s) for s in scores.tolist())+'\n')
 
         return scores
+

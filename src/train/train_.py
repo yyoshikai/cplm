@@ -31,7 +31,7 @@ from .collator import DDPStringCollateLoader, InfiniteLoader
 from ..model import TransformerModel, MambaModel
 from ..model.model import Model
 from ..utils import git_commit, get_git_hash, should_show
-from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, set_third_party_logger
+from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, add_rotating_handler, set_third_party_logger
 from ..utils.model import get_num_params, get_model_size
 from ..utils.path import cleardir
 from ..utils.ddp import reduce_float
@@ -103,7 +103,7 @@ def get_max_opt(result_dir: str) -> int:
     logger.info(f"{max_opt=}")
     return max_opt
 
-def _get_train_logger(result_dir, get_unk_logger: bool):
+def _get_train_logger(result_dir, get_unk_logger: bool, get_proc_logger: bool) -> tuple[Logger,...]:
 
     # ddp info
     rank = dist.get_rank()
@@ -121,16 +121,25 @@ def _get_train_logger(result_dir, get_unk_logger: bool):
     if not is_main:
         for handler in [stream_handler, info_handler]:
             handler.addFilter(lambda record: not getattr(record, 'no_dup', False))
+    outs = [logger]
 
     if get_unk_logger:
         unk_logger = getLogger('unk')
         unk_logger.propagate = False
         add_file_handler(unk_logger, f"{result_dir}/logs/unknowns.log", fmt=fmt, mode='a')
+        outs.append(unk_logger)
 
-    # debug
     set_third_party_logger()
 
-    return logger
+    # process logger
+    if get_proc_logger:
+        proc_logger = getLogger('proc')
+        proc_logger.propagate = False
+        add_rotating_handler(proc_logger, f"{result_dir}/logs/process/{rank}.log", fmt=fmt, mode='a')
+        outs.append(proc_logger)
+
+
+    return outs
 
 def add_train_args(parser: ArgumentParser):
     """
@@ -381,7 +390,7 @@ def save_batch(dir: str, logger: Logger, input: Tensor, target: Tensor, position
             f.write(df.to_string(index=False))
 
 
-def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_unk_logger: bool=True):
+def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_unk_logger: bool=False, get_proc_logger: bool=False):
     # init DDP
     rank, size, device = init_ddp()
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
@@ -391,7 +400,8 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_unk
     _sync_result_dir(result_dir, subdirs)
 
     # logging
-    logger = _get_train_logger(result_dir, get_unk_logger)
+    loggers = _get_train_logger(result_dir, get_unk_logger, get_proc_logger)
+    logger = loggers[0]
     logger.debug(f"{device=}, {torch.cuda.device_count()=}")
     logger.info(f"{rdkit.__version__=}", **NO_DUP)
     logger.info(f"{transformers.__version__=}", **NO_DUP)
@@ -428,7 +438,7 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_unk
     log_logs(logger, preparation_logs)
     logger.info('')
 
-    return logger, rank, device
+    return loggers, rank, device
 
 def get_optimizer_scheduler(model: nn.Module, max_opt: int, 
         weight_decay_all: bool, weight_decay: float, schedule_free: bool, 
@@ -549,8 +559,8 @@ def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncode
 def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
 
     result_dir = os.path.join(tname, 'results', args.studyname)
-    logger, rank, device = set_env(result_dir, args, preparation_logs, 
-            subdirs=['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log'])
+    (logger, proc_logger), rank, device = set_env(result_dir, args, preparation_logs, 
+            subdirs=['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log'], get_proc_logger=True)
     logger.info(f"num_workers={args.num_workers}", **NO_DUP)
     MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
 
@@ -569,6 +579,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     # Times
     train_looper = Loopers([
         LogLooper(logger, 10000, 5, 'step', 'training'), 
+        LogLooper(proc_logger, 1, math.inf, 'step', 'training'),
         TimeLogLooper(logger, 'step', 10000), 
         TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 10000), 
         GPUUseLooper(logger, device, 'step', 5)
@@ -628,7 +639,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     worker_opt_accum_weight = 0.0
     nan_grad_step_saved = False
     ## recorder
-    step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", 1000)
+    step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", 1)
 
     train_start = time()
     train_looper.start_loops()
