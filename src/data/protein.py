@@ -1,6 +1,6 @@
 import io
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 import numpy as np
 
 from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
@@ -162,7 +162,7 @@ class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
 from .molecule import MolTokenizer
 class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, protein_data: Dataset[OBMol], *,
-            heavy: AtomRepr, h: AtomRepr, format, coord_range: int, order: Literal['residue', 'can', 'ran'], base_seed: int):
+            heavy: AtomRepr, h: AtomRepr, format, coord_range: int, order: Literal['residue', 'can', 'ran'], base_seed: int, looper: Optional['Looper']=None):
         super().__init__(protein_data)
         self.protein_data = protein_data
 
@@ -170,10 +170,11 @@ class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
         if order == 'residue':
             self.tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
         else:
-            self.tokenizer = MolTokenizer(format, h_coord=h == 'all', coord_range=coord_range)
+            self.tokenizer = MolTokenizer(format, h_coord=h == 'all', coord_range=coord_range, looper=looper)
 
         self.h = h
         self.base_seed = base_seed
+        self.looper = looper
 
     def __getitem__(self, idx: int):
         protein = self.protein_data[idx]
@@ -196,11 +197,13 @@ class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
             # tokenize
             tokens, orders = self.tokenizer(atoms, coords)
         else:
+            if self.looper is not None:
+                self.looper.put('obmol2rdmol')
             protein = obmol2rdmol(protein, sanitize=False) # sanitize=True raises errors but not needed for following processes
+            if self.looper is not None:
+                self.looper.put('set_atom_order')
             protein = set_atom_order(protein, self.order == 'ran', get_rng(self.base_seed, idx))
             tokens, orders = self.tokenizer.tokenize(protein)
         return tokens, orders
     def vocs(self) -> set[str]:
         return self.tokenizer.vocs()
-
-        

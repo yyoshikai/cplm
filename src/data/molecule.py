@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 from logging import getLogger
 import numpy as np
 from torch.utils.data import Dataset
@@ -38,21 +38,20 @@ MAX_VALENCE = 10
 
 class MolTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float):        
+    def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float, looper: Optional['Looper']=None):        
         self.h_coord = h_coord
         self.format = format
         if self.format == 'smiles_coords':
             self.smi_tokenizer = SmilesTokenizer()
         self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
+        self.looper = looper
 
         self.logged = False
 
     def tokenize(self, mol: Chem.Mol):
-        
+        if self.looper is not None:
+            self.looper.put('mol_tokenize')
         smi = Chem.MolToSmiles(mol, canonical=False)
-        if not self.logged:
-            self.logger.debug(f"{smi=}")
-            self.logged = True
         atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
         
         coords = mol.GetConformer().GetPositions()
@@ -112,6 +111,7 @@ class MolTokenizer:
             order = list(range(len(tokens)))
         else:
             raise ValueError(f"Unknown format={self.format}")
+        self.logger.info("Tokenize ended.")
         return tokens, order
     def vocs(self):
         if self.format == 'atom_coords':

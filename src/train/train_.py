@@ -139,7 +139,7 @@ def _get_train_logger(result_dir, get_unk_logger: bool, get_proc_logger: bool) -
         outs.append(proc_logger)
 
 
-    return outs
+    return tuple(outs)
 
 def add_train_args(parser: ArgumentParser):
     """
@@ -691,11 +691,14 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         # step
         opt_looper.put('step')
         ## get batch
-        train_looper.put('get_batch')
+        train_looper.put('get_batch_iter')
         token_batch, position_batch, weight_batch = train_iter.__next__()
+        train_looper.put('get_batch_slice_token')
         input, target = token_batch[:-1], token_batch[1:]
+        train_looper.put('get_batch_slice_position')
         position = position_batch[:-1]
         max_len, batch_size = token_batch.shape
+        train_looper.put('get_batch_iter_sum')
         worker_step_weight = weight_batch.sum().item()
 
         ## Log target for final check

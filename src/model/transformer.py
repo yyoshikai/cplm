@@ -314,6 +314,25 @@ class TransformerModel(Model):
             output += (sin, cos, )
         return output[0] if len(output) == 1 else output
 
+    def get_cache(self, context: Tensor, position: list[int], out_caches: list[KVCache]|None, out_logit: bool):
+        sin, cos = self.get_pos_buffer(position)
+        x = context.unsqueeze(-1)
+        x = self.embedding(x)
+        if out_caches is None:
+            caches = []
+        for il, layer in enumerate(self.layers):
+            cache = out_caches[il] if out_caches is not None else None
+            x, cache = layer(x, sin, cos, cache=cache, is_causal=True) # [L, 1, D]
+            if out_caches is None:
+                caches.append(cache)
+        if out_caches is not None:
+            caches = out_caches
+        if out_logit:
+            logit = self.predictor(self.norm(x[-1, 0])) # [L, 1, D] -> [D]
+            return caches, logit
+        else:
+            return caches
+
     @torch.inference_mode()
     def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int):
         """
@@ -365,12 +384,7 @@ class TransformerModel(Model):
             is_continue, next_position, next_token_range = outs[0]
             uis_continues.append(is_continue)
             if not is_continue: continue
-            sin, cos = self.get_pos_buffer(uposition) # [L, Dh], [L, Dh]
-            x = ucontext.unsqueeze(-1) # [L, 1(B)]
-            x = self.embedding(x)
-            for il, layer in enumerate(self.layers):
-                x, _ = layer(x, sin, cos, is_causal=True, cache=ucaches[iuc][il], cache_size=0) # [L, 1, D]
-            logit = self.predictor(self.norm(x[-1, 0])) # [L, 1, D] -> [D]
+            _, logit = self.get_cache(ucontext, uposition, ucaches[iuc], out_x=True)
             range_logit = logit[next_token_range]
             range_output = torch.multinomial(F.softmax(range_logit, dim=0), num_samples=1).item()
             output = next_token_range[range_output]

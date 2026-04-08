@@ -377,7 +377,7 @@ def main():
     # Environment
     result_dir = f"reinforce/results/{args.studyname}"
     ddp_size = dist.get_world_size()
-    logger, ddp_rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
+    (logger, plogger), ddp_rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'], get_proc_logger=True)
     ignore_rdkit_warning()
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
     plogger = getLogger("process") # for ddp check
@@ -458,14 +458,14 @@ def main():
 
         train_looper.put('get_batch')
         ## get data
-        check_data_dist = is_starting and 'data_dist' in args.check
         if ddp_rank == DATA_RANK['train']:
             items = [train_iter.__next__() for _ in range(args.prompt_per_opt)]
             items = sorted(items, key=lambda item: -len(item[2])) # [40000, 30000, 20000, ...]
         else:
-            items = None
-        items = broadcast_object(items, DATA_RANK['train'])
+            items = [None]*args.prompt_per_opt
+        dist.broadcast_object_list(items, src=DATA_RANK['train'])
         prompt_sizes = [len(item[2]) for item in items]
+        plogger.debug(f"{prompt_sizes=}")
 
         ## calc n_iter
         policy = trainer.policy_model()
@@ -478,8 +478,7 @@ def main():
             b_prompt = math.ceil((next_i_gen+b)/args.gen_per_prompt)-i_prompt
             b = solve_increasing_fn_left(lambda b: policy.get_gen_gpuuse(
                 b, prompt_size, args.max_new_token, b_prompt)-args.gpu_size)
-            if check_data_dist:
-                logger.debug(f"{n_job=}, {next_i_gen=}, {prompt_size=}, {b=}")
+            plogger.debug(f"{n_job=}, {next_i_gen=}, {prompt_size=}, {b=}")
             next_i_gen += b
             n_job += 1
             if next_i_gen >= n_gen:
@@ -499,8 +498,10 @@ def main():
                     b, prompt_size, args.max_new_token, b_prompt)-t)
                 b = min(b_gpu, b_t)
                 next_i_gen += b
-                if next_i_gen >= n_gen: 
+                if next_i_gen >= n_gen:
+                    plogger.debug(f"{t=}: OK") 
                     return -1
+            plogger.debug(f"{t=}: NG")
             return 1
         t, _ = solve_increasing_fn(is_ok, 10, 0.5)
 
@@ -509,10 +510,12 @@ def main():
         idx2cache = {}
         idx2generations = defaultdict(list)
         for i_iter in range(n_iter):
+            plogger.debug(f"{i_iter=}")
             ## delete unnecessary cache
             for idx in idx2cache:
                 if idx < left_idxs[0]:
-                    del idx2cache[idx]
+                    plogger.debug(f"delete cache {idx=}")
+                    del idx2cache[idx], idx2cached_rank[idx]
 
             ## distribute idx
             batch_idxss = []
@@ -528,13 +531,19 @@ def main():
                 if len(left_idxs) == 0:
                     break
             batch_idxss += [[]]*(ddp_size-len(batch_idxss))
+            for rank, batch_idxs in enumerate(batch_idxss):
+                plogger.debug(f"{rank=} {batch_idxs=}")
 
+            # get_cache
+            
             ## calc cache
             idxs_to_cache = sorted(set(itr.chain(*batch_idxss)) - set(idx2cached_rank.keys()))
             for i, idx in enumerate(idxs_to_cache):
                 idx2cached_rank[idx] = i % ddp_size if (i % (ddp_size*2) < ddp_size) else (-i-1)%ddp_size
+            plogger.debug(f"{idx2cached_rank=}")
             for idx, rank in idx2cached_rank.items():
                 if ddp_rank == rank and idx not in idx2cache:
+                    plogger.debug(f"getting cache for {idx=}")
                     idx2cache[idx] = policy.get_cache(items[idx])
             
             ## send cache
