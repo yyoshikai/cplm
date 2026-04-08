@@ -9,10 +9,11 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
+from torch.utils.data import Dataset, get_worker_info
 from ..utils import should_show
 from ..utils.logger import NO_DUP
 from ..utils.notice import notice, SLACK_URL
-
+from ..data.data import WrapDataset
 """
 Basic usage:
 

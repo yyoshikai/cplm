@@ -2,7 +2,10 @@ import os
 import queue
 import itertools as itr
 import multiprocessing as mp
-from functools import lru_cache, wraps
+from collections import defaultdict
+from functools import lru_cache
+from logging import Logger
+from time import time
 from typing import TypeVar, Generic, Optional
 from collections.abc import Callable, Iterable
 from logging import getLogger
@@ -12,6 +15,7 @@ import torch
 import torch.utils.data as torch_data
 from torch import Tensor
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
+from ..utils import should_show
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -234,22 +238,66 @@ class ReadDataset(IterableDataset[str]):
             for line in f:
                 yield line.rstrip()
 
-# 260325 Datasetに異様な時間がかかっていることがあったので、その解決用に作った。
-class TimeProxyDataset(WrapDataset[T_co]):
-    def __getitem__(self, idx: int):
-        logger.info(f"{type(self.dataset)}.__getitem__({idx}) started.")
-        output = self.dataset[idx]
-        logger.info(f"{type(self.dataset)}.__getitem__({idx}) ended.")
-        return output
+class DatasetTimeHook:
+    def __init__(self, logger: Logger, min_interval: int, max_interval: int):
+        self.logger = logger
+        self.min_interval = min_interval
+        self.max_interval = max_interval
 
-def add_time_hook(dataset: Dataset):
-    if not isinstance(dataset, TimeProxyDataset):
-        print(f"Added time hook: {type(dataset)}")
-        dataset = TimeProxyDataset(dataset)
-        
-        for k, v in vars(dataset.dataset).items():
-            if isinstance(v, Dataset):
-                v = add_time_hook(v)
-                setattr(dataset.dataset, k, v)
-    return dataset
-    
+        self.ids2total_t = defaultdict(float)
+        self._cur_ids = []
+        self._id2name = {}
+        self._ids2cur_start = {}
+        self.n_getitem = 0
+
+    def start_getitem(self, dataset: Dataset):
+        dataset_id = id(dataset)
+        self._cur_ids.append(dataset_id)
+        self._id2name[dataset_id] = type(dataset).__name__
+        self._ids2cur_start[tuple(self._cur_ids)] = time()
+
+    def end_getitem(self):
+        cur_ids = tuple(self._cur_ids)
+        self.ids2total_t[cur_ids] += time() - self._ids2cur_start[cur_ids]
+        self._cur_ids.pop()
+        if len(self._cur_ids) == 0:
+            self.n_getitem += 1
+            worker_info = get_worker_info()
+            if (worker_info is None or worker_info.id == 0) and \
+                    should_show(self.n_getitem, self.max_interval, self.min_interval):
+                self.logger.debug(f"Dataset Times in {self.n_getitem} __getitem__:")
+                for ids in self._ids2cur_start.keys():
+                    total_t = self.ids2total_t[ids]
+                    msg = '  '*(len(ids)-1)+self._id2name[ids[-1]]+f': {total_t:.04f}s'
+                    inner_total_t = sum(total_t0 for ids0, total_t0 in self.ids2total_t.items() if len(ids0) == len(ids)+1 and ids == ids0[:len(ids)])
+                    if inner_total_t > 0:
+                        msg += f" ({total_t-inner_total_t:.04f}s)"
+                    self.logger.debug(msg)
+
+class TimeProxyDataset(WrapDataset[T]):
+    def __init__(self, dataset: Dataset, looper: DatasetTimeHook):
+        super().__init__(dataset)
+        self.looper = looper
+
+    def __getitem__(self, idx):
+        self.looper.start_getitem(self.dataset)
+        item = self.dataset[idx]
+        self.looper.end_getitem()
+        return item
+
+from collections.abc import Sequence, Mapping
+def add_time_hook(data: Dataset|Sequence|Mapping, looper: DatasetTimeHook) -> TimeProxyDataset:
+    if isinstance(data, str):
+        return data
+    elif isinstance(data, Dataset) and not isinstance(data, TimeProxyDataset):
+        for k, v in vars(data).items():
+            setattr(data, k, add_time_hook(v, looper))
+        data = TimeProxyDataset(data, looper)
+        return data
+    elif isinstance(data, Sequence):
+        if len(data) < 10: # indicesなど長いものは除外
+            return type(data)(add_time_hook(i, looper) for i in data)
+    elif isinstance(data, Mapping):
+        if len(data) < 10:
+            return type(data)({k: add_time_hook(i, looper) for i in data})
+    return data
