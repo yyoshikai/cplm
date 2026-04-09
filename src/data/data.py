@@ -3,10 +3,11 @@ import queue
 import itertools as itr
 import multiprocessing as mp
 from collections import defaultdict
+from collections.abc import Sequence, Mapping
 from functools import lru_cache
 from logging import Logger
 from time import time
-from typing import TypeVar, Generic, Optional
+from typing import TypeVar
 from collections.abc import Callable, Iterable
 from logging import getLogger
 
@@ -238,6 +239,14 @@ class ReadDataset(IterableDataset[str]):
             for line in f:
                 yield line.rstrip()
 
+class ShuffleDataset(WrapDataset[T]):
+    def __init__(self, dataset: Dataset[T], mmap_path: str, indices: np.ndarray):
+        super().__init__(dataset)
+        self.indices = np.memmap(mmap_path, dtype=np.int64, mode='w+', shape=(len(indices),))
+        self.indices[:] = indices[:]
+    def __getitem__(self, idx: int):
+        return self.dataset[self.indices[idx]]
+
 class DatasetTimeHook:
     def __init__(self, logger: Logger, min_interval: int, max_interval: int):
         self.logger = logger
@@ -285,9 +294,8 @@ class TimeProxyDataset(WrapDataset[T]):
         self.looper.end_getitem()
         return item
 
-from collections.abc import Sequence, Mapping
 def add_time_hook(data: Dataset|Sequence|Mapping, looper: DatasetTimeHook) -> TimeProxyDataset:
-    if isinstance(data, str):
+    if isinstance(data, (str, np.ndarray, torch.Tensor)): # np.memmap is np.ndarray
         return data
     elif isinstance(data, Dataset) and not isinstance(data, TimeProxyDataset):
         for k, v in vars(data).items():
