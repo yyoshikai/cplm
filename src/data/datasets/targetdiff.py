@@ -1,11 +1,13 @@
 import os, pickle, re
 import numpy as np
+from typing import Literal
 from rdkit import Chem
-from openbabel.openbabel import OBMol, OBConversion
+from openbabel.openbabel import OBMol
 
 from ...utils.lmdb import load_lmdb
 from ..protein import Pocket
 from ..data import TupleDataset
+from ...chem import read_pdb_path
 
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_CD1_1_TYPES_DIR = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020_v1.1_types"
@@ -64,8 +66,8 @@ class TargetDiffScafCDDataset(TupleDataset[tuple[Pocket, Chem.Mol, float, str, s
     def __len__(self):
         return len(self.key_idxs)
 
-class TargetDiffScafCDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float]]):
-    def __init__(self, split: str, targetdiff_dir: str=DEFAULT_TARGETDIFF_DIR, 
+class TargetDiffScafCDProteinDataset(TupleDataset[tuple[OBMol|Chem.Mol, Chem.Mol, float]]):
+    def __init__(self, split: str, out_cls: Literal['ob', 'rdkit', 'text'], targetdiff_dir: str=DEFAULT_TARGETDIFF_DIR, 
             crossdocked_dir: str=DEFAULT_CD1_1_TYPES_DIR):
         """
         NOTE: 
@@ -78,6 +80,7 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float]]
         
         """
         super().__init__(5)
+        self.out_cls = out_cls
         self.targetdiff_dir = targetdiff_dir
         self.crossdocked_dir = crossdocked_dir
         self.lmdb_path = f"{self.targetdiff_dir}/crossdocked_v1.1_rmsd1.0_pocket10_processed_final.lmdb"
@@ -85,8 +88,6 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float]]
         self.key_idxs = np.load(f"{self.targetdiff_dir}/mask/split_mol/250920_0/{split}_idxs.npy")
 
         self.pfname_pattern = re.compile(r"(.+?/.+?_rec)_.+")
-        self.obc = OBConversion()
-        self.obc.SetInFormat('pdb')
         
     def __getitem__(self, idx: int):
         env, txn = load_lmdb(self.lmdb_path)
@@ -104,9 +105,7 @@ class TargetDiffScafCDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float]]
 
 
         # Pocket
-        protein = OBMol()
-        with open(protein_path) as f:
-            self.obc.ReadString(f.read())
+        protein = read_pdb_path(protein_path, self.out_cls)
 
         # Molecule
         ligand_filename = data['ligand_filename']

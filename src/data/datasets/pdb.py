@@ -1,21 +1,22 @@
 import os, gzip
 from typing import Literal
 
-from openbabel.openbabel import OBMol, OBConversion
+from openbabel.openbabel import OBMol
+from rdkit import Chem
 from torch.utils.data import Dataset, Subset
 from ..lmdb import StringLMDBDataset
+from ...chem import read_pdb_text
 
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 
 DEFAULT_PDB_DIR = f"{WORKDIR}/cheminfodata/pdb/220103"
 DEFAULT_VALID_SIZE = 100
 
-class PDBDataset(Dataset[OBMol]):
-    def __init__(self, pdbid_name: str, pdb_dir: str=DEFAULT_PDB_DIR):
+class PDBDataset(Dataset[OBMol|Chem.Mol]):
+    def __init__(self, pdbid_name: str, cls: Literal['ob', 'rdkit', 'text'], pdb_dir: str=DEFAULT_PDB_DIR):
         self.pdb_dir = pdb_dir
         self.pdbid_data = StringLMDBDataset(f"{pdb_dir}/{pdbid_name}.lmdb")
-        self.obc = OBConversion()
-        self.obc.SetInFormat('pdb')
+        self.cls = cls
 
     def __getitem__(self, idx: int) -> OBMol:
         # get pdbid
@@ -23,18 +24,19 @@ class PDBDataset(Dataset[OBMol]):
 
         # load protein
         path = f"{self.pdb_dir}/pdb/{pdbid[1:3]}/pdb{pdbid}.ent.gz"
-        mol = OBMol()
         with gzip.open(path, 'rt') as f:
-            self.obc.ReadString(mol, f.read())
+            pdb_text = f.read()
+        mol = read_pdb_text(pdb_text, self.cls)
         return mol
     
     def __len__(self):
         return len(self.pdbid_data)
-    
+
+# 誰も使ってない
 class PDBUniMolDataset(Subset[OBMol]):
-    def __init__(self, split: Literal['train', 'valid'], pdb_dir: str=DEFAULT_PDB_DIR):
+    def __init__(self, split: Literal['train', 'valid'], cls: Literal['ob', 'rdkit', 'text'], pdb_dir: str=DEFAULT_PDB_DIR):
         # Whole data
-        whole_data = PDBDataset("unimol_valid_count_order_pdbids", pdb_dir)
+        whole_data = PDBDataset("unimol_valid_count_order_pdbids", cls, pdb_dir)
 
         # Get index
         if split == 'train':
@@ -47,9 +49,9 @@ class PDBUniMolDataset(Subset[OBMol]):
         super().__init__(whole_data, indices)
 
 class PDBUniMolRandomDataset(Subset[OBMol]):
-    def __init__(self, split: Literal['train', 'valid'], pdb_dir: str=DEFAULT_PDB_DIR):
+    def __init__(self, split: Literal['train', 'valid'], cls: Literal['ob', 'rdkit', 'text'], pdb_dir: str=DEFAULT_PDB_DIR):
         # Whole data
-        whole_data = PDBDataset("unimol_random_order_pdbids", pdb_dir)
+        whole_data = PDBDataset("unimol_random_order_pdbids", cls, pdb_dir)
 
         # Get index
         if split == 'train':

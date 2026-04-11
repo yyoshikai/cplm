@@ -32,12 +32,16 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
     vocs = set()
     ## Molecule
     for d_seed, cls in enumerate([UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]):
-
+        
         dname = cls.__name__.removesuffix('Dataset')
         repeat = getattr(args, dname)
         if repeat == 0: continue
         
-        raw = cls(split='valid' if 'data_epoch' in args.check else split)
+        data_split = 'valid' if 'data_epoch' in args.check else split
+        if cls == PDBUniMolRandomDataset:
+            raw = PDBUniMolRandomDataset(data_split, args.protein_cls)
+        else:
+            raw = cls(split=data_split)
         ## repeat / sample
         data = raw
         if split == 'train' and repeat != 1:
@@ -135,12 +139,12 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     if raw_data is None:
         if args.targetdiff:
             if args.protein:
-                raw_data = TargetDiffScafCDProteinDataset(split)
+                raw_data = TargetDiffScafCDProteinDataset(split, args.protein_cls)
             else:
                 raw_data = TargetDiffScafCDDataset(split)
         else:
             if args.protein:
-                raw_data = CDProteinDataset(split)
+                raw_data = CDProteinDataset(split, args.protein_cls)
             else:
                 raw_data = CDDataset(split)
     if sample != 1.0:

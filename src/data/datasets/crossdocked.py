@@ -5,13 +5,14 @@ import gzip
 from typing import Literal
 
 import torch
-from openbabel.openbabel import OBMol, OBConversion
+from openbabel.openbabel import OBMol
 from prody import confProDy
 from ..lmdb import PickleLMDBDataset, IntLMDBDataset
 from ..data import TupleDataset
 from rdkit import Chem
 confProDy(verbosity='none')
 from ...utils.path import WORKDIR
+from ...chem import read_pdb_path
 from ..protein import Pocket
 
 SAVE_DIR = f"{WORKDIR}/cplm/ssd/preprocess/results/finetune/r4_all"
@@ -46,20 +47,17 @@ class CDDataset(TupleDataset[tuple[Pocket, Chem.Mol, float, str, str]]):
     def __len__(self):
         return len(self.indices)
     
-class CDProteinWholeDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]):
-    def __init__(self):
+class CDProteinWholeDataset(TupleDataset[tuple[OBMol|Chem.Mol, Chem.Mol, float, str, str]]):
+    def __init__(self, out_cls: Literal['ob', 'rdkit', 'text']):
         self.raw_data = PickleLMDBDataset(f"{CDDIR}/pockets/main.lmdb")
         super().__init__(5)
-        self.obc = OBConversion()
-        self.obc.SetInFormat('pdb')
+        self.out_cls = out_cls
 
     def __getitem__(self, idx):
         data = self.raw_data[idx]
-        
-        protein = OBMol()
-        self.obc.ReadFile(protein, f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}")
-
+        protein = read_pdb_path(f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}", self.out_cls)
         score = float(data['score'])
+
         return protein, data['lig_mol'], score
         # ligand_path: 251113 indexがないのはおかしい気がするので一旦こうする
 
@@ -69,12 +67,11 @@ class CDProteinTestDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]
     (_idx.lmdbを使うと, targetdiffと同じディレクトリのデータが全て取られる。)
     現状, 生成にしか使わなさそうなので毎回読み込むようにしている。
     """
-    def __init__(self):
+    def __init__(self, out_cls: Literal['ob', 'rdkit', 'text']):
         super().__init__(5)
         self.split_by_name = torch.load(f"{CDDIR}/targetdiff/split_by_name.pt", 
                 weights_only=True)['test']
-        self.obc = OBConversion()
-        self.obc.SetInFormat('pdb')
+        self.out_cls = out_cls
     def __getitem__(self, idx):
 
         pname, lname = self.split_by_name[idx]
@@ -94,8 +91,7 @@ class CDProteinTestDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]
             mol = next(sup)
 
         # protein
-        protein = OBMol()
-        self.obc.ReadFile(protein, protein_path)
+        protein = read_pdb_path(protein_path, self.out_cls)
         return protein, mol, None
     
     def __len__(self):
@@ -103,19 +99,19 @@ class CDProteinTestDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]
 
 
 class CDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]):
-    def __new__(cls, split: Literal['train', 'valid', 'test']):
+    def __new__(cls, split: Literal['train', 'valid', 'test'], out_cls: Literal['ob', 'rdkit', 'text']):
         if split == 'test':
-            return CDProteinTestDataset()
+            return CDProteinTestDataset(out_cls)
         elif split in ['train', 'valid']:
             obj = super().__new__(cls)
-            obj.__init__(split)
+            obj.__init__(split, out_cls)
             return obj
         else:
             raise ValueError(f"Unsupported {split=}")
-    def __init__(self, split: Literal['train', 'valid']):
+    def __init__(self, split: Literal['train', 'valid'], out_cls: Literal['ob', 'rdkit', 'text']):
         super().__init__(5)
         self.indices = IntLMDBDataset(f"{CDDIR}/pockets/mask/{split}_idxs.lmdb")
-        self.dataset = CDProteinWholeDataset()
+        self.dataset = CDProteinWholeDataset(out_cls)
     def __getitem__(self, idx: int):
         return self.dataset[self.indices[idx]]
     def __len__(self):

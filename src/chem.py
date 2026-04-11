@@ -1,5 +1,6 @@
 from ctypes import c_double
 from logging import getLogger
+from typing import Literal
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import Conformer
@@ -102,4 +103,32 @@ def mol_from_atoms_coords(atoms: list[str], coords: np.ndarray) -> tuple[Chem.Mo
         Chem.Mol|None: 分子、エラーの場合None
         str|None: エラーの場合その内容、エラーでない場合None
     """
-    
+
+def read_pdb_path(path: str, out_cls: Literal['ob', 'rdkit', 'text']):
+    if out_cls == 'ob':
+        mol = OBMol()
+        obc = OBConversion()
+        obc.SetInFormat('pdb')
+        obc.ReadFile(mol, path)
+    elif out_cls == 'rdkit':
+        mol = Chem.MolFromPDBFile(path, sanitize=False)
+    elif out_cls == 'text':
+        with open(path) as f:
+            mol = f.read()
+    else:
+        raise ValueError(f"Unknown {out_cls=}")
+    return mol
+
+def read_pdb_text(text: str, out_cls: Literal['ob', 'rdkit', 'text']):
+    if out_cls == 'ob':
+        mol = OBMol()
+        obc = OBConversion()
+        obc.SetInFormat('pdb')
+        obc.ReadString(mol, text)
+    elif out_cls == 'rdkit':
+        mol = Chem.MolFromPDBBlock(text, sanitize=False, removeHs=True)
+    elif out_cls == 'text':
+        mol = text
+    else:
+        raise ValueError(f"Unknown {out_cls=}")
+    return mol

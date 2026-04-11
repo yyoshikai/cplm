@@ -2,6 +2,8 @@ import sys, os, yaml, math
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 import numpy as np
+from rdkit import Chem
+from openbabel.openbabel import OBMol
 from src.utils import setdefault
 from src.utils.path import mwrite
 from src.data import StackDataset, Subset, index_dataset
@@ -72,7 +74,11 @@ if __name__ == '__main__':
         if fargs.format == 'smiles_coords':
             def streamer_fn(item, i_trial, voc_encoder):
                 idx, rec, prompt_token, position = item
-                mwrite(f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb", obmol2pdb(rec))
+                pdb_path = f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb"
+                if isinstance(rec, OBMol):
+                    mwrite(pdb_path, obmol2pdb(rec))
+                else:
+                    Chem.MolToPDBFile(rec, pdb_path)
                 streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, args.no_token_range, fargs.lig_h)
                 streamer = SaveLigandStreamer(streamer)
                 streamer = TokenWriteStreamer(streamer, voc_encoder,

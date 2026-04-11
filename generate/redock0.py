@@ -7,7 +7,7 @@ import yaml, math, logging
 import numpy as np
 from argparse import Namespace, ArgumentParser
 from rdkit import Chem
-
+from openbabel.openbabel import OBMol
 from src.utils import setdefault
 from src.utils.path import make_pardir, mwrite
 from src.data import StackDataset, index_dataset
@@ -99,7 +99,7 @@ if __name__ == '__main__':
 
     if not fargs.protein:
         raise NotImplementedError
-    protein = PosebustersV2ProteinDataset()
+    protein = PosebustersV2ProteinDataset(fargs.protein_cls)
     lig =PosebustersV2LigandDataset()
     score = RandomScoreDataset(-12, -10, len(protein), args.seed)
     raw_data = StackDataset(protein, lig, score)
@@ -117,7 +117,11 @@ if __name__ == '__main__':
 
     def streamer_fn(item, i_trial: int, voc_encoder):
         idx, lig, rec, token, position = item
-        mwrite(f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb", obmol2pdb(rec))
+        pdb_path = f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb"
+        if isinstance(rec, OBMol):
+            mwrite(pdb_path, obmol2pdb(rec))
+        else:
+            Chem.MolToPDBFile(rec, pdb_path)
         streamer = LigandCoordStreamer(
             lig, 
             new_sdf_path=f"{out_dir}/new_sdf/{idx}/{i_trial}.sdf", 

@@ -30,7 +30,7 @@ from ..data.tokenizer import VocEncoder
 from .collator import DDPStringCollateLoader, InfiniteLoader
 from ..model import TransformerModel, MambaModel
 from ..model.model import Model
-from ..utils import git_commit, get_git_hash, should_show
+from ..utils import git_commit, get_git_hash, should_show, setdefault
 from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, add_rotating_handler, set_third_party_logger
 from ..utils.model import get_num_params, get_model_size
 from ..utils.path import cleardir
@@ -199,6 +199,7 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords'], default='atoms_coords')
     parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
     parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion', 'ligand', 'water'], nargs='*')
+    parser.add_argument("--protein-cls", choices=['rdkit', 'ob'], default='rdkit')
     parser.add_argument("--coord-range", type=int, default=250)
     # model
     parser.add_argument('--mamba', action='store_true')
@@ -246,10 +247,8 @@ def update_args(args: Namespace) -> Namespace:
     [delattr(args, name) for name in pocket_arg_names if hasattr(args, name)]
 
     # 260312 d_model, n_layer
-    if not hasattr(args, 'n_layer'):
-        args.n_layer = None
-    if not hasattr(args, 'd_model'):
-        args.d_model = 768
+    setdefault(args, 'n_layer', None)
+    setdefault(args, 'd_model', 768)
 
     # 260313 atom_reprs
     atom_reprs = {
@@ -268,12 +267,13 @@ def update_args(args: Namespace) -> Namespace:
             delattr(args, name)
     
     # 260314 pocket_order
-    if not hasattr(args, 'pocket_order'):
-        args.pocket_order = 'residue'
+    setdefault(args, 'pocket_order', 'residue')
 
     # 260318 pocket_hetatm
-    if not hasattr(args, 'pocket_hetatm'):
-        args.pocket_hetatm = ['ion', 'ligand', 'water']
+    setdefault(args, 'pocket_hetatm', ['ion', 'ligand', 'water'])
+
+    # 260411 protein_cls
+    setdefault(args, 'protein_cls', 'ob')
 
     return args
 
