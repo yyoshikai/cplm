@@ -153,8 +153,8 @@ class StringTokenizer2(Tokenizer):
         return self.tokenizer.vocs()
     
 class SmilesTokenizer(StringTokenizer):
-    def __init__(self):
-        with open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt") as f:
+    def __init__(self, voc_file: str):
+        with open(f"{WORKDIR}/cplm/src/data/{voc_file}.txt") as f:
             tokens = f.read().splitlines()
         super().__init__(tokens)
 

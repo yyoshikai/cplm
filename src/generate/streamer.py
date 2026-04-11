@@ -183,10 +183,10 @@ class LigandStreamer(Streamer):
         raise NotImplementedError
 
 class SmilesLigandStreamer(GeneratorStreamer, LigandStreamer):
-    def __init__(self, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, lig_h: AtomRepr, center: np.ndarray|None=None):
+    def __init__(self, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, lig_h: AtomRepr, smiles_voc_file: str, center: np.ndarray|None=None):
         self.voc_encoder = voc_encoder
         self.coord_range = coord_range
-        smi_tokenizer = SmilesTokenizer()
+        smi_tokenizer = SmilesTokenizer(smiles_voc_file)
         smi_vocs = list(smi_tokenizer.vocs())+['[XYZ]']
         self.smi_token_range = sorted(self.voc_encoder.encode(smi_vocs))
         if no_token_range:
@@ -387,11 +387,12 @@ def get_ligand_streamer(
         voc_encoder: VocEncoder, 
         no_token_range: bool,
         lig_h: AtomRepr, 
+        smiles_voc_file: str,
         center: np.ndarray|None=None
 ) -> LigandStreamer:
     kwargs = dict(coord_range=coord_range, voc_encoder=voc_encoder, no_token_range=no_token_range, lig_h=lig_h, center=center)
     if format == 'smiles_coords':
-        return SmilesLigandStreamer(**kwargs)
+        return SmilesLigandStreamer(**kwargs, smiles_voc_file=smiles_voc_file)
     elif format in ['atoms_coords', 'ordered_atoms_coords']:
         atom_order = format == 'ordered_atoms_coords'
         return AtomsCoordsLigandStreamer(**kwargs, atom_order=atom_order)

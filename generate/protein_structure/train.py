@@ -12,6 +12,7 @@ from torch.utils.data import StackDataset, Subset
 from src.utils.path import make_pardir
 from src.chem import array_to_conf
 from src.data import CacheDataset, index_dataset
+from src.data.molecule import SetHydrogenDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.data.protein import ProteinProcessDataset, ProteinTokenizeDataset, AtomRepr
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
@@ -46,20 +47,12 @@ class ProteinStructureStreamer(GeneratorStreamer):
         assert prompt_tokens[0] == '[POCKET]' and prompt_tokens[-1] == '[XYZ]'
         make_pardir(self.prompt_pdb_path)
         if isinstance(self.protein, ob.OBMol):
-            if self.h == 'none':
-                self.protein.DeleteHydrogens()
-            else:
-                self.protein.AddHydrogens()
             obc.WriteFile(self.protein, self.prompt_pdb_path)
             atom_data = []
             for atom in ob.OBMolAtomIter(self.protein):
                 residue = atom.GetResidue()
                 atom_data.append((residue.GetIdx(), residue.GetName(), residue.GetAtomID(atom).strip(), ob.GetSymbol(atom.GetAtomicNum())))
         else:
-            if self.h == 'none':
-                Chem.AddHs(self.protein)
-            else:
-                Chem.RemoveHs(self.protein)
             Chem.MolToPDBFile(self.protein, self.prompt_pdb_path)
             atom_data = []
             for atom in self.protein.GetAtoms():
@@ -91,6 +84,7 @@ class ProteinStructureStreamer(GeneratorStreamer):
                 make_pardir(self.new_pdb_path)
                 obc.WriteFile(self.protein, self.new_pdb_path)
             else:
+                self.protein.RemoveAllConformers()
                 self.protein.AddConformer(array_to_conf(coords))
                 Chem.MolToPDBFile(self.protein, self.new_pdb_path)
         yield False, pos, [self.voc_encoder.voc2i['[END]']]
@@ -123,7 +117,8 @@ if __name__ == '__main__':
     protein = PDBUniMolRandomDataset('valid', targs.protein_cls)
     protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
     protein = CacheDataset(protein)
-    protein_token = ProteinTokenizeDataset(protein, heavy=targs.pocket_heavy, h=targs.pocket_h, format=targs.pocket_format, coord_range=targs.coord_range, order=targs.pocket_order, base_seed=args.seed)
+    protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
+    protein_token = ProteinTokenizeDataset(protein, heavy=targs.pocket_heavy, h=targs.pocket_h, format=targs.pocket_format, coord_range=targs.coord_range, smiles_voc_file=targs.smiles_voc_file, order=targs.pocket_order, base_seed=args.seed)
     protein_atom_token, _coord_token = TokenSplitDataset(protein_token, '[XYZ]').untuple()
     sentence = SentenceDataset('[POCKET]', protein_atom_token, '[XYZ]')
     index, sentence = index_dataset(sentence)

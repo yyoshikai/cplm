@@ -44,6 +44,7 @@ class LigandCoordStreamer(GeneratorStreamer):
         coord, pos, self.error = yield from coord_streamer(n_atom, len(prompt_tokens), None, self.voc_encoder, self.coord_range, self.no_token_range, False, self.center)
 
         if coord is not None:
+            self.mol.RemoveAllConformers()
             self.mol.AddConformer(array_to_conf(coord))
             if self.new_sdf_path is not None:
                 make_pardir(self.new_sdf_path)

@@ -199,7 +199,7 @@ class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
 from .molecule import MolTokenizer
 class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, protein_data: Dataset[OBMol], *,
-            heavy: AtomRepr, h: AtomRepr, format, coord_range: int, order: Literal['residue', 'can', 'ran'], base_seed: int):
+            heavy: AtomRepr, h: AtomRepr, format, coord_range: int, smiles_voc_file, order: Literal['residue', 'can', 'ran'], base_seed: int):
         super().__init__(protein_data)
         self.protein_data = protein_data
 
@@ -207,7 +207,7 @@ class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
         if order == 'residue':
             self.tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
         else:
-            self.tokenizer = MolTokenizer(format, h_coord=h == 'all', coord_range=coord_range)
+            self.tokenizer = MolTokenizer(format, h_coord=h == 'all', coord_range=coord_range, smiles_voc_file=smiles_voc_file)
 
         self.h = h
         self.base_seed = base_seed
@@ -216,13 +216,6 @@ class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
         protein = self.protein_data[idx]
 
         if isinstance(protein, OBMol):
-            # add/remove hydrogen
-            if self.h == 'none':
-                success = protein.DeleteHydrogens()
-            else:
-                success = protein.AddHydrogens()
-            assert success
-
             if self.order == 'residue':
                 # Order atoms
                 atoms = np.array([atom.GetResidue().GetAtomID(atom).strip() for atom in OBMolAtomIter(protein)])
@@ -238,10 +231,6 @@ class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
                 protein = set_atom_order(protein, self.order == 'ran', get_rng(self.base_seed, idx))
                 tokens, orders = self.tokenizer.tokenize(protein)
         else:
-            if self.h == 'none':
-                protein = Chem.RemoveHs(protein)
-            else:
-                protein = Chem.AddHydrogens(protein)
 
             if self.order == 'residue':
                 chain_id_is =[]

@@ -58,7 +58,7 @@ if __name__ == '__main__':
     with open(f"{out_dir}/args.yaml", 'w') as f:
         yaml.dump(vars(args), f)
 
-    added_vocs = SmilesTokenizer().vocs()
+    added_vocs = SmilesTokenizer(fargs.smiles_voc_file).vocs()
     _voc_encoder, _raw, rec_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
 
     idx_data, prompt_token_data = index_dataset(prompt_token_data)
@@ -79,7 +79,7 @@ if __name__ == '__main__':
                     mwrite(pdb_path, obmol2pdb(rec))
                 else:
                     Chem.MolToPDBFile(rec, pdb_path)
-                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, args.no_token_range, fargs.lig_h)
+                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, args.no_token_range, fargs.lig_h, fargs.smiles_voc_file)
                 streamer = SaveLigandStreamer(streamer)
                 streamer = TokenWriteStreamer(streamer, voc_encoder,
                     prompt_position=position,

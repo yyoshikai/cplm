@@ -144,6 +144,7 @@ class Generator:
             coord_range: int,
             lig_h: AtomRepr,
             lig_format: str,
+            smiles_voc_file: str,
             cpu: int,
             num_score_workers: int,
             target: str,
@@ -154,6 +155,7 @@ class Generator:
         self.coord_range = coord_range
         self.lig_h = lig_h
         self.lig_format = lig_format
+        self.smiles_voc_file = smiles_voc_file
         self.num_score_workers = num_score_workers
         self.cpu = cpu
         self.target = target
@@ -179,7 +181,7 @@ class Generator:
             position_streamers: list[PositionSaveStreamer] = []
             streamers = []
             for idx, pdb in enumerate(pdbs):
-                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, False, self.lig_h)
+                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, False, self.lig_h, self.smiles_voc_file)
                 if do_save:
                     streamer = SaveLigandStreamer(streamer, f"{self.result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf")
                 streamer = GetScoreStreamer(streamer, ligand_streamer, e, self.target, pdb, 
@@ -405,7 +407,7 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, args.cpu, args.num_score_workers, args.target, device)
+    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_file, args.cpu, args.num_score_workers, args.target, device)
     generator = SizeRecordGenerator(generator, result_dir)
     generator = ErrorRecordGenerator(generator, result_dir)
     norm = EmptyNorm()

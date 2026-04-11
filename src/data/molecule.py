@@ -1,8 +1,10 @@
+import re
 from typing import Literal
 from logging import getLogger
 import numpy as np
 from torch.utils.data import Dataset
 from rdkit import Chem
+from openbabel import openbabel as ob
 from ..chem import set_atom_order
 from .data import WrapDataset, get_rng
 from .tokenizer import SmilesTokenizer, FloatTokenizer
@@ -14,20 +16,13 @@ def element_symbols() -> list[str]:
 
 
 class MolProcessDataset(WrapDataset[Chem.Mol]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, h: bool, random: bool):
+    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, random: bool):
         super().__init__(mol_data)
         self.base_seed = base_seed
-        self.h = h
         self.random = random
     
     def __getitem__(self, idx: int):
         mol = self.dataset[idx]
-
-        # remove/add hydrogen
-        if self.h:
-            mol = Chem.AddHs(mol, addCoords=True)
-        else:
-            mol = Chem.RemoveHs(mol)
 
         # MolTokenizeDatasetに移しても良いと思ったが、get_finetune_dataでRenumberAtoms後のmolが必要なのでこうしているっぽい。
         rng = get_rng(self.base_seed, idx)
@@ -36,13 +31,34 @@ class MolProcessDataset(WrapDataset[Chem.Mol]):
 
 MAX_VALENCE = 10
 
+class SetHydrogenDataset(WrapDataset[ob.OBMol|Chem.Mol]):
+    def __init__(self, dataset: Dataset[ob.OBMol|Chem.Mol], h: bool):
+        super().__init__(dataset)
+        self.h = h
+    def __getitem__(self, idx):
+        mol = self.dataset[idx]
+        if isinstance(mol, ob.OBMol):
+            if self.h:
+                success = mol.AddHydrogens()
+            else:
+                success = mol.DeleteHydrogens()
+            assert success
+        else:
+            if self.h:
+                Chem.AddHs(mol, addCoords=True)
+            else:
+                Chem.RemoveHs(mol)
+        return mol
+
 class MolTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float):        
+    def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float, smiles_voc_file: str):        
         self.h_coord = h_coord
         self.format = format
         if self.format == 'smiles_coords':
-            self.smi_tokenizer = SmilesTokenizer()
+            self.smi_tokenizer = SmilesTokenizer(smiles_voc_file)
+        if self.format == 'smile_coords':
+            self.atom_pattern = re.compile(r"Cl|Br|[bcnopsHBCNOFPSI]|\[se|\[as|\[si|\[te|\[H\]|\[He|\[Li|\[Be|\[Ne|\[Na|\[Mg|\[Al|\[Si|\[Ar|\[Ca|\[Sc|\[Ti|\[Cr|\[Mn|\[Fe|\[Co|\[Ni|\[Cu|\[Zn|\[Ga|\[Ge|\[As|\[Se|\[Kr|\[Rb|\[Sr|\[Zr|\[Nb|\[Mo|\[Tc|\[Ru|\[Rh|\[Pd|\[Ag|\[Cd|\[In|\[Sn|\[Sb|\[Te|\[Xe|\[Cs|\[Ba|\[La|\[Ce|\[Pr|\[Nd|\[Pm|\[Sm|\[Eu|\[Gd|\[Tb|\[Dy|\[Ho|\[Er|\[Tm|\[Yb|\[Lu|\[Hf|\[Ta|\[Re|\[Os|\[Ir|\[Pt|\[Au|\[Hg|\[Tl|\[Pb|\[Bi|\[Po|\[At|\[Rn|\[Fr|\[Ra|\[Ac|\[Th|\[Pa|\[Np|\[Pu|\[Am|\[Cm|\[Bk|\[Cf|\[Es|\[Fm|\[Md|\[No|\[Lr|\[Rf|\[Db|\[Sg|\[Bh|\[Hs|\[Mt|\[Ds|\[Rg|\[Cn|\[Nh|\[Fl|\[Mc|\[Lv|\[Ts|\[Og|\[K|\[V|\[Y|\[W|\[U")
         self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
 
         self.logged = False
@@ -110,6 +126,22 @@ class MolTokenizer:
                     for ai in atom_idxs if (symbols[ai] != 'H' or self.h_coord)])
             tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(shown_coords)
             order = list(range(len(tokens)))
+        elif self.format == 'smile_coords':
+            atom_matches = list(re.finditer(self.atom_pattern, smi))
+            assert len(atom_matches) == len(atom_idxs)
+            smi_tokens = self.smi_tokenizer.tokenize(smi)
+            tokens = []
+            cur_smi_size = 0
+            cur_match_idx = 0
+            for smi_token in smi_tokens:
+                tokens.append(smi_token)
+                cur_smi_size += len(smi_token)
+                if cur_smi_size >= atom_matches[cur_match_idx]+1:
+                    ai = atom_idxs[cur_match_idx]
+                    if symbols[ai] != 'H' or self.h_coord:
+                        tokens += self.coord_tokenizer.tokenize_array(coords[atom_idxs[cur_match_idx]])
+                    cur_match_idx += 1
+            order = list(range(len(tokens)))
         else:
             raise ValueError(f"Unknown format={self.format}")
         return tokens, order
@@ -126,10 +158,10 @@ class MolTokenizer:
 
 
 class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], *, format: Literal['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: float, h_coord: bool=True):
+    def __init__(self, mol_data: Dataset[Chem.Mol], *, format: Literal['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: float, smiles_voc_file: str, h_coord: bool=True):
         super().__init__(mol_data)
         self.mol_data = mol_data
-        self.mol_tokenizer = MolTokenizer(format, h_coord, coord_range)
+        self.mol_tokenizer = MolTokenizer(format, h_coord, coord_range, smiles_voc_file)
         
     def __getitem__(self, idx: int):
         return self.mol_tokenizer.tokenize(self.mol_data[idx])

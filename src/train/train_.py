@@ -208,6 +208,7 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument('--d-model', type=int, default=768)
     ## compatibility
     parser.add_argument("--model-bfloat16", action='store_true')
+    parser.add_argument("--smiles-voc-file", default='smiles_tokens2')
 
 def update_args(args: Namespace) -> Namespace:
     """
@@ -274,6 +275,9 @@ def update_args(args: Namespace) -> Namespace:
 
     # 260411 protein_cls
     setdefault(args, 'protein_cls', 'ob')
+
+    # 260411 smiles_voc_file
+    setdefault(args, 'smiles_voc_file', 'smiles_tokens')
 
     return args
 
