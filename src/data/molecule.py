@@ -159,10 +159,10 @@ class MolTokenizer:
 
 
 class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], *, format: Literal['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: float, smiles_voc_file: str, h_coord: bool=True):
+    def __init__(self, mol_data: Dataset[Chem.Mol], *, format: Literal['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: float, smiles_voc_dir: str, h_coord: bool=True):
         super().__init__(mol_data)
         self.mol_data = mol_data
-        self.mol_tokenizer = MolTokenizer(format, h_coord, coord_range, smiles_voc_file)
+        self.mol_tokenizer = MolTokenizer(format, h_coord, coord_range, smiles_voc_dir)
         
     def __getitem__(self, idx: int):
         return self.mol_tokenizer.tokenize(self.mol_data[idx])
