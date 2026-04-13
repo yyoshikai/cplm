@@ -51,7 +51,7 @@ def get_logger(name=None, level=logging.DEBUG, stream=False, stream_level=loggin
 def add_file_handler(logger: Logger, path: str, level=logging.DEBUG, mode: str='w', 
         fmt: str=DEFAULT_FMT, datefmt=DEFAULT_DATEFMT, keep_level: bool=False) -> FileHandler:
     if not os.path.exists(os.path.dirname(path)):
-        os.makedirs(os.path.dirname(path))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
     handler = FileHandler(path, mode)
     handler.setFormatter(Formatter(fmt, datefmt, style='{'))
     handler.setLevel(level)
@@ -63,7 +63,7 @@ def add_file_handler(logger: Logger, path: str, level=logging.DEBUG, mode: str='
 def add_rotating_handler(logger: Logger, path: str, level=logging.DEBUG, mode: str='w', 
         fmt: str=DEFAULT_FMT, datefmt=DEFAULT_DATEFMT, keep_level: bool=False, maxBytes: int=50000, backupCount: int=1) -> FileHandler:
     if not os.path.exists(os.path.dirname(path)):
-        os.makedirs(os.path.dirname(path))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
     handler = RotatingFileHandler(path, mode, maxBytes, backupCount)
     handler.setFormatter(Formatter(fmt, datefmt, style='{'))
     handler.setLevel(level)
