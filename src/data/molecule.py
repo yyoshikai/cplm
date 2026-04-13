@@ -6,8 +6,9 @@ from torch.utils.data import Dataset
 from rdkit import Chem
 from openbabel import openbabel as ob
 from ..chem import set_atom_order
+from ..utils.path import WORKDIR
 from .data import WrapDataset, get_rng
-from .tokenizer import SmilesTokenizer, FloatTokenizer
+from .tokenizer import StringTokenizer2, FloatTokenizer
 from .protein import AtomRepr
 
 def element_symbols() -> list[str]:
@@ -45,20 +46,21 @@ class SetHydrogenDataset(WrapDataset[ob.OBMol|Chem.Mol]):
             assert success
         else:
             if self.h:
-                Chem.AddHs(mol, addCoords=True)
+                mol = Chem.AddHs(mol, addCoords=True)
             else:
-                Chem.RemoveHs(mol)
+                mol = Chem.RemoveHs(mol)
         return mol
 
 class MolTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float, smiles_voc_file: str):        
+    def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float, smiles_voc_dir: str):        
         self.h_coord = h_coord
         self.format = format
-        if self.format == 'smiles_coords':
-            self.smi_tokenizer = SmilesTokenizer(smiles_voc_file)
+        if self.format in ['smiles_coords', 'smile_coords']:
+            self.smi_tokenizer = StringTokenizer2(f"{WORKDIR}/cplm/src/data/vocs/{smiles_voc_dir}")
         if self.format == 'smile_coords':
-            self.atom_pattern = re.compile(r"Cl|Br|[bcnopsHBCNOFPSI]|\[se|\[as|\[si|\[te|\[H\]|\[He|\[Li|\[Be|\[Ne|\[Na|\[Mg|\[Al|\[Si|\[Ar|\[Ca|\[Sc|\[Ti|\[Cr|\[Mn|\[Fe|\[Co|\[Ni|\[Cu|\[Zn|\[Ga|\[Ge|\[As|\[Se|\[Kr|\[Rb|\[Sr|\[Zr|\[Nb|\[Mo|\[Tc|\[Ru|\[Rh|\[Pd|\[Ag|\[Cd|\[In|\[Sn|\[Sb|\[Te|\[Xe|\[Cs|\[Ba|\[La|\[Ce|\[Pr|\[Nd|\[Pm|\[Sm|\[Eu|\[Gd|\[Tb|\[Dy|\[Ho|\[Er|\[Tm|\[Yb|\[Lu|\[Hf|\[Ta|\[Re|\[Os|\[Ir|\[Pt|\[Au|\[Hg|\[Tl|\[Pb|\[Bi|\[Po|\[At|\[Rn|\[Fr|\[Ra|\[Ac|\[Th|\[Pa|\[Np|\[Pu|\[Am|\[Cm|\[Bk|\[Cf|\[Es|\[Fm|\[Md|\[No|\[Lr|\[Rf|\[Db|\[Sg|\[Bh|\[Hs|\[Mt|\[Ds|\[Rg|\[Cn|\[Nh|\[Fl|\[Mc|\[Lv|\[Ts|\[Og|\[K|\[V|\[Y|\[W|\[U")
+            with open(f"{WORKDIR}/cplm/src/data/vocs/{smiles_voc_dir}/non_atom_tokens.txt") as f:
+                self.non_atom_tokens = f.read().splitlines()
         self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
 
         self.logged = False
@@ -67,7 +69,7 @@ class MolTokenizer:
         
         smi = Chem.MolToSmiles(mol, canonical=False)
         if not self.logged:
-            self.logger.debug(f"{smi=}")
+            # self.logger.debug(f"{smi=}")
             self.logged = True
         atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
         
@@ -127,20 +129,17 @@ class MolTokenizer:
             tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(shown_coords)
             order = list(range(len(tokens)))
         elif self.format == 'smile_coords':
-            atom_matches = list(re.finditer(self.atom_pattern, smi))
-            assert len(atom_matches) == len(atom_idxs)
             smi_tokens = self.smi_tokenizer.tokenize(smi)
             tokens = []
-            cur_smi_size = 0
-            cur_match_idx = 0
+            cur_atom_idx = 0
             for smi_token in smi_tokens:
                 tokens.append(smi_token)
-                cur_smi_size += len(smi_token)
-                if cur_smi_size >= atom_matches[cur_match_idx]+1:
-                    ai = atom_idxs[cur_match_idx]
+                if smi_token not in self.non_atom_tokens:
+                    ai = atom_idxs[cur_atom_idx]
                     if symbols[ai] != 'H' or self.h_coord:
-                        tokens += self.coord_tokenizer.tokenize_array(coords[atom_idxs[cur_match_idx]])
-                    cur_match_idx += 1
+                        tokens += self.coord_tokenizer.tokenize_array(coords[atom_idxs[cur_atom_idx]])
+                    cur_atom_idx += 1
+            assert cur_atom_idx == len(atom_idxs)
             order = list(range(len(tokens)))
         else:
             raise ValueError(f"Unknown format={self.format}")
@@ -154,6 +153,8 @@ class MolTokenizer:
             return set(element_symbols()) | self.coord_tokenizer.vocs() | {'[XYZ]'}
         elif self.format == 'smiles_coords':
             return self.smi_tokenizer.vocs() | self.coord_tokenizer.vocs() | {'[XYZ]'}
+        elif self.format == 'smile_coords':
+            return self.smi_tokenizer.vocs() | self.coord_tokenizer.vocs()
 
 
 

@@ -185,7 +185,8 @@ class FloatTokenizer(Tokenizer):
         self.n_tokenized += 1
         self.n_tokenized_total += 1
         if should_show(self.n_tokenized_total, math.inf):
-            self.unk_logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
+            pass
+            # self.unk_logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
         x = self.float_format.format(x)
         xi = x[:-4]
         xf = x[-4:]
@@ -273,7 +274,7 @@ class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
                     positions += [pos+pos_offset for pos in positions0]
                     pos_offset += len(words0)
             except Exception as e:
-                print(f"Error at {word}: {e.args}", flush=True)
+                print(f"Error at {idx}/{len(self)} in {word}: {e.args}", flush=True)
                 raise e
         return words, positions
     

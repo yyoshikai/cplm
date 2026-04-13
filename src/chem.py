@@ -1,3 +1,4 @@
+import re
 from ctypes import c_double
 from logging import getLogger
 from typing import Literal
@@ -112,6 +113,13 @@ def read_pdb_path(path: str, out_cls: Literal['ob', 'rdkit', 'text']):
         obc.ReadFile(mol, path)
     elif out_cls == 'rdkit':
         mol = Chem.MolFromPDBFile(path, sanitize=False)
+        if mol is None:
+            # Error process at read_pdb_text
+            with open(path) as f:
+                mol = read_pdb_text(f.read(), out_cls)
+        
+        params = Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES
+        Chem.SanitizeMol(mol, sanitizeOps=params) # このようにしておくことで, エラーを回避しつつ水素付加などができる
     elif out_cls == 'text':
         with open(path) as f:
             mol = f.read()
@@ -127,6 +135,50 @@ def read_pdb_text(text: str, out_cls: Literal['ob', 'rdkit', 'text']):
         obc.ReadString(mol, text)
     elif out_cls == 'rdkit':
         mol = Chem.MolFromPDBBlock(text, sanitize=False, removeHs=True)
+        if mol is None:
+            # 'GLX' という, GLNかGLUか分からないアミノ酸があると読み込みエラーになる。
+            # ので, とりあえずGLNに置換する(GLUは電荷がある)。
+            text = re.sub(
+                r"(ATOM  "
+                r"[ 0-9]{5} "
+                r" )XE1("
+                r"."
+                r")GLX( "
+                r"."
+                r"[ 0-9]{4}"
+                r".   "
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9.]{6}"
+                r"[ \-0-9.]{6}          "
+                r" )X("
+                r"[ +\-0-9]{2}\n)", 
+                r"\1OE1\2GLN\3O\4", text
+            )
+            text = re.sub(
+                r"(ATOM  "
+                r"[ 0-9]{5} "
+                r" )XE2("
+                r"."
+                r")GLX( "
+                r"."
+                r"[ 0-9]{4}"
+                r".   "
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9.]{6}"
+                r"[ \-0-9.]{6}          "
+                r" )X("
+                r"[ +\-0-9]{2}\n)", 
+                r"\1NE2\2GLN\3N\4", text
+            )
+            mol = Chem.MolFromPDBBlock(text, sanitize=False, removeHs=True)
+
+        params = Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES
+        Chem.SanitizeMol(mol, sanitizeOps=params) # このようにしておくことで, エラーを回避しつつ水素付加などができる
+
     elif out_cls == 'text':
         mol = text
     else:

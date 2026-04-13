@@ -61,7 +61,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             mol = MolProcessDataset(mol, args.seed+d_seed, args.lig_randomize)
             mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, 
                 normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-            mol = MolTokenizeDataset(mol, format=args.lig_format, coord_range=args.coord_range, smiles_voc_file=args.smiles_voc_file, h_coord=args.lig_h == 'all')
+            mol = MolTokenizeDataset(mol, format=args.lig_format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, h_coord=args.lig_h == 'all')
             
             ### sentence
             sentence = ['[LIGAND]', mol, '[END]']
@@ -95,7 +95,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             else:
                 protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
                 protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
-                protein = ProteinTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range, smiles_voc_file=args.smiles_voc_file, order=args.pocket_order, base_seed=args.seed+d_seed)
+                protein = ProteinTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, order=args.pocket_order, base_seed=args.seed+d_seed)
             sentence = SentenceDataset('[POCKET]', protein, '[END]')
             vocs |= sentence.vocs()
             token, position = sentence.untuple()
@@ -175,7 +175,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     if args.protein:
         protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
         protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
-        protein_tokens = ProteinTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range, smiles_voc_file=args.smiles_voc_file, order=args.pocket_order, base_seed=args.seed)
+        protein_tokens = ProteinTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, order=args.pocket_order, base_seed=args.seed)
     else:
         protein_tokens = PocketTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range)
     sentence += ['[POCKET]', protein_tokens, '[END]']
@@ -200,7 +200,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     lig = SetHydrogenDataset(lig, args.lig_h != 'none')
     lig = MolProcessDataset(lig, args.seed, args.lig_randomize)
     if add_ligand:
-        lig_tokens = MolTokenizeDataset(lig, format=args.lig_format, coord_range=args.coord_range, smiles_voc_file=args.smiles_voc_file, h_coord=args.lig_h == 'all')
+        lig_tokens = MolTokenizeDataset(lig, format=args.lig_format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, h_coord=args.lig_h == 'all')
         sentence += [lig_tokens, '[END]']
         weights += [args.lig_coord_weight, 0.0]
     sentence = SentenceDataset(*sentence)

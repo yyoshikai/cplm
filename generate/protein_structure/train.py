@@ -118,7 +118,7 @@ if __name__ == '__main__':
     protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
     protein = CacheDataset(protein)
     protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
-    protein_token = ProteinTokenizeDataset(protein, heavy=targs.pocket_heavy, h=targs.pocket_h, format=targs.pocket_format, coord_range=targs.coord_range, smiles_voc_file=targs.smiles_voc_file, order=targs.pocket_order, base_seed=args.seed)
+    protein_token = ProteinTokenizeDataset(protein, heavy=targs.pocket_heavy, h=targs.pocket_h, format=targs.pocket_format, coord_range=targs.coord_range, smiles_voc_dir=targs.smiles_voc_dir, order=targs.pocket_order, base_seed=args.seed)
     protein_atom_token, _coord_token = TokenSplitDataset(protein_token, '[XYZ]').untuple()
     sentence = SentenceDataset('[POCKET]', protein_atom_token, '[XYZ]')
     index, sentence = index_dataset(sentence)

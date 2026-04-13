@@ -284,28 +284,28 @@ class DatasetTimeHook:
                     self.logger.debug(msg)
 
 class TimeProxyDataset(WrapDataset[T]):
-    def __init__(self, dataset: Dataset, looper: DatasetTimeHook):
+    def __init__(self, dataset: Dataset, hook: DatasetTimeHook):
         super().__init__(dataset)
-        self.looper = looper
+        self.hook = hook
 
     def __getitem__(self, idx):
-        self.looper.start_getitem(self.dataset)
+        self.hook.start_getitem(self.dataset)
         item = self.dataset[idx]
-        self.looper.end_getitem()
+        self.hook.end_getitem()
         return item
 
-def add_time_hook(data: Dataset|Sequence|Mapping, looper: DatasetTimeHook) -> TimeProxyDataset:
+def add_time_hook(data: Dataset|Sequence|Mapping, hook: DatasetTimeHook) -> TimeProxyDataset:
     if isinstance(data, (str, np.ndarray, torch.Tensor)): # np.memmap is np.ndarray
         return data
     elif isinstance(data, Dataset) and not isinstance(data, TimeProxyDataset):
         for k, v in vars(data).items():
-            setattr(data, k, add_time_hook(v, looper))
-        data = TimeProxyDataset(data, looper)
+            setattr(data, k, add_time_hook(v, hook))
+        data = TimeProxyDataset(data, hook)
         return data
     elif isinstance(data, Sequence):
         if len(data) < 10: # indicesなど長いものは除外
-            return type(data)(add_time_hook(i, looper) for i in data)
+            return type(data)(add_time_hook(i, hook) for i in data)
     elif isinstance(data, Mapping):
         if len(data) < 10:
-            return type(data)({k: add_time_hook(i, looper) for i in data})
+            return type(data)({k: add_time_hook(v, hook) for k, v in data.items()})
     return data

@@ -25,7 +25,7 @@ from transformers.trainer_pt_utils import get_parameter_names
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from schedulefree import RAdamScheduleFree
 
-from ..data import RevealIterator
+from ..data import RevealIterator, add_time_hook, DatasetTimeHook
 from ..data.tokenizer import VocEncoder
 from .collator import DDPStringCollateLoader, InfiniteLoader
 from ..model import TransformerModel, MambaModel
@@ -182,7 +182,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
             'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
-            'forward_backward_time', 'optimizer'])
+            'forward_backward_time', 'optimizer', 'getitem_time'])
     parser.add_argument('--commit', action='store_false', dest='no_commit')
 
 def add_pretrain_args(parser: ArgumentParser):
@@ -192,13 +192,13 @@ def add_pretrain_args(parser: ArgumentParser):
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
     # pocket-heavy-coordはデフォルトで入れるようにした。
     parser.add_argument("--lig-randomize", action='store_true')
-    parser.add_argument("--lig-format", choices=['smiles_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
+    parser.add_argument("--lig-format", choices=['smiles_coords', 'smile_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
     parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
-    parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords'], default='atoms_coords')
+    parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords', 'smiles_coords', 'smile_coords'], default='atoms_coords')
     parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
-    parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion', 'ligand', 'water'], nargs='*')
+    parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion'], nargs='*')
     parser.add_argument("--protein-cls", choices=['rdkit', 'ob'], default='rdkit')
     parser.add_argument("--coord-range", type=int, default=250)
     # model
@@ -208,7 +208,7 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument('--d-model', type=int, default=768)
     ## compatibility
     parser.add_argument("--model-bfloat16", action='store_true')
-    parser.add_argument("--smiles-voc-file", default='smiles_tokens2')
+    parser.add_argument("--smiles-voc-dir", default='smiles3')
 
 def update_args(args: Namespace) -> Namespace:
     """
@@ -276,8 +276,14 @@ def update_args(args: Namespace) -> Namespace:
     # 260411 protein_cls
     setdefault(args, 'protein_cls', 'ob')
 
-    # 260411 smiles_voc_file
-    setdefault(args, 'smiles_voc_file', 'smiles_tokens')
+    # 260411 smiles_voc_file, 260413 smiles_voc_dir
+    if not hasattr(args, 'smiles_voc_dir'):
+        smiles_voc_file = getattr(args, 'smiles_voc_file', 'smiles_tokens')
+        smiles_voc_dir = {
+            'smiles_tokens': 'smiles',
+            'smiles_tokens2': 'smiles2',
+        }[smiles_voc_file]
+        setattr(args, 'smiles_voc_dir', smiles_voc_dir)
 
     return args
 
@@ -595,6 +601,10 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     # DataLoader
     if rank == DATA_RANK['train']:
         train_data = ConcatDataset(train_datas)
+        if 'getitem_time' in args.check:
+            dataset_time_hook = DatasetTimeHook(logger, 16 // max(1, args.num_workers), None)
+            train_data = add_time_hook(train_data, dataset_time_hook)
+            
         sampler = RandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
         train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=True, persistent_workers=False, prefetch_factor=10 if args.num_workers > 0 else None)
         train_loader = InfiniteLoader(train_loader)

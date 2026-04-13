@@ -35,7 +35,7 @@ if __name__ == '__main__':
             f"{f'/{args.genname}' if args.genname is not None else ''}/{args.studyname}/{args.opt}"
 
     def streamer_fn(item, i_trial, voc_encoder):
-        streamer = get_ligand_streamer(targs.lig_format, targs.coord_range, voc_encoder, args.no_token_range, targs.lig_h, targs.smiles_voc_file)
+        streamer = get_ligand_streamer(targs.lig_format, targs.coord_range, voc_encoder, args.no_token_range, targs.lig_h, targs.smiles_voc_dir)
         streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf/{item}.sdf")
         streamer = TokenWriteStreamer(streamer,
             voc_encoder=voc_encoder,

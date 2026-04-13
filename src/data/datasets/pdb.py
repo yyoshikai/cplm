@@ -6,8 +6,7 @@ from rdkit import Chem
 from torch.utils.data import Dataset, Subset
 from ..lmdb import StringLMDBDataset
 from ...chem import read_pdb_text
-
-WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
+from ...utils.path import WORKDIR
 
 DEFAULT_PDB_DIR = f"{WORKDIR}/cheminfodata/pdb/220103"
 DEFAULT_VALID_SIZE = 100
