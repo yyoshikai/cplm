@@ -174,6 +174,23 @@ def read_pdb_text(text: str, out_cls: Literal['ob', 'rdkit', 'text']):
                 r"[ +\-0-9]{2}\n)", 
                 r"\1NE2\2GLN\3N\4", text
             )
+            # HETATM ... X という, 何か分からない原子があると読み込みエラーになる。
+            # ので, それらは削除する
+            text = re.sub(
+                r"HETATM"
+                r"[ 0-9]{5} "
+                r" UNK.UNX ."
+                r"[ 0-9]{4}"
+                r".   "
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9.]{6}"
+                r"[ \-0-9.]{6}          "
+                r" X"
+                r"[ +\-0-9]{2}\n", 
+                r"", text
+            )
             mol = Chem.MolFromPDBBlock(text, sanitize=False, removeHs=True)
 
         params = Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES

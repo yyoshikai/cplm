@@ -11,13 +11,13 @@ from ...utils.path import WORKDIR
 DEFAULT_PDB_DIR = f"{WORKDIR}/cheminfodata/pdb/220103"
 DEFAULT_VALID_SIZE = 100
 
-class PDBDataset(Dataset[OBMol|Chem.Mol]):
+class PDBDataset(Dataset[OBMol|Chem.Mol|str]):
     def __init__(self, pdbid_name: str, cls: Literal['ob', 'rdkit', 'text'], pdb_dir: str=DEFAULT_PDB_DIR):
         self.pdb_dir = pdb_dir
         self.pdbid_data = StringLMDBDataset(f"{pdb_dir}/{pdbid_name}.lmdb")
         self.cls = cls
 
-    def __getitem__(self, idx: int) -> OBMol:
+    def __getitem__(self, idx: int):
         # get pdbid
         pdbid = self.pdbid_data[idx]
 
@@ -32,7 +32,7 @@ class PDBDataset(Dataset[OBMol|Chem.Mol]):
         return len(self.pdbid_data)
 
 # 誰も使ってない
-class PDBUniMolDataset(Subset[OBMol]):
+class PDBUniMolDataset(Subset[OBMol|Chem.Mol|str]):
     def __init__(self, split: Literal['train', 'valid'], cls: Literal['ob', 'rdkit', 'text'], pdb_dir: str=DEFAULT_PDB_DIR):
         # Whole data
         whole_data = PDBDataset("unimol_valid_count_order_pdbids", cls, pdb_dir)
@@ -47,7 +47,7 @@ class PDBUniMolDataset(Subset[OBMol]):
         
         super().__init__(whole_data, indices)
 
-class PDBUniMolRandomDataset(Subset[OBMol]):
+class PDBUniMolRandomDataset(Subset[OBMol|Chem.Mol|str]):
     def __init__(self, split: Literal['train', 'valid'], cls: Literal['ob', 'rdkit', 'text'], pdb_dir: str=DEFAULT_PDB_DIR):
         # Whole data
         whole_data = PDBDataset("unimol_random_order_pdbids", cls, pdb_dir)
