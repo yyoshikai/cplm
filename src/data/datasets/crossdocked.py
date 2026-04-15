@@ -1,0 +1,118 @@
+"""
+251028 前処理のコードは消したので, 古いcommit(04fa7c93等)を参照してください。
+"""
+import gzip
+from typing import Literal
+
+import torch
+from openbabel.openbabel import OBMol
+from prody import confProDy
+from ..lmdb import PickleLMDBDataset, IntLMDBDataset
+from ..data import TupleDataset
+from rdkit import Chem
+confProDy(verbosity='none')
+from ...utils.path import WORKDIR
+from ...chem import read_pdb_path
+from ..protein import Pocket
+
+SAVE_DIR = f"{WORKDIR}/cplm/ssd/preprocess/results/finetune/r4_all"
+CDDIR = f"{WORKDIR}/cheminfodata/crossdocked"
+
+class CDWholeDataset(TupleDataset[tuple[Pocket, Chem.Mol, float, str, str]]):
+    def __init__(self):
+        self.raw_data = PickleLMDBDataset(f"{CDDIR}/pockets/main.lmdb")
+        super().__init__(5)
+
+    def __getitem__(self, idx):
+        data = self.raw_data[idx]
+
+        # pocket
+        pocket_atoms, pocket_coord = data['pocket_atoms'], data['pocket_coordinate']
+        pocket = Pocket(pocket_atoms, pocket_coord)
+
+        score = float(data['score'])
+        return pocket, data['lig_mol'], score
+    
+    def __len__(self):
+        return len(self.raw_data)
+
+class CDDataset(TupleDataset[tuple[Pocket, Chem.Mol, float, str, str]]):
+    def __init__(self, split: Literal['train', 'valid', 'test']):
+        if split == 'test':
+            raise NotImplementedError(f"test set is not supported for pockets.")
+        self.indices = IntLMDBDataset(f"{CDDIR}/pockets/mask/{split}_idxs.lmdb")
+        self.dataset = CDWholeDataset()
+    def __getitem__(self, idx: int):
+        return self.dataset[self.indices[idx]]
+    def __len__(self):
+        return len(self.indices)
+    
+class CDProteinWholeDataset(TupleDataset[tuple[OBMol|Chem.Mol, Chem.Mol, float, str, str]]):
+    def __init__(self, out_cls: Literal['ob', 'rdkit', 'text']):
+        self.raw_data = PickleLMDBDataset(f"{CDDIR}/pockets/main.lmdb")
+        super().__init__(5)
+        self.out_cls = out_cls
+
+    def __getitem__(self, idx):
+        data = self.raw_data[idx]
+        protein = read_pdb_path(f"{CDDIR}/CrossDocked2020/{data['dname']}/{data['protein_name']}", self.out_cls)
+        score = float(data['score'])
+
+        return protein, data['lig_mol'], score
+        # ligand_path: 251113 indexがないのはおかしい気がするので一旦こうする
+
+class CDProteinTestDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]):
+    """
+    TargetDiffのtest setを利用
+    (_idx.lmdbを使うと, targetdiffと同じディレクトリのデータが全て取られる。)
+    現状, 生成にしか使わなさそうなので毎回読み込むようにしている。
+    """
+    def __init__(self, out_cls: Literal['ob', 'rdkit', 'text']):
+        super().__init__(5)
+        self.split_by_name = torch.load(f"{CDDIR}/targetdiff/split_by_name.pt", 
+                weights_only=True)['test']
+        self.out_cls = out_cls
+    def __getitem__(self, idx):
+
+        pname, lname = self.split_by_name[idx]
+        # 例. 'BSD_ASPTE_1_130_0/2z3h_A_rec_1wn6_bst_lig_tt_docked_3_pocket10.pdb', 'BSD_ASPTE_1_130_0/2z3h_A_rec_1wn6_bst_lig_tt_docked_3.sdf
+        pname = pname.split('_rec_')[0] + "_rec.pdb"
+        lname = lname.removesuffix('.sdf')
+        lname, sdf_idx = lname.rsplit('_', maxsplit=1)
+        ligands_path = f"{CDDIR}/CrossDocked2020_v1.1/{lname}.sdf.gz"
+        protein_path = f"{CDDIR}/CrossDocked2020_v1.1/{pname}"
+        sdf_idx = int(sdf_idx)
+
+        # ligand
+        with gzip.open(ligands_path) as f:
+            sup = iter(Chem.ForwardSDMolSupplier(f))
+            for _ in range(sdf_idx):
+                next(sup)
+            mol = next(sup)
+
+        # protein
+        protein = read_pdb_path(protein_path, self.out_cls)
+        return protein, mol, None
+    
+    def __len__(self):
+        return len(self.split_by_name)
+
+
+class CDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]):
+    def __new__(cls, split: Literal['train', 'valid', 'test'], out_cls: Literal['ob', 'rdkit', 'text']):
+        if split == 'test':
+            return CDProteinTestDataset(out_cls)
+        elif split in ['train', 'valid']:
+            obj = super().__new__(cls)
+            obj.__init__(split, out_cls)
+            return obj
+        else:
+            raise ValueError(f"Unsupported {split=}")
+    def __init__(self, split: Literal['train', 'valid'], out_cls: Literal['ob', 'rdkit', 'text']):
+        super().__init__(5)
+        self.indices = IntLMDBDataset(f"{CDDIR}/pockets/mask/{split}_idxs.lmdb")
+        self.dataset = CDProteinWholeDataset(out_cls)
+    def __getitem__(self, idx: int):
+        return self.dataset[self.indices[idx]]
+    def __len__(self):
+        return len(self.indices)

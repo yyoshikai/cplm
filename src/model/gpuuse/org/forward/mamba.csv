@@ -1,0 +1,23 @@
+shape,dtype,itemsize,n
+batch_size 1 state_size length,torch.float32,4,num_hidden_layers*2
+batch_size intermediate_size length,torch.float32,4,num_hidden_layers
+batch_size intermediate_size math.ceil(length/2048) state_size*2,torch.float32,4,num_hidden_layers
+batch_size intermediate_size*2 length,torch.float32,4,num_hidden_layers
+batch_size length,torch.int64,8,1
+batch_size length 1,torch.float32,4,num_hidden_layers+1
+batch_size length hidden_size,torch.float32,4,num_hidden_layers*3+3
+batch_size length voc_size,torch.float32,4,1
+batch_size*length state_size*2+time_step_rank,torch.float32,4,num_hidden_layers
+hidden_size,torch.float32,4,num_hidden_layers+1
+hidden_size intermediate_size,torch.float32,4,num_hidden_layers
+intermediate_size,torch.float32,4,num_hidden_layers*3
+intermediate_size 1 conv_kernel,torch.float32,4,num_hidden_layers
+intermediate_size conv_kernel,torch.float32,4,num_hidden_layers
+intermediate_size state_size,torch.float32,4,num_hidden_layers*2
+intermediate_size time_step_rank,torch.float32,4,num_hidden_layers
+intermediate_size*2 hidden_size,torch.float32,4,num_hidden_layers
+length batch_size,torch.int64,8,2
+length batch_size voc_size,torch.float32,4,1
+length+1 batch_size,torch.int64,8,1
+state_size*2+time_step_rank intermediate_size,torch.float32,4,num_hidden_layers
+voc_size hidden_size,torch.float32,4,1

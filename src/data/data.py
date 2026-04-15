@@ -1,77 +1,68 @@
-import pickle
+import os
+import queue
+import itertools as itr
+import multiprocessing as mp
+from collections import defaultdict
+from collections.abc import Sequence, Mapping
+from functools import lru_cache
+from logging import Logger
+from time import time
+from typing import TypeVar
+from collections.abc import Callable, Iterable
 from logging import getLogger
-import math
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
-import lmdb
+import torch.utils.data as torch_data
+from torch import Tensor
+from torch.utils.data import Dataset, IterableDataset, get_worker_info
+from ..utils import should_show
 
-from ..tokenizer import MoleculeProteinTokenizer
+T = TypeVar('T')
+T_co = TypeVar('T_co', covariant=True)
+logger = getLogger()
 
-class LMDBDataset(Dataset):
-    logger = getLogger(f"{__module__}.{__qualname__}")
+class TupleDataset(Dataset[T_co]):
+    def __init__(self, tuple_size: int):
+        self.tuple_size = tuple_size
+    def untuple(self):
+        return untuple(self, self.tuple_size)
 
-    def __init__(self, lmdb_path, key_is_indexed=False, keep_env=False, keep_txn=False):
-        self.lmdb_path = lmdb_path
-        self.keep_env = keep_env
-        self.keep_txn = keep_txn
-        self.key_is_indexed = key_is_indexed
-        
-        self._lazy_env = self._lazy_txn = None
-        self._lazy_keys = None
-    
-    def __getitem__(self, idx):
-        return pickle.loads(self.txn().get(self.key(idx)))
-
-    def env(self):
-        if self._lazy_env is not None:
-            return self._lazy_env
-        env = lmdb.open(self.lmdb_path, subdir=False, readonly=True,
-                lock=False, readahead=False, meminit=False, max_readers=256)
-        if self.keep_env:
-            self._lazy_env = env
-        return env
-
-    def txn(self):
-        if self._lazy_txn is not None:
-            return self._lazy_txn
-        txn = self.env().begin()
-        if self.keep_txn:
-            self._lazy_txn = txn
-        return txn
-    
-    def key(self, idx):
-        if self.key_is_indexed:
-            return str(idx).encode('ascii')
-        else:
-            if self._lazy_keys is None:
-                self.logger.info("Getting all key list...")
-                self._lazy_keys = list(self.txn().cursor().iternext(values=False))
-                self.logger.info("Done.")
-            return self._lazy_keys[idx]
-
+class WrapDataset(Dataset[T_co]):
+    def __init__(self, dataset: Dataset[T]):
+        self.dataset = dataset
     def __len__(self):
-        return self.env().stat()['entries']
+        return len(self.dataset)
+    def __str__(self):
+        return f"{type(self).__name__}({self.dataset})"
 
-class CoordTransform:
-    def __init__(self, seed:int=0, normalize_coord=False, random_rotate=False, coord_noise_std=0.0):
-        self.rng = np.random.default_rng(seed)
-        self.normalize_coord = normalize_coord
-        self.random_rotate = random_rotate
-        self.coord_noise_std = coord_noise_std
-    
-    def __call__(self, coords: np.ndarray) -> np.ndarray:
-        if self.normalize_coord:
-            coords = coords - np.mean(coords, axis=0, keepdims=True)
-        if self.random_rotate:
-            matrix = get_random_rotation_matrix(self.rng)
-            coords = np.matmul(coords, matrix)
-        if self.coord_noise_std > 0:
-            noise = self.rng.normal(size=3, scale=self.coord_noise_std)   
-            coords += noise
-        return coords
+class WrapTupleDataset(WrapDataset[T_co]):
+    def __init__(self, dataset: Dataset[T], tuple_size: int):
+        super().__init__(dataset)
+        self.tuple_size = tuple_size
+    def untuple(self):
+        return untuple(self, self.tuple_size)
+        
+class ApplyDataset(WrapDataset[T_co]):
+    def __init__(self, dataset: Dataset[T], func: Callable[[T], T_co]):
+        super().__init__(dataset)
+        self.func = func
+    def __getitem__(self, idx: int):
+        return self.func(self.dataset[idx])
 
+# Override Pytorch class
+class Subset(torch_data.Subset[T_co]):
+    def __str__(self):
+        return f"Subset({self.dataset}, size={len(self.indices)}/{len(self.dataset)})"
+
+class StackDataset(torch_data.StackDataset[T_co]):
+    def __str__(self):
+        if isinstance(self.datasets, tuple):
+            return f"StackDataset({', '.join([str(dataset) for dataset in self.datasets])})"
+        else:
+            return f"StackDataset({', '.join([f'{key}={value}' for key, value in self.datasets.items()])})"
+
+# Indexing
 class RepeatDataset(Dataset):
     def __init__(self, net_dataset, n_repeat):
         self.net_dataset = net_dataset
@@ -82,64 +73,239 @@ class RepeatDataset(Dataset):
         if (idx >= self.net_size*self.n_repeat):
             raise IndexError("Dataset index out of range")
         return self.net_dataset[idx%self.net_size]
-
     def __len__(self):
         return self.net_size * self.n_repeat
+    def __str__(self):
+        return f"RepeatDataset({self.net_dataset}, {self.n_repeat})"
+
+class SampleDataset(Dataset[T_co]):
+    epoch: int = 0
+    logger = getLogger(f'{__module__}.{__qualname__}')
     
-class SliceDataset(Dataset):
-    def __init__(self, net_dataset, step, start):
-        self.net_dataset = net_dataset
-        net_size = len(self.net_dataset)
-        self.size = net_size // step + (1 if net_size % step > start else 0)
-        self.step = step
-        self.start = start
+    def __init__(self, dataset: Dataset[T_co], size: int=None, r: float=None, seed: int=0):
+        assert (size is None) ^ (r is None), f"Either size({size}) xor r({r}) must be specified."
+        if size is None: size = round(len(dataset)*r)
+        assert (0 <= size <= len(dataset)), f"size({size}) must be in [0, {len(dataset)}]"
+        self.size = size
+
+        self.dataset = dataset
+        self._lazy_sample_idxs: np.ndarray[int] = None
+        self._lazy_sample_idxs_epoch: int = None
+        self.seed = seed
+
+    @property
+    def sample_idxs(self) -> np.ndarray[int]:
+        if self.epoch != self._lazy_sample_idxs_epoch:
+            self.logger.info("Calculating sample_idxs...")
+            rng = np.random.default_rng(self.seed+self.epoch)
+            self._lazy_sample_idxs = rng.choice(len(self.dataset), size=self.size, replace=False)
+            self._lazy_sample_idxs_epoch = self.epoch
+            self.logger.info("Calculated.")
+        return self._lazy_sample_idxs
     
-    def __getitem__(self, idx):
-        return self.net_dataset[idx//self.step+self.start]
+    def __getitem__(self, idx: int) -> T_co:
+        return self.dataset[self.sample_idxs[idx]]
 
     def __len__(self):
         return self.size
 
-def get_random_rotation_matrix(rng: np.random.Generator):
-    # get axes
-    axes = []
-    while(len(axes) < 2):
-        new_axis = rng.random(3)
-        
-        new_norm = np.sqrt(np.sum(new_axis**2))
-        if (new_norm < 0.1 or 1 <= new_norm): continue
-        new_axis = new_axis / new_norm
-        if np.any([np.abs(np.sum(axis*new_axis)) >= 0.9 for axis in axes]):
-            continue
-        axes.append(new_axis)
+    @classmethod
+    def set_epoch(cls, epoch: int):
+        cls.epoch = epoch
 
-    # get rotation matrix
-    axis0, axis1b = axes
-    axis1 = np.cross(axis0, axis1b)
-    axis1 = axis1 / np.linalg.norm(axis1)
-    axis2 = np.cross(axis0, axis1)
-    axis2 = axis2 / np.linalg.norm(axis2)
-    return np.array([axis0, axis1, axis2])
-
-class MoleculeDataset(Dataset):
-    def __init__(self, lmdb_path, n_conformer, tokenizer: MoleculeProteinTokenizer, 
-                coord_transform: CoordTransform, seed=0, **kwargs):
-        self.net_dataset = LMDBDataset(lmdb_path, key_is_indexed=True, **kwargs)
-        self.tokenizer = tokenizer
-        self.n_conformer = n_conformer
-        self.coord_transform = coord_transform
-        self.rng = np.random.default_rng(seed)
+class CacheDataset(WrapDataset):
+    def __init__(self, dataset: Dataset):
+        super().__init__(dataset)
+        self.cache_idx = None
+        self.cache_item = None
     
+    def __getitem__(self, idx: int):
+        if idx != self.cache_idx:
+            self.cache_idx = idx
+            self.cache_item = self.dataset[idx]
+        return self.cache_item
+
+class LRUCacheDataset(CacheDataset):
+    def __init__(self, dataset: Dataset, maxsize: int=1):
+        super().__init__(dataset)
+        self._getitem_cached = lru_cache(maxsize=maxsize, typed=True)(self._getitem)
+
+    def _getitem(self, idx: int):
+        return self.dataset[idx]
+    
+    def __getitem__(self, idx: int):
+        return self._getitem_cached(idx)
+
+class KeyDataset(WrapDataset):
+    def __init__(self, dataset: CacheDataset, key):
+        if not isinstance(dataset, CacheDataset):
+            raise ValueError(f"KeyDataset not on CacheDataset({type(dataset)}) is slow.")
+        super().__init__(dataset)
+        self.key = key
     def __getitem__(self, idx):
-        mol_idx, conformer_idx = divmod(idx, self.n_conformer)
-        data = self.net_dataset[mol_idx]
-        smi = data['smi']
-        coord = data['coordinates'][conformer_idx]
-        coord = self.coord_transform(coord)
-        tokens = self.tokenizer.tokenize_smi(smi)+self.tokenizer.tokenize_coord(coord)
-        return torch.tensor(tokens, dtype=torch.long)
-    
+        return self.dataset[idx][self.key]
+    def __str__(self):
+        return f"{self.dataset}[{self.key}]"
+
+def untuple_dataset(dataset: Dataset, size: int):
+    if not isinstance(dataset, CacheDataset):
+        dataset = CacheDataset(dataset)
+    return tuple(KeyDataset(dataset, i) for i in range(size))
+
+def untuple(dataset: Dataset, size: int):
+    if not isinstance(dataset, CacheDataset):
+        dataset = CacheDataset(dataset)
+    return tuple(KeyDataset(dataset, i) for i in range(size))
+
+class IndexDataset(WrapDataset[tuple[int,T_co]]):
+    def __init__(self, dataset: Dataset[T_co]):
+        super().__init__(dataset)
+        self.dataset = dataset
+
+    def __getitem__(self, idx: int):
+        return idx, self.dataset[idx]
+
+def index_dataset(dataset: Dataset[T]) -> tuple[Dataset[int], Dataset[T]]:
+    dataset = IndexDataset(dataset)
+    return untuple_dataset(dataset, 2)
+
+class IndexIDataset(IterableDataset[tuple[int, T_co]]):
+    def __init__(self, dataset: Dataset[T_co]):
+        self.dataset = dataset
+    def __iter__(self):
+        yield from enumerate(self.dataset)
+
+class ConstantDataset(Dataset[T_co]):
+    def __init__(self, value: T_co, size: int):
+        self.size = size
+        self.value = value
+    def __getitem__(self, idx: int):
+        return self.value
     def __len__(self):
-        return len(self.net_dataset) * self.n_conformer
+        return self.size
 
+class TensorDataset(WrapDataset[Tensor]):
+    def __init__(self, dataset: Dataset, dtype=None):
+        super().__init__(dataset)
+        self.dtype = dtype
+    def __getitem__(self, idx: int):
+        return torch.tensor(self.dataset[idx], dtype=self.dtype)
 
+class WorkerIDataset(IterableDataset[T_co]):
+    def __init__(self, dataset: IterableDataset[T_co]):
+        self.dataset = dataset
+    def __iter__(self):
+        worker_info = get_worker_info()
+        if worker_info is not None:
+            size, rank = worker_info.num_workers, worker_info.id
+        else:
+            size, rank = 1, 0
+        yield from itr.islice(self.dataset, rank, None, size)
+
+def is_main_worker() -> bool:
+    worker_info = get_worker_info()
+    return worker_info is None or worker_info.id == 0
+
+class RevealIterator(Iterable[T]):
+    logger = getLogger(f'dexs.{__module__}.{__qualname__}')
+    def __init__(self, iterable: Iterable[T], name):
+        self.iterable = iterable
+        self.name = name
+        self.enabled = True
+
+    def __iter__(self):
+        shapes = []
+        for idx, item in enumerate(self.iterable):
+            if self.enabled: 
+                # specific
+                shapes.append(len(item[0]))
+                if len(shapes) == 10:
+                    self.logger.debug(f"{self.name} Iterator[{idx-9}~{idx}]: {shapes}")
+                    shapes = []
+            yield item
+
+def get_rng(base_seed, idx) -> np.random.Generator:
+    epoch = int(os.environ.get('EPOCH', 0))
+    return np.random.default_rng(base_seed+epoch+idx)
+
+class ReadDataset(IterableDataset[str]):
+    def __init__(self, path: str):
+        self.path = path
+    def __iter__(self):
+        worker_info = get_worker_info()
+        with open(self.path) as f:
+            if worker_info is not None:
+                f = itr.islice(f, worker_info.id, None, worker_info.num_workers)
+            for line in f:
+                yield line.rstrip()
+
+class ShuffleDataset(WrapDataset[T]):
+    def __init__(self, dataset: Dataset[T], mmap_path: str, indices: np.ndarray):
+        super().__init__(dataset)
+        self.indices = np.memmap(mmap_path, dtype=np.int64, mode='w+', shape=(len(indices),))
+        self.indices[:] = indices[:]
+    def __getitem__(self, idx: int):
+        return self.dataset[self.indices[idx]]
+
+class DatasetTimeHook:
+    def __init__(self, logger: Logger, min_interval: int, max_interval: int):
+        self.logger = logger
+        self.min_interval = min_interval
+        self.max_interval = max_interval
+
+        self.ids2total_t = defaultdict(float)
+        self._cur_ids = []
+        self._id2name = {}
+        self._ids2cur_start = {}
+        self.n_getitem = 0
+
+    def start_getitem(self, dataset: Dataset):
+        dataset_id = id(dataset)
+        self._cur_ids.append(dataset_id)
+        self._id2name[dataset_id] = type(dataset).__name__
+        self._ids2cur_start[tuple(self._cur_ids)] = time()
+
+    def end_getitem(self):
+        cur_ids = tuple(self._cur_ids)
+        self.ids2total_t[cur_ids] += time() - self._ids2cur_start[cur_ids]
+        self._cur_ids.pop()
+        if len(self._cur_ids) == 0:
+            self.n_getitem += 1
+            worker_info = get_worker_info()
+            if (worker_info is None or worker_info.id == 0) and \
+                    should_show(self.n_getitem, self.max_interval, self.min_interval):
+                self.logger.debug(f"Dataset Times in {self.n_getitem} __getitem__:")
+                for ids in self._ids2cur_start.keys():
+                    total_t = self.ids2total_t[ids]
+                    msg = '  '*(len(ids)-1)+self._id2name[ids[-1]]+f': {total_t:.04f}s'
+                    inner_total_t = sum(total_t0 for ids0, total_t0 in self.ids2total_t.items() if len(ids0) == len(ids)+1 and ids == ids0[:len(ids)])
+                    if inner_total_t > 0:
+                        msg += f" ({total_t-inner_total_t:.04f}s)"
+                    self.logger.debug(msg)
+
+class TimeProxyDataset(WrapDataset[T]):
+    def __init__(self, dataset: Dataset, hook: DatasetTimeHook):
+        super().__init__(dataset)
+        self.hook = hook
+
+    def __getitem__(self, idx):
+        self.hook.start_getitem(self.dataset)
+        item = self.dataset[idx]
+        self.hook.end_getitem()
+        return item
+
+def add_time_hook(data: Dataset|Sequence|Mapping, hook: DatasetTimeHook) -> TimeProxyDataset:
+    if isinstance(data, (str, np.ndarray, torch.Tensor)): # np.memmap is np.ndarray
+        return data
+    elif isinstance(data, Dataset) and not isinstance(data, TimeProxyDataset):
+        for k, v in vars(data).items():
+            setattr(data, k, add_time_hook(v, hook))
+        data = TimeProxyDataset(data, hook)
+        return data
+    elif isinstance(data, Sequence):
+        if len(data) < 10: # indicesなど長いものは除外
+            return type(data)(add_time_hook(i, hook) for i in data)
+    elif isinstance(data, Mapping):
+        if len(data) < 10:
+            return type(data)({k: add_time_hook(v, hook) for k, v in data.items()})
+    return data

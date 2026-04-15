@@ -1,281 +1,263 @@
-import sys, os
-import logging
-import bisect, gzip
-import concurrent.futures as cf
-from collections import defaultdict
-import pickle
-from glob import glob
-import gc
-import psutil
+import io
+import itertools as itr
+from dataclasses import dataclass
+from typing import Literal
 import numpy as np
-import torch
+from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
+from rdkit import Chem
+from Bio import PDB
+from Bio.PDB.Residue import Residue
 from torch.utils.data import Dataset
-from tqdm import tqdm as _tqdm
-from time import time
+from ..utils import slice_str
+from ..chem import get_coord_from_mol, obmol2rdmol, set_atom_order, obmol2pdb, pdb2obmol
+from .data import WrapDataset, get_rng
+from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
 
-from ..tokenizer import MoleculeProteinTokenizer 
-from ..lmdb import new_lmdb, load_lmdb
-from .data import CoordTransform, LMDBDataset
-try:
-    from Bio.PDB import FastMMCIFParser, PPBuilder
-except ModuleNotFoundError:
-    FastMMCIFParser = PPBuilder = None
-from tools.logger import get_logger, add_file_handler
+AtomRepr = Literal['none', 'atom', 'all']
 
-class ProteinDataset(Dataset):
-    def __init__(self, net_dataset, tokenizer: MoleculeProteinTokenizer, coord_transform: CoordTransform):
-        self.net_dataset = net_dataset
-        self.tokenizer = tokenizer
-        self.coord_transform = coord_transform
+non_metals = [
+    'H', 'He', 'B', 'C', 'N', 'O', 'F', 'Ne',
+    'Si', 'P', 'S', 'Cl', 'Ar', 'As', 'Se', 'Br', 'Kr',
+    'Te', 'I', 'Xe', 'At', 'Rn'
+]
 
-    def __getitem__(self, idx):
-        data = self.net_dataset[idx]
-        atoms = data['atoms']
-        coords = data['coordinates'][0]
-        coords = self.coord_transform(coords)
+@dataclass
+class Pocket:
+    atoms: np.ndarray
+    coord: np.ndarray
 
-        tokens = self.tokenizer.tokenize_protein(atoms, coords)
-        return torch.tensor(tokens, dtype=torch.long)
+    def __post_init__(self):
+        assert len(self.atoms) == len(self.coord)
+        assert self.coord.ndim == 2 and self.coord.shape[1] == 3
 
-    def __len__(self):
-        return len(self.net_dataset)
+def pocket2pdb(pocket: Pocket, out_path: str):
+    with open(out_path, 'w') as f:
+        for ia in range(len(pocket.atoms)):
+            atom = pocket.atoms[ia][0]
+            coord = pocket.coord[ia]
+            if atom == 'H': continue
+            f.write(f"ATOM  {ia:5}  {atom:<3} UNK A   1    {coord[0]:8.03f}{coord[1]:8.03f}{coord[1]:8.03f}  1.00 40.00           {atom[0]}  \n")
 
-
-
-def _process0_init(radius_mean_i, radius_std_i, max_n_atom_i, logger_i: logging.Logger):
-    global parser, ppbuilder, amino_resnames, radius_mean, radius_std, max_n_atom, logger
-    parser = FastMMCIFParser(QUIET=True)
-    ppbuilder = PPBuilder()
-    amino_resnames = {
-        'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE', 
-        'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
-        'ASX', 'GLX', 'SEC'
-    }
-    radius_mean = radius_mean_i
-    radius_std = radius_std_i
-    max_n_atom = max_n_atom_i
-    logger = logger_i
-
-def _process0_in(path):
-    name = process0_get_name(path)
-    try:
-        start = time()
-        with gzip.open(path, mode='rt') as f:
-            structure = parser.get_structure("none", f)
-        str_time = time() - start
-
-        rng = np.random.default_rng(int(name, base=36))
-        
-        # remove non-polypeptides
-        start = time()
-        pps = ppbuilder.build_peptides(structure)
-        peptide_time = time() - start
-        if len(pps) == 0:
-            return 'non_polypeptide', None
-
-        # check atom num
-        if max_n_atom is not None:
-            n_atom = 0
-            for atom in structure.get_atoms():
-                n_atom += 1
-            if n_atom > max_n_atom:
-                logger.warning(f"Too large({n_atom} atoms): {path}")
-                return 'large', None
-
-        # get atom information
-        start = time()
-        names = []
-        elements = []
-        coords = []
-        is_aminos = []
-        for atom in structure.get_atoms():
-            residue = atom.get_parent()
-            resname = residue.get_resname()
-            hetflag, resseq, icode = residue.get_id()
-            
-            is_aminos.append(resname in amino_resnames and hetflag[:2] != 'H_')
-            names.append(atom.name)
-            elements.append(atom.element)
-            coords.append(atom.get_coord())
-        atom_time = time() - start
-
-        start = time()
-        coords = np.array(coords)
-        is_aminos = np.array(is_aminos)
-
-        # calc distance matrix
-        norm = np.sum(coords**2, axis=1) # [N]
-
-        # sample substructure idxs
-        sample_finished = ~is_aminos.copy()
-        sub_idxss = []
-        prepare_coord_time = time()-start
-        
-        start = time()
-        while not np.all(sample_finished):
-            center_idx = rng.choice(np.where(~sample_finished)[0])
-            radius2 = max(1e-5, rng.normal(loc=radius_mean, scale=radius_std))**2
-
-            dist2 = norm+norm[center_idx]-np.matmul(coords, coords[center_idx])*2
-
-            sub_idxs = np.where(dist2 < radius2)[0]
-            sample_finished[sub_idxs] = True
-            sub_idxss.append(sub_idxs)
-        sample_time = time()-start
-        data = {
-            'name': name,
-            'atoms': np.array(names),
-            'elements': np.array(elements),
-            'coords': coords,
-            'is_aminos': is_aminos,
-            'sub_idxss': sub_idxss
-        }
-        return data, (str_time, peptide_time, atom_time, prepare_coord_time, sample_time)
-    except Exception as e:
-        logger.warning(f"Error in processing {path}: {e}")
-        return e, None
-
-def process0_get_name(path: str) -> str:
-    return os.path.basename(path).split('.')[0]
-
-
-class PDBFragmentDataset(Dataset):
-    logger = logging.getLogger(__qualname__)
-    def __init__(self, path):
-        self.path = path
-        self.dataset = LMDBDataset(path, key_is_indexed=True)
-        self._lazy_offsets = None
-    
-    @property
-    def offsets(self) -> np.ndarray:
-        if self._lazy_offsets is None:
-            self._lazy_offsets = pickle.load(open(self.path+".offset.pkl", 'rb'))
-        return self._lazy_offsets
-
-    def __len__(self):
-        return self.offsets[-1]
-    
-    @property
-    def n_protein(self) -> int:
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        prot_idx = bisect.bisect_right(self.offsets, idx) - 1
-        assert 0 <= prot_idx < len(self.dataset), f"index {idx} is out of bounds"
-        prot = self.dataset[prot_idx]
-        sub_idx = idx - self.offsets[prot_idx]
-        sub_idxs = prot['sub_idxss'][sub_idx]
-
-        atoms = prot['atoms'][sub_idxs]
-        elements = prot['elements'][sub_idxs]
-        elements[atoms == 'CA'] = 'CA'
-        atoms = elements
-        coords = prot['coords'][sub_idxs]
-
-        return {'atoms': atoms, 'coordinates': [coords]}
-
-    @classmethod
-    def process0(cls, root_dir: str, out_path: str,
-            radius_mean: float, radius_std: float,
-            reset=False, num_workers: int=1, tqdm: bool=False, max_tasks_per_child: int=None,
-            range_min: int=None, range_sup: int=None, max_n_atom: int=None):
-        time_path = out_path+".0.process_time.lmdb"
-        log_path = out_path+'.0.log'
-        out_path = out_path+'.0.lmdb'
-
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        logger = get_logger(f"{cls.__module__}.{cls.__qualname__}.process0", logging.DEBUG)
-        add_file_handler(logger, log_path, mode='w' if reset else 'a')
-        logger.info("New process started.")
-
-        if os.path.exists(out_path) and not reset:
-            env, txn = load_lmdb(out_path)
-            finished_keys = set(map(lambda x: x.decode('ascii'), txn.cursor().iternext(values=False)))
-            logger.info(f"{len(finished_keys)} keys are found in out_path.")
-            del env, txn
-        else:
-            finished_keys = None
-        env, txn = new_lmdb(out_path, keep_exists=not reset)
-        env_time, txn_time = new_lmdb(time_path, keep_exists=not reset)
-
-        paths = sorted(glob(f"{root_dir}/**/*.cif.gz"))
-        paths = paths[range_min:range_sup]
-        if finished_keys is not None:
-            paths = [path for path in paths if process0_get_name(path) not in finished_keys]
-        del finished_keys
-        logger.info(f"Processing {len(paths)} data...")
-        
-        with cf.ProcessPoolExecutor(num_workers, initializer=_process0_init, 
-                initargs=(radius_mean, radius_std, max_n_atom, logger), max_tasks_per_child=max_tasks_per_child) as e:
-            data_iter = e.map(_process0_in, paths, chunksize=10)
-            if tqdm:
-                data_iter = _tqdm(data_iter, total=len(paths))
-            for i, (data, times) in enumerate(data_iter):
-                key = str(process0_get_name(paths[i])).encode('ascii')
-                txn.put(key, pickle.dumps(data))
-                txn_time.put(key, pickle.dumps(times))
-                if (i+1) % 100 == 0:
-                    logger.debug(f"Committing after {i+1} process...")
-                    txn.commit()
-                    env.close()
-                    txn_time.commit()
-                    env_time.close()
-                    del txn, env
-                    gc.collect()
-                    env, txn = new_lmdb(out_path, keep_exists=True)
-                    env_time, txn_time = new_lmdb(time_path, keep_exists=True)
-                    logger.debug(f"committed.")
-                if tqdm and (i+1) % 100 == 0:
-                    mem = psutil.virtual_memory()
-                    mem = f"memory={mem.used/2**30:.03f}/{mem.total/2**30:.03f}"
-                    logger.info(mem)
-                    data_iter.set_postfix_str(mem)
-        txn.commit()
-        env.close()
-        txn_time.commit()
-        env_time.close()
-
-    @classmethod
-    def process1(cls, out_path: str, tqdm: bool=False):
-        logger = get_logger(f"{cls.__module__}.{cls.__qualname__}.process0", logging.DEBUG)
-        add_file_handler(logger, f"{out_path}.1.log", mode='w')
-
-        env, txn = load_lmdb(out_path+".0.lmdb")
-        keys = list(txn.cursor().iternext(values=False))
-        keys = sorted(keys)
-        logger.info(f"Number of data: {env.stat()['entries']}")
-
-        env_out, txn_out = new_lmdb(out_path)
-
-        idx = 0
-        lengths = []
-        errors = defaultdict(list)
-        if tqdm:
-            keys = _tqdm(keys)
-        for key in keys:
-            value = txn.get(key)
-            data = pickle.loads(value)
-            if isinstance(data, dict):
-                lengths.append(len(data['sub_idxss']))
-                txn_out.put(str(idx).encode('ascii'), value)
-                idx += 1
+class _ProteinProcessSelect(PDB.Select):
+    def __init__(self, ion: bool, ligand: bool, water: bool):
+        self.ion = ion
+        self.ligand = ligand
+        self.water = water
+    def accept_residue(self, residue: Residue):
+        id0 = residue.get_id()[0]
+        if id0 == ' ': # amino acid
+            return True
+        elif id0 == 'W':
+            return self.water
+        elif id0[:2] == 'H_':
+            if len(id0[2:]) <= 2:
+                return self.ion
             else:
-                errors[data].append(key)
-        env.close()
-        logger.debug("Committing transaction...")
-        txn_out.commit()
-        logger.debug("Done.")
-        env_out.close()
+                return self.ligand
+        else:
+            raise ValueError
 
-        
-        offset = [0]+np.cumsum(lengths).tolist()
-        with open(f"{out_path}.offset.pkl", 'wb') as f:
-            pickle.dump(offset, f)
-        logger.info(f"Dataset length: {offset[-1]}")
 
-        with open(f"{out_path}.1.errors.pkl", 'wb') as f:
-            pickle.dump(dict(errors), f)
-        logger.info("Found errors:")
-        for key, names in errors.items():
-            logger.info(f"  {key}: {len(names)}")
+class ProteinProcessDataset(WrapDataset[OBMol|Chem.Mol]):
+    def __init__(self, protein_data: Dataset[OBMol|Chem.Mol], ion: bool, ligand: bool, water: bool):
+        super().__init__(protein_data)
+        self.select = _ProteinProcessSelect(ion, ligand, water)
+        self.ion = ion
+        self.ligand = ligand
+        self.water = water
+
+    def __getitem__(self, idx: int):
+        mol = self.dataset[idx]
+        if isinstance(mol, OBMol):
+            pdb = obmol2pdb(mol)
+            parser = PDB.PDBParser(QUIET=True)
+            mol = parser.get_structure('a', io.StringIO(pdb))
+            pdbio = PDB.PDBIO()
+            string_io = io.StringIO()
+            pdbio.set_structure(mol)
+            pdbio.save(string_io, self.select)
+            pdb = string_io.getvalue()
+            mol = pdb2obmol(pdb)
+        else:
+            rw_mol = Chem.RWMol(mol)
+            remove_atom_idxss = []
+            for frag_idxs in Chem.GetMolFrags(mol):
+                if len(frag_idxs) == 1:
+                    atom = mol.GetAtomWithIdx(frag_idxs[0])
+                    if atom.GetSymbol() == 'O':
+                        remain = self.water
+                    elif atom.GetSymbol() in non_metals: # NH3, CH4, etc.
+                        remain = self.ligand
+                    else: # Fe, Mg, etc.
+                        remain = self.ion
+                else:
+                    if all(mol.GetAtomWithIdx(idx).GetPDBResidueInfo().GetIsHeteroAtom() for idx in frag_idxs):
+                        remain = self.ligand
+                    else:
+                        remain = True
+                if not remain:
+                    remove_atom_idxss.append(frag_idxs)
+            for idx in sorted(itr.chain(*remove_atom_idxss), reverse=True):
+                rw_mol.RemoveAtom(idx)
+            mol = rw_mol.GetMol()
+
+        return mol
+class ProteinTokenizer:
+    def __init__(self, *, heavy: AtomRepr, h: AtomRepr, format, coord_range):
+        self.heavy = heavy
+        self.h = h
+        self.format = format
+        self.atom_tokenizer = ProteinAtomTokenizer()
+        self.coord_tokenizer = FloatTokenizer('protein', -coord_range, coord_range)
+        assert self.heavy in ['all', 'atom', 'none']
+        assert self.h in ['all', 'atom', 'none']
+
+    def __call__(self, atoms: np.ndarray, coords: np.ndarray):
+        # calc mask
+        is_ca = atoms == 'CA'
+        is_h = slice_str(atoms, 1) == 'H'
+        is_heavy = (~is_ca)&(~is_h)
+
+        # atoms 
+        atom_mask = is_ca | (is_heavy if self.heavy in ['all', 'atom'] else False) | (is_h if self.h in ['all', 'atom'] else False)
+
+        # coord
+        coord_mask = is_ca | (is_heavy if self.heavy == 'all' else False) | (is_h if self.h == 'all' else False)
+                    
+
+        if self.format == 'atom_coords':
+            tokens = []
+            for i in range(len(atoms)):
+                if atom_mask[i]: 
+                    tokens += self.atom_tokenizer.tokenize([atoms[i]])
+                if coord_mask[i]:
+                    tokens += self.coord_tokenizer.tokenize_array(coords[i])
+            order = list(range(len(tokens)))
+        elif self.format == 'ordered_atoms_coords':
+            atom_tokens = []
+            coord_tokens = []
+            atom_order = []
+            coord_order = []
+            x = 0
+            for i in range(len(atoms)):
+                if atom_mask[i]:
+                    atom_token = self.atom_tokenizer.tokenize([atoms[i]])
+                    atom_tokens += atom_token
+                    atom_order += list(range(x, x+len(atom_token)))
+                    x += len(atom_token)
+                if coord_mask[i]:
+                    coord_token = self.coord_tokenizer.tokenize_array(coords[i])
+                    coord_tokens += coord_token
+                    coord_order += list(range(x, x+len(coord_token)))
+                    x += len(coord_token)
+            tokens = atom_tokens+['[XYZ]']+coord_tokens
+            order = atom_order+[x]+coord_order
+        elif self.format == 'atoms_coords':
+            tokens = self.atom_tokenizer.tokenize(atoms[atom_mask]) \
+                +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords[coord_mask].ravel())
+            order = list(range(len(tokens)))
+        else:
+            raise ValueError(f"Unknown {self.format=}")
+        return tokens, order
+    
+    def vocs(self) -> set[str]:
+        return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
+                | (set() if self.format == 'atom_coords' else {'[XYZ]'})
+
+class Protein2PDBDataset(WrapDataset[str]):
+    def __init__(self, dataset: Dataset[OBMol|Chem.Mol]):
+        super().__init__(dataset)
+        self.obc = OBConversion()
+        self.obc.SetOutFormat('pdb')
+    def __getitem__(self, idx: int):
+        protein = self.dataset[idx]
+        if isinstance(protein, OBMol):
+            pdb = self.obc.WriteString(protein)
+        else:
+            pdb = Chem.MolToPDBBlock(protein)
+        return pdb
+
+
+# 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
+class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
+    def __init__(self, pocket_data: Dataset[Pocket], *,
+            heavy: AtomRepr, h: AtomRepr, 
+            format: Literal['atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: int):
+        super().__init__(pocket_data)
+        self.pocket_data = pocket_data
+        self.protein_tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
+        assert h == 'none', f"h must be none for pocket."
+
+    def __getitem__(self, idx: int):
+        protein = self.pocket_data[idx]
+        assert len(protein.atoms) == len(protein.coord)
+        return self.protein_tokenizer(protein.atoms, protein.coord)
+    
+    def vocs(self) -> set[str]:
+        return self.protein_tokenizer.vocs()
+
+from .molecule import MolTokenizer
+class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
+    def __init__(self, protein_data: Dataset[OBMol], *,
+            heavy: AtomRepr, h: AtomRepr, format, coord_range: int, smiles_voc_dir, order: Literal['residue', 'can', 'ran'], base_seed: int):
+        super().__init__(protein_data)
+        self.protein_data = protein_data
+
+        self.order = order
+        if order == 'residue':
+            self.tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
+        else:
+            self.tokenizer = MolTokenizer(format, h_coord=h == 'all', coord_range=coord_range, smiles_voc_dir=smiles_voc_dir)
+
+        self.h = h
+        self.base_seed = base_seed
+
+    def __getitem__(self, idx: int):
+        protein = self.protein_data[idx]
+
+        if isinstance(protein, OBMol):
+            if self.order == 'residue':
+                # Order atoms
+                atoms = np.array([atom.GetResidue().GetAtomID(atom).strip() for atom in OBMolAtomIter(protein)])
+                residue_idxs = np.array([atom.GetResidue().GetIdx() for atom in OBMolAtomIter(protein)])
+                coords = get_coord_from_mol(protein)
+                orders = np.argsort(residue_idxs, kind='stable')
+                atoms = atoms[orders]
+                coords = coords[orders]
+                # tokenize
+                tokens, orders = self.tokenizer(atoms, coords)
+            else:
+                protein = obmol2rdmol(protein, sanitize=False) # sanitize=True raises errors but not needed for following processes
+                protein = set_atom_order(protein, self.order == 'ran', get_rng(self.base_seed, idx))
+                tokens, orders = self.tokenizer.tokenize(protein)
+        else:
+
+            if self.order == 'residue':
+                chain_id_is =[]
+                chain_id2i = {} # 出現した順に並べる
+                serial_numbers = []
+                for atom in protein.GetAtoms():
+                    rinfo = atom.GetPDBResidueInfo()
+                    if rinfo is None:
+                        rinfo = atom.GetNeighbors()[0].GetPDBResidueInfo()
+                    chain_id = rinfo.GetChainId()
+                    serial_numbers.append(rinfo.GetSerialNumber())
+                    if chain_id not in chain_id2i:
+                        chain_id2i[chain_id] = len(chain_id2i)
+                    chain_id_is.append(chain_id2i[chain_id])
+                orders = np.lexsort([serial_numbers, chain_id_is]) # これがopenbabelと同じ順になる
+
+                atoms = np.array([atom.GetPDBResidueInfo().GetName().strip() for atom in protein.GetAtoms()])
+                coords = protein.GetConformer().GetPositions()
+
+                atoms = atoms[orders]
+                coords = coords[orders]
+                tokens, orders = self.tokenizer(atoms, coords)
+            else:
+                protein = set_atom_order(protein, self.order == 'ran', get_rng(self.base_seed, idx))
+                tokens, orders = self.tokenizer.tokenize(protein)
+        return tokens, orders
+    def vocs(self) -> set[str]:
+        return self.tokenizer.vocs()
+
         

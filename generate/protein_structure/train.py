@@ -1,0 +1,157 @@
+import sys, os, math
+import itertools as itr
+from argparse import ArgumentParser, Namespace
+from collections.abc import Generator
+import yaml
+import numpy as np
+import pandas as pd
+import openbabel.openbabel as ob
+from rdkit import Chem
+from torch.utils.data import StackDataset, Subset
+
+from src.utils.path import make_pardir
+from src.chem import array_to_conf
+from src.data import CacheDataset, index_dataset
+from src.data.molecule import SetHydrogenDataset
+from src.data.datasets.pdb import PDBUniMolRandomDataset
+from src.data.protein import ProteinProcessDataset, ProteinTokenizeDataset, AtomRepr
+from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
+from src.generate import generate
+from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer, RangeWriteStreamer
+
+class ProteinStructureStreamer(GeneratorStreamer):
+    def __init__(self, prompt_pdb_path: str, prompt_atom_path: str, new_pdb_path: str, new_coord_path: str, protein: ob.OBMol|Chem.Mol, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, atom_order: bool, h: AtomRepr):
+        super().__init__()
+        self.voc_encoder = voc_encoder
+        self.prompt_pdb_path = prompt_pdb_path
+        self.prompt_atom_path = prompt_atom_path
+        self.coord_range = coord_range
+        self.no_token_range = no_token_range
+        self.new_pdb_path = new_pdb_path
+        self.new_coord_path = new_coord_path
+        self.protein = protein
+        self.atom_order = atom_order
+        self.h = h
+        self.n_generated_atom = None
+    def estimated_n_token(self):
+        if self.n_generated_atom is not None:
+            return self.n_generated_atom*6
+        else:
+            return None
+        
+    def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
+        obc = ob.OBConversion()
+        obc.SetOutFormat('pdb')
+        prompt_tokens = yield
+        prompt_tokens = self.voc_encoder.decode(prompt_tokens)
+        assert prompt_tokens[0] == '[POCKET]' and prompt_tokens[-1] == '[XYZ]'
+        make_pardir(self.prompt_pdb_path)
+        if isinstance(self.protein, ob.OBMol):
+            obc.WriteFile(self.protein, self.prompt_pdb_path)
+            atom_data = []
+            for atom in ob.OBMolAtomIter(self.protein):
+                residue = atom.GetResidue()
+                atom_data.append((residue.GetIdx(), residue.GetName(), residue.GetAtomID(atom).strip(), ob.GetSymbol(atom.GetAtomicNum())))
+        else:
+            Chem.MolToPDBFile(self.protein, self.prompt_pdb_path)
+            atom_data = []
+            for atom in self.protein.GetAtoms():
+                rinfo = atom.GetPDBResidueInfo()
+                if rinfo is None:
+                    rinfo = atom.GetNeighbors()[0].GetPDBResidueInfo()
+                atom_data.append((rinfo.GetResidueNumber(), rinfo.GetResidueName().strip(), rinfo.GetName(), atom.GetSymbol()))
+        
+        df = pd.DataFrame(atom_data, columns=['residue_idx', 'residue', 'name', 'element'])
+        orders = np.argsort(df['residue_idx'].values, kind='stable')
+        if self.h == 'all':
+            orders = orders[df['element'][orders] != 'H']
+        df['order'] = -1
+        df.loc[orders, 'order'] = np.arange(len(orders))
+        make_pardir(self.prompt_atom_path)
+        df.to_csv(self.prompt_atom_path, index_label='atom_idx')
+        self.n_generated_atom = len(orders)
+
+        start_position = 2 if self.atom_order else len(prompt_tokens)
+        coords, pos, error = yield from coord_streamer(len(orders), start_position, self.new_coord_path, self.voc_encoder, self.coord_range, self.no_token_range, self.atom_order, center=None)
+
+        if coords is not None:
+            if isinstance(self.protein, ob.OBMol):
+                for i_coord, order in enumerate(orders):
+                    atom = self.protein.GetAtom(int(order)+1)
+                    atom.SetVector(float(coords[i_coord, 0]), float(coords[i_coord, 1]), float(coords[i_coord, 2]))
+                if self.h == 'atom':
+                    self.protein.DeleteHydrogens()
+                make_pardir(self.new_pdb_path)
+                obc.WriteFile(self.protein, self.new_pdb_path)
+            else:
+                self.protein.RemoveAllConformers()
+                self.protein.AddConformer(array_to_conf(coords))
+                Chem.MolToPDBFile(self.protein, self.new_pdb_path)
+        yield False, pos, [self.voc_encoder.voc2i['[END]']]
+
+if __name__ == '__main__':
+    parser = ArgumentParser()
+    ## training
+    parser.add_argument("--studyname", required=True)
+    parser.add_argument("--opt", type=int)
+    ## environment
+    parser.add_argument("--batch-size", type=int, default=4)
+    ## generation
+    parser.add_argument("--genname")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--n", type=int, default=5)
+    parser.add_argument("--trial", type=int, default=5)
+    parser.add_argument("--sample-seed", type=int, default=0)
+    parser.add_argument("--no-token-range", action='store_true')
+    ## check
+    parser.add_argument("--check-token-range", action='store_true')
+    args = parser.parse_args()
+
+    train_dir = f"./training/results/{args.studyname}"
+    targs = Namespace(**yaml.safe_load(open(f"{train_dir}/args.yaml")))
+    assert targs.PDBUniMolRandom > 0
+    out_dir = "./generate/protein_structure/training"+(f"/{args.genname}" if args.genname is not None else "")+f"/{args.studyname}/{args.opt}"
+    assert targs.pocket_heavy == 'all'
+    assert targs.pocket_format in ['ordered_atoms_coords', 'atoms_coords']
+
+    protein = PDBUniMolRandomDataset('valid', targs.protein_cls)
+    protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
+    protein = CacheDataset(protein)
+    protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
+    protein_token = ProteinTokenizeDataset(protein, heavy=targs.pocket_heavy, h=targs.pocket_h, format=targs.pocket_format, coord_range=targs.coord_range, smiles_voc_dir=targs.smiles_voc_dir, order=targs.pocket_order, base_seed=args.seed)
+    protein_atom_token, _coord_token = TokenSplitDataset(protein_token, '[XYZ]').untuple()
+    sentence = SentenceDataset('[POCKET]', protein_atom_token, '[XYZ]')
+    index, sentence = index_dataset(sentence)
+    prompt = StackDataset(index, protein, sentence)
+    sample_idxs = np.random.default_rng(args.sample_seed).choice(len(prompt), args.n, replace=False)
+    prompt = Subset(prompt, sample_idxs)
+    N = len(prompt)
+
+    def streamer_fn(item, i_trial, voc_encoder):
+        idx, protein, (token, position) = item
+        atom_order = targs.pocket_format == 'ordered_atoms_coords'
+        streamer = ProteinStructureStreamer(
+            prompt_pdb_path=f"{out_dir}/prompt_pdb/{idx}/{i_trial}.pdb", 
+            prompt_atom_path=f"{out_dir}/prompt_atoms/{idx}/{i_trial}.csv",
+            new_pdb_path=f"{out_dir}/new_pdb/{idx}/{i_trial}.pdb", 
+            new_coord_path=f"{out_dir}/new_coord_csv/{idx}/{i_trial}.csv",
+            protein=protein,
+            voc_encoder=voc_encoder, coord_range=targs.coord_range, no_token_range=args.no_token_range, atom_order=atom_order, h=targs.pocket_h
+        )
+        streamer = TokenWriteStreamer(streamer, voc_encoder,
+            prompt_position=position,
+            prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv",
+            new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}.csv", 
+        )
+        if args.check_token_range and (idx*5//N) == i_trial > ((idx-1)*5//N):
+            streamer = RangeWriteStreamer(streamer, voc_encoder,
+            range_path=f"{out_dir}/token_range/{idx}_{i_trial}.txt"
+        )
+        streamer = TimeLogStreamer(streamer, name=f"{idx}][{i_trial}")
+        return streamer
+    get_token_position_fn = lambda item: item[2]
+    generate(out_dir, targs, f"{train_dir}/models/{args.opt}.pth", prompt, streamer_fn, get_token_position_fn, args.trial, 10000, None, args.batch_size, 0)
+
+
+
+

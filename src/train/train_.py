@@ -1,0 +1,827 @@
+import sys, os, math, yaml, psutil, logging
+import itertools as itr
+from argparse import ArgumentParser, Namespace
+from collections.abc import Callable
+from contextlib import nullcontext
+from copy import deepcopy
+from logging import Logger, getLogger
+from functools import partial
+from time import time
+from glob import glob
+import numpy as np
+import pandas as pd
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+import transformers
+import rdkit
+from torch import Tensor
+from torch.nn.parallel import DistributedDataParallel
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.data import Dataset, DataLoader, RandomSampler, ConcatDataset
+from torch.distributed.elastic.multiprocessing.errors import record
+from transformers.trainer_pt_utils import get_parameter_names
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+from schedulefree import RAdamScheduleFree
+
+from ..data import RevealIterator, add_time_hook, DatasetTimeHook
+from ..data.tokenizer import VocEncoder
+from .collator import DDPStringCollateLoader, InfiniteLoader
+from ..model import TransformerModel, MambaModel
+from ..model.model import Model
+from ..utils import git_commit, get_git_hash, should_show, setdefault
+from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, add_rotating_handler, set_third_party_logger
+from ..utils.model import get_num_params, get_model_size
+from ..utils.path import cleardir
+from ..utils.ddp import reduce_float
+from ..utils.random import ddp_set_random_seed, set_deterministic
+from ..utils import IterateRecorder, remove_module
+from .data import collate
+from .looper import Loopers, TimeLogLooper, TimeWriteLooper, LogLooper, EndEstimateLooper, GPUUseLooper
+
+def init_ddp():
+    dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
+    rank = dist.get_rank()
+    size = dist.get_world_size()
+    device = torch.device('cuda', index=rank % torch.cuda.device_count()) \
+        if torch.cuda.is_available() else torch.device('cpu')
+    return rank, size, device
+
+def get_process_ranks() -> tuple[int, int, dict[str, int]]:
+    MAIN_RANK = 1
+    SAVE_RANK = 0
+    DATA_RANK = {'train': 3, 'valid': 2}
+    size = dist.get_world_size()
+    return MAIN_RANK % size, SAVE_RANK % size, \
+        {key: rank % size for key, rank in DATA_RANK.items()}
+
+def get_early_stop_opt(result_dir: str, patience_val: int) -> int:
+    df = pd.read_csv(f"{result_dir}/vals/0.csv")
+    losses = df['mean_loss'].values
+    for val in range(len(losses)):
+        if losses[val] <= np.min(losses[val:val+patience_val+1]):
+            return int(df['opt'].values[val])
+
+def _sync_result_dir(result_dir, subdirs):
+    main_rank = get_process_ranks()[0]
+    if dist.get_rank() == main_rank:
+        try:
+            # Check if trained model already exists
+            exist_max_step = max([int(path.split('/')[-1].split('.')[0]) 
+                    for path in glob(f"{result_dir}/models/*.pth")]+[0])
+            if exist_max_step >= 50:
+                raise ValueError(f"{result_dir} already exists(step={exist_max_step})")
+
+            cleardir(result_dir)
+            for subdir in subdirs:
+                os.makedirs(f"{result_dir}/{subdir}", exist_ok=True)
+            result_dirs = [result_dir]
+        except Exception as e:
+            print("Exception at _sync_result_dir", e, file=sys.stderr, flush=True)
+            result_dirs = [None]
+    else:
+        result_dirs = [None]
+    dist.broadcast_object_list(result_dirs, src=main_rank)
+    result_dir = result_dirs[0]
+    if result_dir is None:
+        raise ValueError(f"{result_dir} is not empty.")
+
+def _set_sdp_kernel(sdp_kernel: str|None):
+    if sdp_kernel is not None:
+        assert sdp_kernel in ['FLASH', 'CUDNN', 'MATH', 'EFFICIENT', 'ALL'] # 全て無効にするとエラーになる
+        torch.backends.cuda.enable_flash_sdp(sdp_kernel in ['FLASH', 'ALL'])
+        torch.backends.cuda.enable_cudnn_sdp(sdp_kernel in ['CUDNN', 'ALL'])
+        torch.backends.cuda.enable_math_sdp(sdp_kernel in ['MATH', 'ALL'])
+        torch.backends.cuda.enable_mem_efficient_sdp(sdp_kernel in ['EFFICIENT', 'ALL'])
+
+def get_max_opt(result_dir: str) -> int:
+    logger = getLogger('get_last_opt')
+    paths = sorted(glob(f"{result_dir}/models/*.pth"))
+    opts = [int(os.path.basename(path).split('.')[0]) for path in paths]
+    max_opt = max(opts)
+    logger.info(f"{max_opt=}")
+    return max_opt
+
+def _get_train_logger(result_dir, get_unk_logger: bool, get_proc_logger: bool) -> tuple[Logger,...]:
+
+    # ddp info
+    rank = dist.get_rank()
+    size = dist.get_world_size()
+    is_main = rank == get_process_ranks()[0] % size
+
+    fmt = "[{asctime}]"+f"[{rank}/{size}]"+"[{name}][{levelname}]{message}"
+    os.makedirs(f"{result_dir}/logs/debug", exist_ok=True)
+
+    # main logger
+    logger = getLogger()
+    stream_handler = add_stream_handler(logger, logging.INFO, fmt=fmt)
+    info_handler = add_file_handler(logger, f"{result_dir}/info.log", logging.INFO, fmt=fmt, mode='a')
+    add_file_handler(logger, f"{result_dir}/logs/debug/{rank}.log", fmt=fmt, mode='a')
+    if not is_main:
+        for handler in [stream_handler, info_handler]:
+            handler.addFilter(lambda record: not getattr(record, 'no_dup', False))
+    outs = [logger]
+
+    if get_unk_logger:
+        unk_logger = getLogger('unk')
+        unk_logger.propagate = False
+        add_file_handler(unk_logger, f"{result_dir}/logs/unknowns.log", fmt=fmt, mode='a')
+        outs.append(unk_logger)
+
+    set_third_party_logger()
+
+    # process logger
+    if get_proc_logger:
+        proc_logger = getLogger('proc')
+        proc_logger.propagate = False
+        add_rotating_handler(proc_logger, f"{result_dir}/logs/process/{rank}.log", fmt=fmt, mode='a')
+        outs.append(proc_logger)
+
+
+    return outs
+
+def add_train_args(parser: ArgumentParser):
+    """
+    環境変数等の入力
+    finetuning, downstream等でも毎回入力
+    """
+    # training
+    parser.add_argument("--studyname", default='noname')
+    parser.add_argument("--weight-per-opt", type=int, default=int(1.6e6))
+    parser.add_argument("--max-opt", type=int, required=True)
+    ## optimizer
+    parser.add_argument("--weight-decay", type=float, default=0.01)
+    parser.add_argument("--clip-grad-value", type=float, default=None)
+    parser.add_argument("--clip-grad-norm", type=float, default=1.0)
+    parser.add_argument("--loss-scale")
+    ## scheduler
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--warmup-ratio", type=float, default=0.04)
+    parser.add_argument("--scheduler", default='warmup', choices=['warmup', 'warmup_inverse', 'step'])
+    parser.add_argument("--schedule-free", action='store_true')
+    # process
+    parser.add_argument("--coord-noise-std", type=float, default=50.0)
+    # model
+    ## Transformer
+    parser.add_argument('--pos-buffer-len', type=int, default=1600)
+    # environments
+    parser.add_argument("--eval-opt", type=int, required=True) # temp
+    parser.add_argument("--patience-opt", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--reset-nan-grad", action='store_true')
+    parser.add_argument("--end-limit", type=int, help='Unit is hour')
+    ## hardware
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
+    parser.add_argument("--gpu-size-gb", type=float, required=True)
+    ## test
+    parser.add_argument("--weight-decay-all", action='store_true')
+    parser.add_argument('--deterministic', action='store_true')
+    parser.add_argument("--sync-every-step", action='store_true')
+    parser.add_argument("--test", action='store_true')
+    parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
+            'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
+            'forward_backward_time', 'optimizer', 'getitem_time'])
+    parser.add_argument('--commit', action='store_false', dest='no_commit')
+
+def add_pretrain_args(parser: ArgumentParser):
+    """
+    finetune時にpretrain時のものを使うもの (変えてはいけないもの)
+    """
+    # bool系は何も指定しない場合BindGPTの設定になるようにしている
+    # pocket-heavy-coordはデフォルトで入れるようにした。
+    parser.add_argument("--lig-randomize", action='store_true')
+    parser.add_argument("--lig-format", choices=['smiles_coords', 'smile_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
+    parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
+    parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
+    parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
+    parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords', 'smiles_coords', 'smile_coords'], default='atoms_coords')
+    parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
+    parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion'], nargs='*')
+    parser.add_argument("--protein-cls", choices=['rdkit', 'ob'], default='rdkit')
+    parser.add_argument("--coord-range", type=int, default=250)
+    # model
+    parser.add_argument('--mamba', action='store_true')
+    parser.add_argument('--n-layer', type=int) # MambaとTFでdefaultが違う可能性があるので定めない。
+    ## tf
+    parser.add_argument('--d-model', type=int, default=768)
+    ## compatibility
+    parser.add_argument("--model-bfloat16", action='store_true')
+    parser.add_argument("--smiles-voc-dir", default='smiles3')
+
+def update_args(args: Namespace) -> Namespace:
+    """
+    古いargs を変換する。
+    """
+    logger = getLogger('update_args')
+
+    args = deepcopy(args)
+
+    # 260312 lig_coord_follow_atom, lig_atoms, lig_atom_order をlig_formatにまとめる
+    lig_arg_names = ['lig_atoms', 'lig_coord_follow_atom', 'lig_atom_order']
+    if not hasattr(args, 'lig_format'):
+        lig_args = tuple(getattr(args, name, False) for name in lig_arg_names)
+        lig_formats = {
+            (True, True, False): 'atom_coords', 
+            (True, False, True): 'ordered_atoms_coords', 
+            (True, False, False): 'atoms_coords', 
+            (False, False, False): 'smiles_coords'
+        }
+        lig_format = lig_formats[lig_args]
+        logger.warning(f"lig_format was set to {lig_format} from "+', '.join([f"{name}={getattr(args, name)}" for name in lig_arg_names if hasattr(args, name)]))
+        args.lig_format = lig_format
+    [delattr(args, name) for name in lig_arg_names if hasattr(args, name)]
+    
+    # 260312 coord_follow_atom, pocket_atom_order を pocket_formatにまとめる
+    pocket_arg_names = ['coord_follow_atom', 'pocket_atom_order']
+    if not hasattr(args, 'pocket_format'):
+        pocket_args = tuple(getattr(args, name, False) for name in pocket_arg_names)
+        pocket_formats = {
+            (False, True): 'ordered_atoms_coords', 
+            (True, False): 'atom_coords', 
+            (False, False): 'atoms_coords', 
+        }
+        pocket_format = pocket_formats[pocket_args]
+        logger.warning(f"pocket_format was set to {pocket_format} from "+', '.join(f"{name}={getattr(args, name)}" for name in pocket_arg_names if hasattr(args, name)))
+        args.pocket_format = pocket_format
+    [delattr(args, name) for name in pocket_arg_names if hasattr(args, name)]
+
+    # 260312 d_model, n_layer
+    setdefault(args, 'n_layer', None)
+    setdefault(args, 'd_model', 768)
+
+    # 260313 atom_reprs
+    atom_reprs = {
+        (True, True): 'all', 
+        (True, False): 'atom', 
+        (False, False): 'none'
+    }
+    if not hasattr(args, 'lig_h'):
+        args.lig_h = atom_reprs[not args.no_lig_h_atom, not args.no_lig_h_coord]
+    if not hasattr(args, 'pocket_h'):
+        args.pocket_h = atom_reprs[args.pocket_h_atom, args.pocket_h_coord]
+    if not hasattr(args, 'pocket_heavy'):
+        args.pocket_heavy = atom_reprs[not args.no_pocket_heavy_atom, not args.no_pocket_heavy_coord]
+    for name in ['no_lig_h_atom', 'no_lig_h_coord', 'pocket_h_atom', 'pocket_h_coord', 'no_pocket_heavy_coord', 'no_pocket_heavy_atom']:
+        if hasattr(args, name):
+            delattr(args, name)
+    
+    # 260314 pocket_order
+    setdefault(args, 'pocket_order', 'residue')
+
+    # 260318 pocket_hetatm
+    setdefault(args, 'pocket_hetatm', ['ion', 'ligand', 'water'])
+
+    # 260411 protein_cls
+    setdefault(args, 'protein_cls', 'ob')
+
+    # 260411 smiles_voc_file, 260413 smiles_voc_dir
+    if not hasattr(args, 'smiles_voc_dir'):
+        smiles_voc_file = getattr(args, 'smiles_voc_file', 'smiles_tokens')
+        smiles_voc_dir = {
+            'smiles_tokens': 'smiles',
+            'smiles_tokens2': 'smiles2',
+        }[smiles_voc_file]
+        setattr(args, 'smiles_voc_dir', smiles_voc_dir)
+
+    return args
+
+def update_pretrain_args(args: Namespace, targs: dict):
+    for key, value in targs.items():
+        if not hasattr(args, key):
+            setattr(args, key, value)
+
+def set_default_args(args: Namespace):
+    if args.test: args.studyname+='_test'
+
+    # post_init
+    args.gpu_size = args.gpu_size_gb * (2**30)
+    return args
+
+def get_scheduler(optimizer: Optimizer, scheduler: str, epoch_step: int, 
+        warmup_ratio: int):
+    warmup_step = warmup_ratio * epoch_step
+    match scheduler:
+        case 'warmup':
+            def schedule(step: int):
+                if step < warmup_step:
+                    return step / warmup_step
+                elif step <= epoch_step:
+                    return math.cos(math.pi*((step-warmup_step)/(epoch_step-warmup_step)))*0.49+0.51
+                else:
+                    return 0.02
+        case 'warmup_inverse':
+            def schedule(step: int):
+                if step <= warmup_step:
+                    return step / warmup_step
+                else:
+                    return (warmup_step / step)**0.5
+        case 'step':
+            def schedule(step: int):
+                return 0.02 ** (step / epoch_step)
+        case 'constant':
+            def schedule(step: int):
+                return 1.0
+        case _:
+            raise ValueError
+    return LambdaLR(optimizer, schedule)
+
+class CrossEntropyLoss(nn.CrossEntropyLoss):
+    def forward(self, input: Tensor, target: Tensor):
+        output = super().forward(input.reshape(target.numel(), -1), target.ravel())
+        if self.reduction == 'none':
+            output = output.reshape_as(target)
+        return output
+
+def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: str|None, device: torch.device) -> Model | tuple[Model, VocEncoder]:
+
+    if init_state_path is not None:
+        state = remove_module(torch.load(init_state_path, map_location=device, weights_only=True))
+    return_voc_encoder = voc_encoder is None
+    if voc_encoder is None:
+        if init_state_path is None:
+            raise ValueError("Either voc_encoder or init_state_path must be specified.")
+        voc_encoder = VocEncoder.from_i2voc(state['vocs'])    
+    if args.mamba:
+        kwargs = {}
+        if args.n_layer is not None: kwargs['num_hidden_layers'] = args.n_layer
+        model = MambaModel(voc_encoder.i2voc, voc_encoder.pad_token, '[END]', **kwargs)
+    else:
+        n_head, r = divmod(args.d_model, 64)
+        assert r == 0
+        model = TransformerModel(args.n_layer or 12, args.d_model, n_head, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
+    model.to(device)
+    if args.model_bfloat16:
+        model.to(torch.bfloat16)
+    if init_state_path is not None:
+        model.load_state_dict(state)
+    if return_voc_encoder:
+        return model, voc_encoder
+    else:
+        return model
+    
+def log_logs(logger: Logger, logs: list[str|tuple[str, int]]):
+    for log in logs:
+        if isinstance(log, str):
+            logger.info(log, **NO_DUP)
+        else:
+            msg, level = log
+            logger.log(level, msg, **NO_DUP)
+
+def save_batch(dir: str, logger: Logger, input: Tensor, target: Tensor, position: Tensor, weight: Tensor, voc_encoder: VocEncoder, idxs: list[int]|int|None, check_data_dist: bool, gpuuse_getter: Callable[[int, int], float]):
+
+    # weight
+    L, B = target.shape
+    rank = dist.get_world_size()
+    gpuuse_gb = gpuuse_getter(B, L) / (2**30)
+    logger.debug(f"{dir} {rank=} batch shape={tuple(target.shape)} GPU use={gpuuse_gb}")
+    if check_data_dist:
+        weight_items = weight.sum(dim=0).tolist()
+        logger.debug(f"{dir} {rank=} weights={weight_items}")
+
+    if idxs is None: 
+        idxs = list(range(B))
+    elif isinstance(idxs, int):
+        if B > idxs:
+            idxs = np.random.default_rng(hash(dir)%10000).choice(B, idxs, replace=False)
+        else:
+            idxs = list(range(B))
+    os.makedirs(dir, exist_ok=True)
+    for idx in idxs:
+        df = pd.DataFrame({
+            'input': [voc_encoder.i2voc[i] for i in input[:,idx].cpu().tolist()], 
+            'target': [voc_encoder.i2voc[i] for i in target[:,idx].cpu().tolist()], 
+            'position': position[:,idx].cpu().numpy(),
+            'weight': weight[:,idx].cpu().numpy(),
+        })
+        df.to_csv(f"{dir}/{rank}_{idx}.tsv", index=False, sep='\t')
+        with open(f"{dir}/{rank}_{idx}.txt", 'w') as f:
+            f.write(df.to_string(index=False))
+
+
+def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_unk_logger: bool=False, get_proc_logger: bool=False):
+    # init DDP
+    rank, size, device = init_ddp()
+    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
+    is_main = rank == MAIN_RANK
+
+    # make result dir
+    _sync_result_dir(result_dir, subdirs)
+
+    # logging
+    loggers = _get_train_logger(result_dir, get_unk_logger, get_proc_logger)
+    logger = loggers[0]
+    logger.debug(f"{device=}, {torch.cuda.device_count()=}")
+    logger.info(f"{rdkit.__version__=}", **NO_DUP)
+    logger.info(f"{transformers.__version__=}", **NO_DUP)
+
+    # save args
+    if is_main:
+        with open(f"{result_dir}/args.yaml", 'w') as f:
+            yaml.dump({**vars(args), 'ddp_size': size}, f)
+
+    # commit & log hash of git
+    if is_main:
+        if args.test or args.no_commit:
+            committed = False
+        else:
+            committed = git_commit()
+        logger.debug('git committed.' if committed else 'git not committed.')
+        logger.info(f"git hash={get_git_hash()}")
+    
+    # Fix seed
+    ddp_set_random_seed(args.seed)
+    if args.test or args.deterministic: 
+        set_deterministic()
+
+    # scaled dot product attention kernel
+    _set_sdp_kernel(args.sdp_kernel)
+    logger.debug(f"{torch.backends.cuda.cudnn_sdp_enabled()=}")
+    logger.debug(f"{torch.backends.cuda.flash_sdp_enabled()=}")
+    logger.debug(f"{torch.backends.cuda.math_sdp_enabled()=}")
+    logger.debug(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
+    logger.debug(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
+
+    ## Log args
+    logger.info(f"[Logs in preparation]", **NO_DUP)
+    log_logs(logger, preparation_logs)
+    logger.info('')
+
+    return loggers, rank, device
+
+def get_optimizer_scheduler(model: nn.Module, max_opt: int, 
+        weight_decay_all: bool, weight_decay: float, schedule_free: bool, 
+        scheduler: str, lr: float, warmup_ratio: float, log_optimizer: bool):
+    logger = getLogger('optimizer_scheduler')
+    
+    ## param groups
+    if weight_decay_all or weight_decay == 0:
+        params = [{
+            "weight_decay": weight_decay, 
+            "params": list(model.parameters())
+        }]
+    else:
+        # Partially from TRL
+        params_to_decay = get_parameter_names(model,
+                forbidden_layer_types=ALL_LAYERNORM_LAYERS, 
+                forbidden_layer_names=["bias", "layernorm", "rmsnorm"])
+        params = [{   
+            "weight_decay": weight_decay,
+            "params": [param for name, param in model.named_parameters() 
+                if name in params_to_decay and param.requires_grad], 
+        }, {
+            "weight_decay": 0.0,
+            "params": [param for name, param in model.named_parameters()
+                if name not in params_to_decay and param.requires_grad]
+        }]
+        if log_optimizer:
+            logger.debug(f"weight_decay: {[name for name, param in model.named_parameters() if name in params_to_decay and param.requires_grad]}")
+            logger.debug(f"non weight_decay: {[name for name, param in model.named_parameters() if name not in params_to_decay and param.requires_grad]}")
+    ## optimizer & scheduler
+    if schedule_free:
+        optimizer = RAdamScheduleFree(params, lr=lr)
+        scheduler_ = None
+        optimizer.train()
+    else:
+        if weight_decay == 0:
+            optimizer = torch.optim.Adam(params, lr=lr)
+        else:
+            optimizer = torch.optim.AdamW(params, lr=lr)
+        optimizer.zero_grad()
+        scheduler_ = get_scheduler(optimizer, scheduler, max_opt, warmup_ratio)
+    if log_optimizer:
+        logger.debug(f"{optimizer=}")
+        logger.debug(f"param_groups={[len(group['params']) for group in optimizer.param_groups]}")
+    return optimizer, scheduler_
+
+def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncoder, 
+        model: DistributedDataParallel, criterion: nn.Module, 
+        result_dir: str, opt: int,
+        num_workers: int, is_starting: bool, sdp_kernel: str, gpu_size: float, check_data_dist: bool
+    ) -> tuple[list[float], list[float], Tensor, Tensor]:
+    
+    get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel=sdp_kernel)
+
+    logger = getLogger('validate')
+    rank = dist.get_rank()
+    data_rank = get_process_ranks()[2]['valid']
+    device = next(model.parameters()).device
+
+    process_weights = []
+    process_losses = []
+    for i_data, data_name in enumerate(data_names):
+        logger.info(f"    Validating [{data_name}]", **NO_DUP)
+        ## Make Loader
+        if rank == data_rank:
+            cur_epoch = os.environ.get('EPOCH', None)
+            os.environ['EPOCH'] = '0'
+            valid_loader = DataLoader[tuple[Tensor, Tensor]](datas[i_data], batch_size=None, shuffle=True if check_data_dist else False, num_workers=num_workers, pin_memory=True, prefetch_factor=10 if num_workers > 0 else None)
+            if is_starting and check_data_dist:
+                valid_loader = RevealIterator(valid_loader, f'valid[{data_name}]', logger)
+                valid_reveal_loader = valid_loader
+        else:
+            valid_loader = None
+        valid_loader = DDPStringCollateLoader(valid_loader, partial(collate, pad_token=voc_encoder.pad_token), get_gpuuse, gpu_size, device, math.inf, data_rank)
+
+        ## Accumulate losses
+        process_weight = torch.tensor(0.0, device=device, dtype=torch.float)
+        process_loss = torch.tensor(0.0, device=device, dtype=torch.float)
+        with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16):
+            for val_step, batch in enumerate(valid_loader):
+                if batch is None: continue
+
+                ### Verbosity
+                val_step_is_starting = val_step < 3
+                if check_data_dist:
+                    if val_step == 3 and rank == data_rank:
+                        valid_reveal_loader.enabled = False
+
+                ### Forward
+                token_batch, position_batch, weight_batch = batch
+                input_token, target_token = token_batch[:-1], token_batch[1:]
+                input_position = position_batch[:-1]
+                loss = criterion(model(input_token, input_position), target_token)
+                
+                ### Log result
+                if is_starting and val_step_is_starting:
+                    save_batch(f"{result_dir}/batches/validation/opt{opt}/val_step{val_step}", logger, input_token, target_token, input_position, weight_batch, voc_encoder, 2, check_data_dist, get_gpuuse)
+
+                ### Add
+                process_loss += (loss*weight_batch).sum()
+                process_weight += weight_batch.sum()
+
+        process_weight = process_weight.item()
+        process_loss = process_loss.item()
+        process_weights.append(process_weight)
+        process_losses.append(process_loss)
+        logger.debug(f"        loss={process_loss:3.03f} weight={process_weight:3.03f}")
+        if rank == data_rank and cur_epoch is not None:
+            os.environ['EPOCH'] = cur_epoch
+    ## reduce all weights & losses
+    total_weights = torch.tensor(process_weights, device=device)
+    total_losses = torch.tensor(process_losses, device=device)
+    dist.all_reduce(total_weights)
+    dist.all_reduce(total_losses)
+    return process_weights, process_losses, total_weights, total_losses
+
+@record
+def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, Tensor]]], valid_datas: list[Dataset[tuple[Tensor, Tensor]]], voc_encoder: VocEncoder, preparation_logs: list[str], data_names: list[str], init_state_path: str=None):
+
+    result_dir = os.path.join(tname, 'results', args.studyname)
+    (logger, proc_logger), rank, device = set_env(result_dir, args, preparation_logs, 
+            subdirs=['models', 'opts', 'vals', 'optimizers', 'steps/times', 'data/example_log'], get_proc_logger=True)
+    logger.info(f"num_workers={args.num_workers}", **NO_DUP)
+    MAIN_RANK, SAVE_RANK, DATA_RANK = get_process_ranks()
+
+    ## checks
+    check_data_dist = 'data_dist' in args.check
+    check_grad = 'grad' in args.check
+    check_random_state = 'random_state' in args.check
+    check_fb_time = 'forward_backward_time' in args.check
+    
+    # Model
+    model = get_model(args, voc_encoder, init_state_path, device)
+    model = DistributedDataParallel(model)
+    logger.info(f"# of params={get_num_params(model):,}", **NO_DUP)
+    logger.info(f"Model size={get_model_size(model)/2**30:.02f}GB", **NO_DUP)
+    
+    # Times
+    train_looper = Loopers([
+        LogLooper(logger, 10000, 5, 'step', 'training'), 
+        LogLooper(proc_logger, 1, math.inf, 'step', 'training'),
+        TimeLogLooper(logger, 'step', 10000), 
+        TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 10000), 
+        GPUUseLooper(logger, device, 'step', 5)
+    ])
+    opt_looper = Loopers([])
+    if args.end_limit is not None and rank == MAIN_RANK:
+        opt_looper.append(EndEstimateLooper(args.end_limit, args.max_opt, args.studyname, 10, args.eval_opt, ['evaluation']))
+
+    # DataLoader
+    if rank == DATA_RANK['train']:
+        train_data = ConcatDataset(train_datas)
+        if 'getitem_time' in args.check:
+            dataset_time_hook = DatasetTimeHook(logger, 16 // max(1, args.num_workers), None)
+            train_data = add_time_hook(train_data, dataset_time_hook)
+            
+        sampler = RandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
+        train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=True, persistent_workers=False, prefetch_factor=10 if args.num_workers > 0 else None)
+        train_loader = InfiniteLoader(train_loader)
+        if check_data_dist:
+            train_loader = RevealIterator(train_loader, 'train')
+            train_reveal_loader = train_loader
+    else:
+        train_loader = None
+    
+    ## collated data loader
+    get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel=args.sdp_kernel)
+    train_loader = DDPStringCollateLoader(train_loader, partial(collate, pad_token=voc_encoder.pad_token), get_gpuuse, 
+            args.gpu_size, device, 100000, DATA_RANK['train'], 
+            f"{result_dir}/data/train_large_items.csv", train_looper if 'data_loading' in args.check else None)
+    train_iter = train_loader.__iter__()
+
+    # criterion
+    criterion = CrossEntropyLoss(reduction='none', ignore_index=voc_encoder.pad_token)
+
+    # optimizer & scheduler 
+    optimizer, scheduler = get_optimizer_scheduler(model, args.max_opt, args.weight_decay_all, 
+            args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, 
+            'optimizer' in args.check)
+    ## loss scale
+    match args.loss_scale:
+        case None:
+            loss_scale = 1
+        case _:
+            loss_scale = float(args.loss_scale)
+    # opt recorder
+    opt_recorder = IterateRecorder(f"{result_dir}/opts/{rank}.csv", args.eval_opt)
+
+    # val
+    valid2train_r = torch.tensor([len(train_data)/len(valid_data) 
+            for train_data, valid_data in zip(train_datas, valid_datas)], 
+            device=device, dtype=torch.float)
+    val_recorder = IterateRecorder(f"{result_dir}/vals/{rank}.csv", 1)
+    val2opt = []
+    val2mean_loss = []
+    next_eval_opt = 0
+
+    # step
+    ## initial state
+    opt = 0
+    worker_opt_accum_loss = 0.0
+    worker_opt_accum_weight = 0.0
+    nan_grad_step_saved = False
+    ## recorder
+    step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", 1)
+
+    train_start = time()
+    train_looper.start_loops()
+    opt_looper.start_loops()
+    for step in itr.count():
+        is_starting = step < 5
+
+        # evaluate & save
+        if opt == next_eval_opt:            
+            # validation
+            train_looper.put('evaluation')
+            opt_looper.put('evaluation')
+            if args.schedule_free: optimizer.eval()
+            process_weights, process_losses, total_weights, total_losses = validate(valid_datas, data_names, voc_encoder, model, criterion, result_dir, opt, args.num_workers, len(val2mean_loss) <= 1, args.sdp_kernel, args.gpu_size, check_data_dist, )
+            mean_losses = total_losses / total_weights
+            estimated_train_weights = total_weights * valid2train_r
+            mean_loss = ((mean_losses*estimated_train_weights).sum() / estimated_train_weights.sum()).item()
+
+            if 'early_stop' in args.check:
+                mean_loss = [0.7, 0.1, 0.5, 0.8, 0.2, 0.6][len(val2mean_loss) % 6]
+            logger.info(f"    {mean_loss=}", **NO_DUP)
+            if args.schedule_free: optimizer.train()
+
+            ## add & record results
+            val_recorder.record(opt=opt, mean_loss=mean_loss,  
+                    **{f'process_weight {prefix}': process_weight 
+                        for prefix, process_weight in zip(data_names, process_weights)}, 
+                    **{f'process_loss {prefix}': process_loss
+                        for prefix, process_loss in zip(data_names, process_losses)})
+            val2opt.append(opt)
+            val2mean_loss.append(mean_loss)
+
+            if rank == MAIN_RANK:
+                torch.save(model.module.state_dict(), f"{result_dir}/models/{opt}.pth")
+                cleardir(f"{result_dir}/optimizers")
+                torch.save(optimizer.state_dict(), f"{result_dir}/optimizers/{opt}.pth")
+
+            # Judge early stopping
+            best_opt = val2opt[np.argmin(val2mean_loss)]
+            if args.patience_opt is not None and opt - best_opt >= args.patience_opt:
+                logger.info(f"Early stop.", **NO_DUP)
+                break
+            next_eval_opt += args.eval_opt
+
+        # End of training
+        if opt >= args.max_opt:
+            break
+
+        # step
+        opt_looper.put('step')
+        ## get batch
+        train_looper.put('get_batch')
+        token_batch, position_batch, weight_batch = train_iter.__next__()
+        input, target = token_batch[:-1], token_batch[1:]
+        position = position_batch[:-1]
+        max_len, batch_size = token_batch.shape
+        worker_step_weight = weight_batch.sum().item()
+
+        ## Log target for final check
+        train_looper.put('log_target')
+        if is_starting:
+            save_batch(f"{result_dir}/batches/train/step{step}", logger, input, target, position, weight_batch, 
+                    voc_encoder, 2, check_data_dist, get_gpuuse)
+
+        ## If do_opt, forward will have to sync gradients
+        worker_opt_accum_weight += worker_step_weight
+        opt_accum_weight = reduce_float(worker_opt_accum_weight, device)
+        do_opt = opt_accum_weight >= args.weight_per_opt
+        
+        ## forward
+        if check_random_state: 
+            logger.debug(f"step[{step}] random_state={torch.cuda.get_rng_state()}")
+        train_looper.put('forward')
+        with nullcontext() if do_opt or args.sync_every_step else model.no_sync():
+            with torch.autocast('cuda', torch.bfloat16):
+                pred = model(input, position)
+                loss = (criterion(pred, target)*weight_batch).sum() * loss_scale
+                worker_step_loss = loss.item()
+
+            if check_fb_time:
+                torch.cuda.synchronize()
+            train_looper.put('backward')
+            loss.backward()
+            if check_fb_time:
+                torch.cuda.synchronize()
+
+        ## add step info 2
+        worker_opt_accum_loss += worker_step_loss
+
+        ## write step info online
+        step_recorder.record(batch_size=batch_size, max_len=max_len, 
+                worker_weight=worker_step_weight, worker_loss=worker_step_loss)
+
+        ## check nan
+        train_looper.put('check_nan')
+        if args.reset_nan_grad:
+            grad_is_finite = np.all([torch.all(torch.isfinite(param.grad)).item() for param in model.parameters()])
+            if not grad_is_finite:
+                logger.warning("nan or infinite value in gradient. Gradient is reset.", **NO_DUP)
+                for name, param in model.module.named_parameters():
+                    n_nan = torch.sum(torch.isnan(param.grad)).item()
+                    n_inf = torch.sum(torch.isinf(param.grad)).item()
+                    if n_nan > 0 or n_inf > 0:
+                        logger.debug(f"{name}: {n_nan=}, {n_inf=}", **NO_DUP)
+
+                ## save situation
+                if rank == SAVE_RANK and not nan_grad_step_saved:
+                    nan_dir = f"{result_dir}/nan_steps/{step}/{rank}"
+                    os.makedirs(nan_dir, exist_ok=True)
+                    torch.save(model.state_dict(), f"{nan_dir}/model.pth")
+                    nan_grad_step_saved = True
+                
+                ## reset grad
+                worker_opt_accum_loss = 0
+                optimizer.zero_grad()
+
+        train_looper.put('log')
+        ## Log grad
+        if check_grad:
+            name, param = next(model.named_parameters())
+            logger.debug(f"step[{step}] grad[{name}]={param.grad.ravel()[:5]}")
+
+        ## End starting
+        if step+1 == 5:
+            if check_data_dist:
+                if rank == DATA_RANK['train']:
+                    train_reveal_loader.enabled = False
+        
+
+        if  should_show(step+1, 10000):
+            logger.info(f"[Finish]{step+1:>6} step t={time()-train_start:>9.02f}", **NO_DUP)
+        
+        # opt
+        if do_opt:
+            ## optimizer
+            opt_looper.put('optim')
+            train_looper.put('optim')
+            if args.clip_grad_value is not None:
+                torch.nn.utils.clip_grad_value_(model.parameters(), args.clip_grad_value)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            optimizer.step()
+            if check_grad:
+                name, param = next(model.named_parameters())
+                logger.debug(f"opt[{opt}] grad[{name}]={param.grad.ravel()[:5]}")
+            optimizer.zero_grad()
+
+            ## sum opt_accum_loss
+            opt_accum_loss = reduce_float(worker_opt_accum_loss, device)
+
+            ## save opt data
+            kwargs = {} if args.schedule_free else {'lr': scheduler.get_last_lr()[0]}
+            opt_recorder.record(loss=opt_accum_loss, weight=opt_accum_weight, 
+                memory=psutil.virtual_memory().used/(2**30), **kwargs)
+            opt += 1
+            worker_opt_accum_loss = worker_opt_accum_weight = 0.0
+
+            ## scheduler
+            if not args.schedule_free:
+                scheduler.step()
+
+            if should_show(opt, max(1, args.eval_opt//5)):
+                logger.info(f"[Finish]{opt:>6}  opt t={time()-train_start:>9.02f}", **NO_DUP)
+            opt_looper.end_loop()
+
+        train_looper.end_loop()
+    opt_recorder.flush()
+    step_recorder.flush()
+    val_recorder.flush()
+    train_looper.end_loops()
+    opt_looper.end_loops()
+    # dist.destroy_process_group()
