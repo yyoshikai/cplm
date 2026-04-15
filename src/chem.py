@@ -78,6 +78,7 @@ def _randomize(mol: Chem.Mol, rng: np.random.Generator):
             mol = Chem.RenumberAtoms(mol, idxs.tolist())
             return mol, Chem.MolToSmiles(mol, canonical=False)
         except Exception as e:
+            print(e)
             pass
     else:
         logger.warning("randomize_smiles failed for 100 times.")
@@ -154,7 +155,7 @@ def read_pdb_text(text: str, out_cls: Literal['ob', 'rdkit', 'text']):
                 r"[ \-0-9.]{6}          "
                 r" )X("
                 r"[ +\-0-9]{2}\n)", 
-                r"\1OE1\2GLN\3O\4", text
+                r"\1OE1\2GLX\3O\4", text
             )
             text = re.sub(
                 r"(ATOM  "
@@ -172,14 +173,52 @@ def read_pdb_text(text: str, out_cls: Literal['ob', 'rdkit', 'text']):
                 r"[ \-0-9.]{6}          "
                 r" )X("
                 r"[ +\-0-9]{2}\n)", 
-                r"\1NE2\2GLN\3N\4", text
+                r"\1NE2\2GLX\3N\4", text
             )
+            # ASX も同様
+            text = re.sub(
+                r"(ATOM  "
+                r"[ 0-9]{5} "
+                r" )XD1("
+                r"."
+                r")ASX( "
+                r"."
+                r"[ 0-9]{4}"
+                r".   "
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9.]{6}"
+                r"[ \-0-9.]{6}          "
+                r" )X("
+                r"[ +\-0-9]{2}\n)", 
+                r"\1OD1\2ASX\3O\4", text
+            )
+            text = re.sub(
+                r"(ATOM  "
+                r"[ 0-9]{5} "
+                r" )XD2("
+                r"."
+                r")ASX( "
+                r"."
+                r"[ 0-9]{4}"
+                r".   "
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9]{4}\.[0-9]{3}"
+                r"[ \-0-9.]{6}"
+                r"[ \-0-9.]{6}          "
+                r" )X("
+                r"[ +\-0-9]{2}\n)", 
+                r"\1ND2\2ASX\3N\4", text
+            )
+
             # HETATM ... X という, 何か分からない原子があると読み込みエラーになる。
             # ので, それらは削除する
             text = re.sub(
                 r"HETATM"
                 r"[ 0-9]{5} "
-                r" UNK.UNX ."
+                r"( UNK|UNK ).UNX ."
                 r"[ 0-9]{4}"
                 r".   "
                 r"[ \-0-9]{4}\.[0-9]{3}"
