@@ -14,8 +14,8 @@ from ..data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCD
 from ..data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from ..data.datasets.crossdocked import CDDataset, CDProteinDataset
 from ..data.datasets.pdb import PDBUniMolRandomDataset
-from ..data.protein import Pocket, ProteinProcessDataset, PocketTokenizeDataset, ProteinTokenizeDataset
-from ..data.molecule import SetHydrogenDataset, MolProcessDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset
+from ..data.protein import Pocket, SelectDataset, PocketTokenizeDataset, ProteinTokenizeDataset
+from ..data.molecule import SetHydrogenDataset, MolProcessDataset, SmilesOrderDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset, AtomsDataset, CoordsDataset
 from ..data.coord import CoordTransformDataset
 
 def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
@@ -30,8 +30,14 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
     weight_datas = []
     dnames = []
     vocs = set()
+    cls2dtype = {
+        UniMolLigandDataset: 'lig', 
+        UniMolLigandNoMolNetDataset: 'lig', 
+        UniMolPocketDataset: 'pocket', 
+        PDBUniMolRandomDataset: 'protein'
+    }
     ## Molecule
-    for d_seed, cls in enumerate([UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]):
+    for d_seed, (cls, dtype) in enumerate(cls2dtype.items()):
         
         dname = cls.__name__.removesuffix('Dataset')
         repeat = getattr(args, dname)
@@ -54,19 +60,37 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             assert len(data) > 0
         
         ## process
+        
+
         ### Molecules
-        if cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset]:
+        if dtype in ['lig', 'protein']:
+            if dtype == 'protein': dtype = 'pocket'
+            pargs = Namespace(**{k[len(dtype)+1]: v for k, v in vars(args).items() if k.startswith(f'{dtype}_')})
+            if dtype == 'lig':
+                pargs.heavy = 'all'
             mol = data
-            mol = SetHydrogenDataset(mol, args.lig_h != 'none')
-            mol = MolProcessDataset(mol, args.seed+d_seed, args.lig_randomize)
-            mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, 
-                normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-            mol = MolTokenizeDataset(mol, format=args.lig_format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, h_coord=args.lig_h == 'all')
-            
-            ### sentence
-            sentence = ['[LIGAND]', mol, '[END]']
-            separates = {'[LIGAND]', '[SCORE]', '[END]'}
-            weights = [None, lig_weight, 0.0, ]
+            if pargs.pre_coord:
+                mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
+            if dtype == 'pocket':
+                mol = SelectDataset(mol, 'ion' in pargs.hetatm, 'ligand' in pargs.hetatm, 'water' in pargs.hetatm)
+            mol = SetHydrogenDataset(mol, args.h != 'none')
+            if not pargs.pre_coord:
+                mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
+            mol = CacheDataset(mol)
+
+            smi, orders = SmilesOrderDataset(mol, pargs.order).untuple()
+            atoms = AtomsDataset(mol)
+            coords = CoordsDataset(mol)
+            tokens = MolTokenizeDataset(atoms, coords, smi, orders, format=pargs.format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, heavy=pargs.heavy, h=pargs.h)
+            start = '[LIGAND]' if dtype == 'lig' else '[POCKET]'
+            sentence = [start, tokens, '[END]']
+
+            # weight
+            weight = lig_weight if dtype == 'lig' else pocket_weight
+            separates2weight = { 
+                (start,): pocket_weight, 
+                (start, '[END]'): 0.0, 
+            }
             if score != 'none':
                 if score == 'cls':
                     score = RandomClassDataset(len(mol), args.seed+d_seed)
@@ -77,25 +101,20 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
                 else:
                     raise ValueError
                 sentence += ['[SCORE]', score, '[END]']
-                weights += [score_weight, 0.0]
-            
+                separates2weight[start, '[END]', '[SCORE]'] = score_weight
+                separates2weight[start, '[END]', '[SCORE]', '[END]'] = 0.0
             sentence = SentenceDataset(*sentence)
             vocs |= sentence.vocs()
             token, position = sentence.untuple()
             position = TensorDataset(position, torch.long)
             
             ### weight
-            weight = RemoveLastDataset(TokenWeightDataset(token, separates, weights, by_n_separate=True))
-        ### Proteins
-        else:
+            weight = RemoveLastDataset(TokenWeightDataset(token, separates, separates2weight))
+
+        else: # Pocket dataset: not modified.
             protein = data
             protein = CoordTransformDataset(protein, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-            if cls == UniMolPocketDataset:
-                protein = PocketTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range)
-            else:
-                protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
-                protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
-                protein = ProteinTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, order=args.pocket_order, base_seed=args.seed+d_seed)
+            protein = PocketTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range)
             sentence = SentenceDataset('[POCKET]', protein, '[END]')
             vocs |= sentence.vocs()
             token, position = sentence.untuple()
@@ -173,7 +192,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     weights = []
     ## pocket
     if args.protein:
-        protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
+        protein = SelectDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
         protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
         protein_tokens = ProteinTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, order=args.pocket_order, base_seed=args.seed)
     else:

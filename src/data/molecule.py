@@ -5,9 +5,9 @@ import numpy as np
 from torch.utils.data import Dataset
 from rdkit import Chem
 from openbabel import openbabel as ob
-from ..chem import set_atom_order
+from ..chem import set_atom_order, randomize_smiles, get_coord_from_mol
 from ..utils.path import WORKDIR
-from .data import WrapDataset, get_rng
+from .data import WrapDataset, WrapTupleDataset, get_rng
 from .tokenizer import StringTokenizer2, FloatTokenizer
 from .protein import AtomRepr
 
@@ -50,6 +50,109 @@ class SetHydrogenDataset(WrapDataset[ob.OBMol|Chem.Mol]):
             else:
                 mol = Chem.RemoveHs(mol)
         return mol
+
+class SmilesOrderDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
+    def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol], order: Literal['residue', 'can', 'ran'], base_seed: int):
+        super().__init__(mol_data, 2)
+        self.order = order
+        self.base_seed = base_seed
+        # For OBMol
+        if order != 'residue':
+            self.obc = ob.OBConversion()
+            self.obc.SetOutFormat('smi')
+            if self.order == 'ran':
+                self.obc.AddOption("C", self.obc.OUTOPTIONS)
+            self.obc.AddOption("O", self.obc.OUTOPTIONS)
+
+    def __getitem__(self, idx: int):
+        mol = self.dataset[idx]
+        if isinstance(mol, ob.OBMol):
+            if self.order == 'residue':
+                residue_idxs = np.array([atom.GetResidue().GetIdx() for atom in ob.OBMolAtomIter(mol)])
+                smi = None
+                orders = np.argsort(residue_idxs, kind='stable')
+            else:
+                smi = self.obc.WriteString(mol)
+                orders = ob.toPairData(mol.GetData('SMILES Atom Order')).GetValue()
+                orders = np.array([int(o) for o in orders.split(' ')])
+        elif isinstance(mol, Chem.Mol):
+            if self.order == 'residue':
+                chain_id_is =[]
+                chain_id2i = {} # 出現した順に並べる
+                serial_numbers = []
+                for atom in mol.GetAtoms():
+                    rinfo = atom.GetPDBResidueInfo()
+                    if rinfo is None:
+                        rinfo = atom.GetNeighbors()[0].GetPDBResidueInfo()
+                    chain_id = rinfo.GetChainId()
+                    serial_numbers.append(rinfo.GetSerialNumber())
+                    if chain_id not in chain_id2i:
+                        chain_id2i[chain_id] = len(chain_id2i)
+                    chain_id_is.append(chain_id2i[chain_id])
+                orders = np.lexsort([serial_numbers, chain_id_is]) # これがopenbabelと同じ順になる
+                smi = None
+            else:
+                if self.order == 'ran':
+                    smi = randomize_smiles(mol, get_rng(self.base_seed, idx))
+                else:
+                    smi = Chem.MolToSmiles(mol, canonical=True)
+                orders = eval(mol.GetProp('_smilesAtomOutputOrder'))
+        else:
+            raise ValueError(f"Unknown {type(mol)=}")
+        return smi, orders
+
+class AtomsDataset(WrapDataset[list[str]]):
+    def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
+        super().__init__(mol_data)
+    
+    def __getitem__(self, idx):
+        mol = self.dataset[idx]
+        if isinstance(mol, ob.OBMol):
+            atoms = [atom.GetResidue().GetAtomID(atom).strip() for atom in ob.OBMolAtomIter(mol)]
+        else:
+            atoms = [atom.GetPDBResidueInfo().GetName().strip() for atom in mol.GetAtoms()]
+        return atoms
+    
+class CoordsDataset(WrapDataset[np.ndarray]):
+    def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
+        super().__init__(mol_data)
+    
+    def __getitem__(self, idx):
+        mol = self.dataset[idx]
+        if isinstance(mol, ob.OBMol):
+            return get_coord_from_mol(mol)
+        else:
+            return mol.GetConformer().GetPositions()
+
+class RemainValenceDataset(Dataset[np.ndarray]):
+    def __init__(self, 
+            mol_data: Dataset[ob.OBMol|Chem.Mol], 
+            order_data: Dataset[np.ndarray]
+    ):
+        self.mol_data = mol_data
+        self.order_data = order_data
+
+class MolTokenizeDataset(Dataset[list[str]]):
+    def __init__(self, 
+            atoms_data: Dataset[list[str]],
+            coords_data: Dataset[np.ndarray], 
+            smi_data: Dataset[str],
+            orders_data: Dataset[np.ndarray],
+            format: Literal['atoms_coords', 'atom_coords', ], 
+            coord_range: float,
+            smiles_voc_dir: str,
+            heavy: AtomRepr, h: AtomRepr
+    ):
+        self.atoms = atoms_data
+        self.coords = coords_data
+        self.smi = smi_data
+        self.orders = orders_data
+        self.format = format
+        self.coord_range = coord_range
+        self.smiles_voc_dir = smiles_voc_dir
+        self.heavy = heavy
+        self.h = h
+
 
 class MolTokenizer:
     logger = getLogger(f"{__module__}.{__qualname__}")

@@ -14,7 +14,7 @@ from src.chem import array_to_conf
 from src.data import CacheDataset, index_dataset
 from src.data.molecule import SetHydrogenDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
-from src.data.protein import ProteinProcessDataset, ProteinTokenizeDataset, AtomRepr
+from src.data.protein import SelectDataset, ProteinTokenizeDataset, AtomRepr
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
 from src.generate import generate
 from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer, RangeWriteStreamer
@@ -115,7 +115,7 @@ if __name__ == '__main__':
     assert targs.pocket_format in ['ordered_atoms_coords', 'atoms_coords']
 
     protein = PDBUniMolRandomDataset('valid', targs.protein_cls)
-    protein = ProteinProcessDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
+    protein = SelectDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
     protein = CacheDataset(protein)
     protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
     protein_token = ProteinTokenizeDataset(protein, heavy=targs.pocket_heavy, h=targs.pocket_h, format=targs.pocket_format, coord_range=targs.coord_range, smiles_voc_dir=targs.smiles_voc_dir, order=targs.pocket_order, base_seed=args.seed)

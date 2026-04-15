@@ -3,6 +3,7 @@ import itertools as itr
 from dataclasses import dataclass
 from typing import Literal
 import numpy as np
+from openbabel import openbabel as ob
 from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
 from rdkit import Chem
 from Bio import PDB
@@ -58,9 +59,9 @@ class _ProteinProcessSelect(PDB.Select):
             raise ValueError
 
 
-class ProteinProcessDataset(WrapDataset[OBMol|Chem.Mol]):
-    def __init__(self, protein_data: Dataset[OBMol|Chem.Mol], ion: bool, ligand: bool, water: bool):
-        super().__init__(protein_data)
+class SelectDataset(WrapDataset[OBMol|Chem.Mol]):
+    def __init__(self, mol_data: Dataset[OBMol|Chem.Mol], ion: bool, ligand: bool, water: bool):
+        super().__init__(mol_data)
         self.select = _ProteinProcessSelect(ion, ligand, water)
         self.ion = ion
         self.ligand = ligand
@@ -100,8 +101,8 @@ class ProteinProcessDataset(WrapDataset[OBMol|Chem.Mol]):
             for idx in sorted(itr.chain(*remove_atom_idxss), reverse=True):
                 rw_mol.RemoveAtom(idx)
             mol = rw_mol.GetMol()
-
         return mol
+
 class ProteinTokenizer:
     def __init__(self, *, heavy: AtomRepr, h: AtomRepr, format, coord_range):
         self.heavy = heavy
@@ -213,49 +214,26 @@ class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
         self.base_seed = base_seed
 
     def __getitem__(self, idx: int):
-        protein = self.protein_data[idx]
+        mol = self.protein_data[idx]
 
-        if isinstance(protein, OBMol):
+        if isinstance(mol, OBMol):
+            atoms = np.array([atom.GetResidue().GetAtomID(atom).strip() for atom in OBMolAtomIter(mol)])
+            residue_idxs = np.array([atom.GetResidue().GetIdx() for atom in OBMolAtomIter(mol)])
+            coords = get_coord_from_mol(mol)
             if self.order == 'residue':
                 # Order atoms
-                atoms = np.array([atom.GetResidue().GetAtomID(atom).strip() for atom in OBMolAtomIter(protein)])
-                residue_idxs = np.array([atom.GetResidue().GetIdx() for atom in OBMolAtomIter(protein)])
-                coords = get_coord_from_mol(protein)
                 orders = np.argsort(residue_idxs, kind='stable')
                 atoms = atoms[orders]
                 coords = coords[orders]
                 # tokenize
                 tokens, orders = self.tokenizer(atoms, coords)
             else:
-                protein = obmol2rdmol(protein, sanitize=False) # sanitize=True raises errors but not needed for following processes
-                protein = set_atom_order(protein, self.order == 'ran', get_rng(self.base_seed, idx))
-                tokens, orders = self.tokenizer.tokenize(protein)
+
         else:
 
             if self.order == 'residue':
-                chain_id_is =[]
-                chain_id2i = {} # 出現した順に並べる
-                serial_numbers = []
-                for atom in protein.GetAtoms():
-                    rinfo = atom.GetPDBResidueInfo()
-                    if rinfo is None:
-                        rinfo = atom.GetNeighbors()[0].GetPDBResidueInfo()
-                    chain_id = rinfo.GetChainId()
-                    serial_numbers.append(rinfo.GetSerialNumber())
-                    if chain_id not in chain_id2i:
-                        chain_id2i[chain_id] = len(chain_id2i)
-                    chain_id_is.append(chain_id2i[chain_id])
-                orders = np.lexsort([serial_numbers, chain_id_is]) # これがopenbabelと同じ順になる
-
-                atoms = np.array([atom.GetPDBResidueInfo().GetName().strip() for atom in protein.GetAtoms()])
-                coords = protein.GetConformer().GetPositions()
-
-                atoms = atoms[orders]
-                coords = coords[orders]
                 tokens, orders = self.tokenizer(atoms, coords)
-            else:
-                protein = set_atom_order(protein, self.order == 'ran', get_rng(self.base_seed, idx))
-                tokens, orders = self.tokenizer.tokenize(protein)
+                tokens, orders = self.tokenizer.tokenize(mol)
         return tokens, orders
     def vocs(self) -> set[str]:
         return self.tokenizer.vocs()
