@@ -21,8 +21,9 @@ from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
 from src.chem import rdmol2obmol, pdb2obmol
 from src.evaluate import eval_vina, eval_qvina
-from src.data.protein import Protein2PDBDataset, AtomRepr
+from src.data.protein import AtomRepr
 from src.data.tokenizer import VocEncoder
+from src.data.molecule import Mol2PDBDataset
 from src.model import Model, Streamer
 from src.train import set_env, get_model, get_process_ranks
 from src.train.data import get_finetune_data
@@ -392,7 +393,7 @@ def main():
     # data
     _voc_encoder, _raw_data, protein_data, _lig, token_data, position_data, _weight_data, _center_data, data_log \
             = get_finetune_data(fargs, 'train', 1.0, False, True, set(voc_encoder.i2voc[1:]), 'none')
-    protein_pdb_data = Protein2PDBDataset(protein_data)
+    protein_pdb_data = Mol2PDBDataset(protein_data)
     logs += data_log
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)

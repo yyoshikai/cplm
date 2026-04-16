@@ -16,8 +16,9 @@ from src.data.molecule import RandomScoreDataset
 from src.data.datasets.posebusters import PosebustersV2ProteinDataset, PosebustersV2LigandDataset
 from src.train.data import get_finetune_data
 from src.data.tokenizer import TokenRSplitDataset
+from src.data.molecule import Mol2PDBDataset
 from src.train import get_max_opt
-from src.chem import array_to_conf, obmol2pdb
+from src.chem import array_to_conf
 from src.generate.streamer import GeneratorStreamer, coord_streamer, TokenWriteStreamer, RangeWriteStreamer
 from src.generate import generate
 
@@ -106,6 +107,7 @@ if __name__ == '__main__':
     raw_data = StackDataset(protein, lig, score)
     _voc_encoder, _raw, rec_data, lig_data, token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=True, random_rotate=False, added_vocs=set(), prompt_score='none' if fargs.no_score else 'low', raw_data=raw_data, encode=False, tensor_position=False)
     logs += data_logs
+    rec_pdb_data = Mol2PDBDataset(rec_data)
     token_position_data = StackDataset(token_data, position_data)
     token_position_data, _ = TokenRSplitDataset(token_position_data, '[XYZ]').untuple()
     token_position_data = SentenceDataset(token_position_data, '[XYZ]')
@@ -113,16 +115,13 @@ if __name__ == '__main__':
 
 
     idx_data, token_data = index_dataset(token_data)
-    prompt_data = StackDataset(idx_data, lig_data, rec_data, token_data, position_data)
+    prompt_data = StackDataset(idx_data, lig_data, rec_pdb_data, token_data, position_data)
     N = len(prompt_data)
 
     def streamer_fn(item, i_trial: int, voc_encoder):
-        idx, lig, rec, token, position = item
+        idx, lig, rec_pdb, token, position = item
         pdb_path = f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb"
-        if isinstance(rec, OBMol):
-            mwrite(pdb_path, obmol2pdb(rec))
-        else:
-            Chem.MolToPDBFile(rec, pdb_path)
+        mwrite(pdb_path, rec_pdb)
         streamer = LigandCoordStreamer(
             lig, 
             new_sdf_path=f"{out_dir}/new_sdf/{idx}/{i_trial}.sdf", 

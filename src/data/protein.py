@@ -9,9 +9,9 @@ from rdkit import Chem
 from Bio import PDB
 from Bio.PDB.Residue import Residue
 from torch.utils.data import Dataset
+from .data import WrapDataset
 from ..utils import slice_str
-from ..chem import get_coord_from_mol, obmol2rdmol, set_atom_order, obmol2pdb, pdb2obmol
-from .data import WrapDataset, get_rng
+from ..chem import obmol2pdb, pdb2obmol
 from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
 
 AtomRepr = Literal['none', 'atom', 'all']
@@ -164,19 +164,6 @@ class ProteinTokenizer:
     def vocs(self) -> set[str]:
         return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
                 | (set() if self.format == 'atom_coords' else {'[XYZ]'})
-
-class Protein2PDBDataset(WrapDataset[str]):
-    def __init__(self, dataset: Dataset[OBMol|Chem.Mol]):
-        super().__init__(dataset)
-        self.obc = OBConversion()
-        self.obc.SetOutFormat('pdb')
-    def __getitem__(self, idx: int):
-        protein = self.dataset[idx]
-        if isinstance(protein, OBMol):
-            pdb = self.obc.WriteString(protein)
-        else:
-            pdb = Chem.MolToPDBBlock(protein)
-        return pdb
 
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。

@@ -268,6 +268,19 @@ class MolTokenizeDataset(Dataset[list[str]]):
             raise ValueError(f"Unknown format={self.format}")
         return tokens, order
 
+class Mol2PDBDataset(WrapDataset[str]):
+    def __init__(self, dataset: Dataset[ob.OBMol|Chem.Mol]):
+        super().__init__(dataset)
+        self.obc = ob.OBConversion()
+        self.obc.SetOutFormat('pdb')
+    def __getitem__(self, idx: int):
+        protein = self.dataset[idx]
+        if isinstance(protein, ob.OBMol):
+            pdb = self.obc.WriteString(protein)
+        else:
+            pdb = Chem.MolToPDBBlock(protein)
+        return pdb
+
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):
         self.min = min
