@@ -8,14 +8,14 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from openbabel.openbabel import OBMol
-from ..data import RepeatDataset, Subset, StackDataset, TensorDataset, untuple_dataset
+from ..data import RepeatDataset, Subset, StackDataset, TensorDataset, untuple_dataset, CacheDataset
 from ..data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from ..data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from ..data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from ..data.datasets.crossdocked import CDDataset, CDProteinDataset
 from ..data.datasets.pdb import PDBUniMolRandomDataset
-from ..data.protein import Pocket, SelectDataset, PocketTokenizeDataset, ProteinTokenizeDataset
-from ..data.molecule import SetHydrogenDataset, MolProcessDataset, SmilesOrderDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset, AtomsDataset, CoordsDataset
+from ..data.protein import Pocket, SelectDataset, PocketTokenizeDataset
+from ..data.molecule import SetHydrogenDataset, MolProcessDataset, SmilesOrderDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset, AtomsDataset, CoordsDataset, RemainValencesDataset
 from ..data.coord import CoordTransformDataset
 
 def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
@@ -81,6 +81,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             smi, orders = SmilesOrderDataset(mol, pargs.order).untuple()
             atoms = AtomsDataset(mol)
             coords = CoordsDataset(mol)
+            valences = RemainValencesDataset(mol)
             tokens = MolTokenizeDataset(atoms, coords, smi, orders, format=pargs.format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, heavy=pargs.heavy, h=pargs.h)
             start = '[LIGAND]' if dtype == 'lig' else '[POCKET]'
             sentence = [start, tokens, '[END]']
@@ -194,7 +195,11 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     if args.protein:
         protein = SelectDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
         protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
-        protein_tokens = ProteinTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, order=args.pocket_order, base_seed=args.seed)
+        smi, orders = SmilesOrderDataset(protein, args.pocket_order, args.seed).untuple()
+        atoms = AtomsDataset(protein)
+        coords = CoordsDataset(protein)
+        valences = RemainValencesDataset(protein, orders)
+        protein_tokens = MolTokenizeDataset(atoms, coords, smi, orders, valences, args.pocket_format, args.coord_range, args.smiles_voc_dir, args.pocket_heavy, args.pocket_h)
     else:
         protein_tokens = PocketTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range)
     sentence += ['[POCKET]', protein_tokens, '[END]']
@@ -218,8 +223,13 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     weights.append(args.lig_smiles_weight)
     lig = SetHydrogenDataset(lig, args.lig_h != 'none')
     lig = MolProcessDataset(lig, args.seed, args.lig_randomize)
+    smi, orders = SmilesOrderDataset(lig, args.lig_order, args.seed)
+
     if add_ligand:
-        lig_tokens = MolTokenizeDataset(lig, format=args.lig_format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, h_coord=args.lig_h == 'all')
+        atoms = AtomsDataset(lig)
+        coords = CoordsDataset(lig)
+        valences = RemainValencesDataset(lig)
+        lig_tokens = MolTokenizeDataset(atoms, coords, smi, orders, valences, args.lig_format, args.coord_range, args.smiles_voc_dir, 'all', args.lig_h)
         sentence += [lig_tokens, '[END]']
         weights += [args.lig_coord_weight, 0.0]
     sentence = SentenceDataset(*sentence)

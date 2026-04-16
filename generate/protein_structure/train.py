@@ -14,7 +14,8 @@ from src.chem import array_to_conf
 from src.data import CacheDataset, index_dataset
 from src.data.molecule import SetHydrogenDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
-from src.data.protein import SelectDataset, ProteinTokenizeDataset, AtomRepr
+from src.data.protein import SelectDataset, AtomRepr
+from src.data.molecule import SmilesOrderDataset, AtomsDataset, CoordsDataset, RemainValencesDataset, MolTokenizeDataset
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
 from src.generate import generate
 from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer, RangeWriteStreamer
@@ -117,8 +118,14 @@ if __name__ == '__main__':
     protein = PDBUniMolRandomDataset('valid', targs.protein_cls)
     protein = SelectDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
     protein = CacheDataset(protein)
-    protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
-    protein_token = ProteinTokenizeDataset(protein, heavy=targs.pocket_heavy, h=targs.pocket_h, format=targs.pocket_format, coord_range=targs.coord_range, smiles_voc_dir=targs.smiles_voc_dir, order=targs.pocket_order, base_seed=args.seed)
+    protein = SetHydrogenDataset(protein, targs.pocket_h != 'none')
+
+    
+    smi, orders = SmilesOrderDataset(protein, args.pocket_order, args.seed).untuple()
+    atoms = AtomsDataset(protein)
+    coords = CoordsDataset(protein)
+    valences = RemainValencesDataset(protein, orders)
+    protein_token = MolTokenizeDataset(atoms, coords, smi, orders, valences, targs.pocket_format, targs.coord_range, targs.smiles_voc_dir, targs.pocket_heavy, targs.pocket_h)
     protein_atom_token, _coord_token = TokenSplitDataset(protein_token, '[XYZ]').untuple()
     sentence = SentenceDataset('[POCKET]', protein_atom_token, '[XYZ]')
     index, sentence = index_dataset(sentence)

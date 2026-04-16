@@ -191,7 +191,7 @@ def add_pretrain_args(parser: ArgumentParser):
     """
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
     # pocket-heavy-coordはデフォルトで入れるようにした。
-    parser.add_argument("--lig-randomize", action='store_true')
+    parser.add_argument('--lig-order', default='ran')
     parser.add_argument("--lig-format", choices=['smiles_coords', 'smile_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
     parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
@@ -284,6 +284,10 @@ def update_args(args: Namespace) -> Namespace:
             'smiles_tokens2': 'smiles2',
         }[smiles_voc_file]
         setattr(args, 'smiles_voc_dir', smiles_voc_dir)
+
+    if not hasattr(args, 'lig_order'):
+        setattr(args, 'lig_order', 'ran' if args.lig_randomize else 'can')
+        delattr(args, 'ilg_randomize')
 
     return args
 
