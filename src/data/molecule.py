@@ -5,16 +5,11 @@ import numpy as np
 from torch.utils.data import Dataset
 from rdkit import Chem
 from openbabel import openbabel as ob
-from ..chem import set_atom_order, randomize_smiles, get_coord_from_mol
+from ..chem import set_atom_order, randomize_smiles, get_coord_from_mol, ELEMENT_SYMBOLS
 from ..utils.path import WORKDIR
 from .data import WrapDataset, WrapTupleDataset, get_rng
 from .tokenizer import StringTokenizer2, FloatTokenizer
 from .protein import AtomRepr
-
-def element_symbols() -> list[str]:
-    table = Chem.GetPeriodicTable()
-    return [table.GetElementSymbol(i) for i in range(1, 119)]
-
 
 class MolProcessDataset(WrapDataset[Chem.Mol]):
     def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, random: bool):
@@ -102,17 +97,26 @@ class SmilesOrderDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
         return smi, orders
 
 class AtomsDataset(WrapDataset[list[str]]):
+    """
+    Calpha炭素はCA
+    それ以外は元素記号 (2文字目は小文字 Mg等)
+    
+    """
     def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
         super().__init__(mol_data)
     
     def __getitem__(self, idx):
         mol = self.dataset[idx]
         if isinstance(mol, ob.OBMol):
-            atoms = [atom.GetResidue().GetAtomID(atom).strip() for atom in ob.OBMolAtomIter(mol)]
+            atoms = [
+                'CA' if atom.GetResidue().GetAtomID(atom) == " CA " \
+                else ELEMENT_SYMBOLS[atom.GetAtomicNum()-1] 
+                for atom in ob.OBMolAtomIter(mol)
+            ]
         else:
-            atoms = [atom.GetPDBResidueInfo().GetName().strip() for atom in mol.GetAtoms()]
+            atoms = ['CA' if atom.GetPDBResidueInfo().GetName() == ' CA ' else atom.GetSymbol() for atom in mol.GetAtoms()]
         return atoms
-    
+
 class CoordsDataset(WrapDataset[np.ndarray]):
     def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
         super().__init__(mol_data)
@@ -124,13 +128,45 @@ class CoordsDataset(WrapDataset[np.ndarray]):
         else:
             return mol.GetConformer().GetPositions()
 
-class RemainValenceDataset(Dataset[np.ndarray]):
-    def __init__(self, 
-            mol_data: Dataset[ob.OBMol|Chem.Mol], 
-            order_data: Dataset[np.ndarray]
-    ):
+class RemainValencesDataset(Dataset[list[int]]):
+    """
+    こちらは既にorder順に並べ替えられたものを必要とする。
+    
+    """
+    def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol], orders_data: Dataset[np.ndarray]):
         self.mol_data = mol_data
-        self.order_data = order_data
+        self.orders_data = orders_data
+    def __getitem__(self, idx: int):
+        mol = self.mol_data[idx]
+        orders = self.orders_data[idx]
+
+        if isinstance(mol, ob.OBMol):
+            remain_valences = []
+            added_idxs = set()
+            for idx in orders:
+                atom = mol.GetAtomById(idx)
+                remain_valence = 0
+                for natom in ob.OBAtomAtomIter(atom):
+                    if natom.GetId() not in added_idxs:
+                        remain_valence += 1
+                remain_valences.append(remain_valence)
+                added_idxs.add(idx)
+        else:
+            remain_valences = []
+            added_idxs = set()
+            for o in orders:
+                remain_valence = 0
+                atom = mol.GetAtomWithIdx(o)
+                remain_valence = 0
+                for natom in atom.GetNeighbors():
+                    if natom.GetIdx() not in added_idxs:
+                        remain_valence += 1
+                remain_valences.append(remain_valence)
+                added_idxs.add(o)
+        return remain_valences
+
+
+
 
 class MolTokenizeDataset(Dataset[list[str]]):
     def __init__(self, 
@@ -138,6 +174,7 @@ class MolTokenizeDataset(Dataset[list[str]]):
             coords_data: Dataset[np.ndarray], 
             smi_data: Dataset[str],
             orders_data: Dataset[np.ndarray],
+            remain_valences_data: Dataset[list[int]],
             format: Literal['atoms_coords', 'atom_coords', ], 
             coord_range: float,
             smiles_voc_dir: str,
@@ -147,11 +184,91 @@ class MolTokenizeDataset(Dataset[list[str]]):
         self.coords = coords_data
         self.smi = smi_data
         self.orders = orders_data
+        self.remain_valences = remain_valences_data
         self.format = format
-        self.coord_range = coord_range
         self.smiles_voc_dir = smiles_voc_dir
         self.heavy = heavy
         self.h = h
+
+        self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
+    
+    def __getitem__(self, idx: int) -> tuple[list[str], list[int]]:
+        
+        atom2repr = {'H': self.h, 'CA': 'all'} # others: self.heavy
+        if self.format == 'atom_coords':
+            atoms = self.atoms[idx]
+            coords = self.coords[idx]
+            orders = self.orders[idx]
+            tokens = []
+            for o in orders:
+                repr = atom2repr.get(atoms[o], self.heavy)
+                if repr != 'none':
+                    tokens.append(atoms[o])
+                    if repr == 'all':
+                        tokens += self.coord_tokenizer.tokenize_array(coords[o])
+            poss = list(range(len(tokens)))
+        elif self.format == 'atom_valence_coords':
+            orders = self.orders[idx]
+            atoms = self.atoms[idx]
+            coords = self.coords[idx]
+            remain_valences = self.remain_valences[idx]
+            tokens = []
+            for o in orders:
+                repr = atom2repr.get(atoms[o], self.heavy)
+                if repr != 'none':
+                    tokens += [atoms[o], remain_valences[o]]
+                    if repr == 'all':
+                        tokens += self.coord_tokenizer.tokenize_array(coords[o])
+            poss = list(range(len(tokens)))
+        elif self.format == 'ordered_atoms_coords':
+            atom_tokens = []
+            coord_tokens = []
+            atom_poss = []
+            coord_poss = []
+            orders = self.orders[idx]
+            atoms = self.atoms[idx]
+            coords = self.coords[idx]
+            pos = 0
+            for o in orders:
+                repr = atom2repr.get(atoms[o], self.heavy)
+                if repr != 'none':
+                    atom_tokens.append(atoms[o])
+                    atom_poss.append(pos)
+                    pos += 1
+                    if repr == 'all':
+                        coord_tokens += self.coord_tokenizer.tokenize_array(coords[o])
+                        coord_poss.append(list(range(pos, pos+6)))
+                        pos += 6
+            tokens = atom_tokens + ['[XYZ]'] + coord_tokens
+            poss = atom_poss + [pos] + coord_poss
+
+        elif self.format == 'atoms_coords':
+            coord_atom_idxs = [ai for ai in atom_idxs if (self.h_coord or symbols[ai] != 'H')]
+            tokens = [symbols[ai] for ai in atom_idxs] + ['[XYZ]'] \
+                    + self.coord_tokenizer.tokenize_array(coords[coord_atom_idxs].ravel())
+            order = list(range(len(tokens)))
+        elif self.format == 'smiles_coords':
+            tokens = self.smi_tokenizer.tokenize(smi)
+            shown_coords = np.concatenate([coords[ai] 
+                    for ai in atom_idxs if (symbols[ai] != 'H' or self.h_coord)])
+            tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(shown_coords)
+            order = list(range(len(tokens)))
+        elif self.format == 'smile_coords':
+            smi_tokens = self.smi_tokenizer.tokenize(smi)
+            tokens = []
+            cur_atom_idx = 0
+            for smi_token in smi_tokens:
+                tokens.append(smi_token)
+                if smi_token not in self.non_atom_tokens:
+                    ai = atom_idxs[cur_atom_idx]
+                    if symbols[ai] != 'H' or self.h_coord:
+                        tokens += self.coord_tokenizer.tokenize_array(coords[atom_idxs[cur_atom_idx]])
+                    cur_atom_idx += 1
+            assert cur_atom_idx == len(atom_idxs)
+            order = list(range(len(tokens)))
+        else:
+            raise ValueError(f"Unknown format={self.format}")
+        return tokens, order
 
 
 class MolTokenizer:

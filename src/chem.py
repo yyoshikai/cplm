@@ -240,3 +240,8 @@ def read_pdb_text(text: str, out_cls: Literal['ob', 'rdkit', 'text']):
     else:
         raise ValueError(f"Unknown {out_cls=}")
     return mol
+
+def element_symbols() -> list[str]:
+    table = Chem.GetPeriodicTable()
+    return [table.GetElementSymbol(i) for i in range(1, 119)]
+ELEMENT_SYMBOLS = element_symbols()

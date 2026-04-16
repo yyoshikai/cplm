@@ -228,7 +228,7 @@ class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
                 # tokenize
                 tokens, orders = self.tokenizer(atoms, coords)
             else:
-
+                pass
         else:
 
             if self.order == 'residue':

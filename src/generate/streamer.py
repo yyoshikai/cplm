@@ -12,10 +12,9 @@ from openbabel.openbabel import OBMol
 from ..utils import should_show
 from ..utils.path import make_pardir, mwrite
 from ..model import Streamer, WrapperStreamer
-from ..data.molecule import element_symbols
 from ..data.protein import AtomRepr
 from ..data.tokenizer import FloatTokenizer, StringTokenizer2, VocEncoder
-from ..chem import array_to_conf
+from ..chem import array_to_conf, element_symbols
 
 def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, no_token_range: bool, atom_order: bool, center: np.ndarray|None) -> Generator[tuple[bool, list[int], list[int]], list[int], tuple[np.ndarray|None, int, str|None]]:
     """
