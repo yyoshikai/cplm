@@ -3,8 +3,7 @@ import itertools as itr
 from dataclasses import dataclass
 from typing import Literal
 import numpy as np
-from openbabel import openbabel as ob
-from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
+from openbabel.openbabel import OBMol
 from rdkit import Chem
 from Bio import PDB
 from Bio.PDB.Residue import Residue
@@ -164,7 +163,6 @@ class ProteinTokenizer:
     def vocs(self) -> set[str]:
         return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
                 | (set() if self.format == 'atom_coords' else {'[XYZ]'})
-
 
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):

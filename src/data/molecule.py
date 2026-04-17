@@ -9,7 +9,7 @@ from ..chem import set_atom_order, randomize_smiles, get_coord_from_mol, ELEMENT
 from ..utils.path import WORKDIR
 from .data import WrapDataset, WrapTupleDataset, get_rng
 from .tokenizer import StringTokenizer2, FloatTokenizer
-from .protein import AtomRepr
+from .protein import AtomRepr, Pocket
 
 class MolProcessDataset(WrapDataset[Chem.Mol]):
     def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, random: bool):
@@ -113,9 +113,13 @@ class AtomsDataset(WrapDataset[list[str]]):
                 else ELEMENT_SYMBOLS[atom.GetAtomicNum()-1] 
                 for atom in ob.OBMolAtomIter(mol)
             ]
-        else:
+        elif isinstance(mol, Chem.Mol):
             atoms = ['CA' if atom.GetPDBResidueInfo().GetName() == ' CA ' else atom.GetSymbol() for atom in mol.GetAtoms()]
+        elif isinstance(mol, Pocket):
+            atoms = mol.atoms
+        else:
         return atoms
+
 
 class CoordsDataset(WrapDataset[np.ndarray]):
     def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
