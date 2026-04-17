@@ -191,15 +191,17 @@ def add_pretrain_args(parser: ArgumentParser):
     """
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
     # pocket-heavy-coordはデフォルトで入れるようにした。
+    parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument('--lig-order', default='ran')
     parser.add_argument("--lig-format", choices=['smiles_coords', 'smile_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
-    parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
-    parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
+    parser.add_argument("--lig-cls", choices=['rdkit', 'ob'], required=True)
+
     parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
-    parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords', 'smiles_coords', 'smile_coords'], default='atoms_coords')
+    parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
+    parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords', 'smiles_coords', 'smile_coords'], default='atoms_coords')
     parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion'], nargs='*')
-    parser.add_argument("--protein-cls", choices=['rdkit', 'ob'], default='rdkit')
+    parser.add_argument("--pocket-cls", choices=['rdkit', 'ob'], required=True)
     parser.add_argument("--coord-range", type=int, default=250)
     # model
     parser.add_argument('--mamba', action='store_true')
@@ -209,6 +211,8 @@ def add_pretrain_args(parser: ArgumentParser):
     ## compatibility
     parser.add_argument("--model-bfloat16", action='store_true')
     parser.add_argument("--smiles-voc-dir", default='smiles3')
+    parser.add_argument("--lig-pre-coord", action='store_true')
+    parser.add_argument("--pocket-pre-coord", action='store_true')
 
 def update_args(args: Namespace) -> Namespace:
     """
@@ -273,8 +277,13 @@ def update_args(args: Namespace) -> Namespace:
     # 260318 pocket_hetatm
     setdefault(args, 'pocket_hetatm', ['ion', 'ligand', 'water'])
 
-    # 260411 protein_cls
-    setdefault(args, 'protein_cls', 'ob')
+    # 260411 protein_cls -> 260417 pocket_cls
+    if not hasattr(args, 'pocket_cls'):
+        if hasattr(args, 'protein_cls'):
+            args.pocket_cls = args.protein_cls
+            delattr(args, 'protein_cls')
+        else:
+            args.pocket_cls = 'ob'
 
     # 260411 smiles_voc_file, 260413 smiles_voc_dir
     if not hasattr(args, 'smiles_voc_dir'):
@@ -288,6 +297,10 @@ def update_args(args: Namespace) -> Namespace:
     if not hasattr(args, 'lig_order'):
         setattr(args, 'lig_order', 'ran' if args.lig_randomize else 'can')
         delattr(args, 'ilg_randomize')
+
+    # 260417 pre_coord
+    setdefault(args, 'lig_pre_coord', False)
+    setdefault(args, 'pocket_pre_coord', True)
 
     return args
 

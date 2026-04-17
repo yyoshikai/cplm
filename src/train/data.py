@@ -37,17 +37,17 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
         PDBUniMolRandomDataset: 'protein'
     }
     ## Molecule
-    for d_seed, (cls, dtype) in enumerate(cls2dtype.items()):
-        
+    for d_seed, (cls, dtype0) in enumerate(cls2dtype.items()):
         dname = cls.__name__.removesuffix('Dataset')
+        dtype = 'pocket' if dtype0 == 'protein' else dtype0
         repeat = getattr(args, dname)
         if repeat == 0: continue
         
         data_split = 'valid' if 'data_epoch' in args.check else split
-        if cls == PDBUniMolRandomDataset:
-            raw = PDBUniMolRandomDataset(data_split, args.protein_cls)
-        else:
+        if dtype0 == 'pocket':
             raw = cls(split=data_split)
+        else:
+            raw = cls(data_split, getattr(args, f"{dtype}_cls"))
         ## repeat / sample
         data = raw
         if split == 'train' and repeat != 1:
@@ -59,35 +59,33 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             data = Subset(data, idxs)
             assert len(data) > 0
         
-        ## process
-        
-
         ### Molecules
-        if dtype in ['lig', 'protein']:
-            if dtype == 'protein': dtype = 'pocket'
-            pargs = Namespace(**{k[len(dtype)+1]: v for k, v in vars(args).items() if k.startswith(f'{dtype}_')})
+        if dtype0 in ['lig', 'protein']:
+            pargs = Namespace(**{k[len(dtype)+1:]: v for k, v in vars(args).items() if k.startswith(f'{dtype}_')})
             if dtype == 'lig':
                 pargs.heavy = 'all'
             mol = data
+            print(pargs, flush=True)
             if pargs.pre_coord:
                 mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
             if dtype == 'pocket':
                 mol = SelectDataset(mol, 'ion' in pargs.hetatm, 'ligand' in pargs.hetatm, 'water' in pargs.hetatm)
-            mol = SetHydrogenDataset(mol, args.h != 'none')
+            mol = SetHydrogenDataset(mol, pargs.h != 'none')
             if not pargs.pre_coord:
                 mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
             mol = CacheDataset(mol)
 
-            smi, orders = SmilesOrderDataset(mol, pargs.order).untuple()
+            smi, orders = SmilesOrderDataset(mol, pargs.order, args.seed+d_seed).untuple()
             atoms = AtomsDataset(mol)
             coords = CoordsDataset(mol)
-            valences = RemainValencesDataset(mol)
-            tokens = MolTokenizeDataset(atoms, coords, smi, orders, format=pargs.format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, heavy=pargs.heavy, h=pargs.h)
+            valences = RemainValencesDataset(mol, orders)
+            tokens = MolTokenizeDataset(atoms, coords, smi, orders, valences, format=pargs.format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, heavy=pargs.heavy, h=pargs.h)
             start = '[LIGAND]' if dtype == 'lig' else '[POCKET]'
             sentence = [start, tokens, '[END]']
 
             # weight
             weight = lig_weight if dtype == 'lig' else pocket_weight
+            separates = {start, '[END]'}
             separates2weight = { 
                 (start,): pocket_weight, 
                 (start, '[END]'): 0.0, 

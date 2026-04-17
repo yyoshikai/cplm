@@ -1,14 +1,14 @@
 import sys, os
 from typing import Optional, Literal
 from logging import getLogger
-import numpy as np, pandas as pd
-from torch.utils.data import Dataset, get_worker_info
+from torch.utils.data import Dataset
+import numpy as np
 from rdkit import Chem
-from rdkit.Chem import Conformer
-from rdkit.Geometry import Point3D
+from openbabel import openbabel as ob
 from ..lmdb import PickleLMDBDataset
 from ..protein import Pocket
-from ..data import is_main_worker, Subset
+from ..data import Subset
+from ...chem import array_to_conf
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
@@ -16,7 +16,6 @@ logger = getLogger(__name__)
 
 def mol_from_unimol_data(smi: str, coord: np.ndarray):
     coord = coord.astype(float)
-    org_coord = coord
     # Generate mol with conformer
     mol = Chem.MolFromSmiles(smi)
     mol = Chem.AddHs(mol)
@@ -26,16 +25,10 @@ def mol_from_unimol_data(smi: str, coord: np.ndarray):
     if n_atom != len(coord):
         mol_heavy = Chem.RemoveHs(mol)
         n_heavy = mol_heavy.GetNumAtoms()
-        conf = Conformer(n_heavy)
-        for i in range(n_heavy):
-            conf.SetAtomPosition(i, Point3D(*coord[i]))
-        mol_heavy.AddConformer(conf)
+        mol_heavy.AddConformer(array_to_conf(coord[:n_heavy]))
         mol = Chem.AddHs(mol_heavy, addCoords=True)
     else:
-        conf = Conformer(n_atom)
-        for i in range(n_atom):
-            conf.SetAtomPosition(i, Point3D(*coord[i]))
-        mol.AddConformer(conf)
+        mol.AddConformer(array_to_conf(coord))
     coord = mol.GetConformer().GetPositions()
     if np.any(np.isnan(coord)): # 251111 QM7データでこうなる場合があり, 追加 experiments/241202_241201_mol_pocket5_debugの `4. (251111) Chem.AddHsでエラーになるものがあったため, 対策を調べる`より。
         logger.warning(f"coord has nan: {smi=}, {coord=}")
@@ -46,12 +39,14 @@ def mol_from_unimol_data(smi: str, coord: np.ndarray):
             mol.RemoveAtom(int(idx))
     return mol
 
-class UniMolLigandDataset(Dataset[Chem.Mol]):
-    def __init__(self, split: Literal['train', 'valid'], sample_save_dir: Optional[str]=None, unimol_dir=DEFAULT_UNIMOL_DIR):
+class UniMolLigandDataset(Dataset[ob.OBMol|Chem.Mol]):
+    def __init__(self, split: Literal['train', 'valid'], cls: Literal['rdkit', 'ob'], unimol_dir=DEFAULT_UNIMOL_DIR):
         self.dataset = PickleLMDBDataset(f"{unimol_dir}/ligands/{split}.lmdb", idx_to_key='str')
         self.n_conformer = 10
-        self.getitem_count = 0
-        self.sample_save_dir = sample_save_dir
+        self.cls = cls
+        if self.cls == 'ob':
+            self.obc = ob.OBConversion()
+            self.obc.SetInFormat('smi')
 
     def __getitem__(self, idx) -> Chem.Mol:
         mol_idx, conformer_idx = divmod(idx, self.n_conformer)
@@ -59,19 +54,20 @@ class UniMolLigandDataset(Dataset[Chem.Mol]):
 
         smi = data['smi']
         coord: np.ndarray = data['coordinates'][conformer_idx]
-        mol = mol_from_unimol_data(smi, coord)
-
-        # save sample in main process
-        if self.sample_save_dir is not None and self.getitem_count < 5 and is_main_worker():
-            worker_info = get_worker_info()
-            if worker_info is None or worker_info.id == 0:
-                save_dir = f"{self.sample_save_dir}/{idx}"
-                os.makedirs(save_dir, exist_ok=True)
-                with open(f"{save_dir}/data_smi.txt", 'w') as f:
-                    f.write(smi)
-                pd.DataFrame(data['coordinates'][conformer_idx]) \
-                    .to_csv(f"{save_dir}/data_coord.csv", header=False, index=False)
-        self.getitem_count += 1
+        if self.cls == 'ob':
+            mol = ob.OBMol()
+            self.obc.ReadString(mol, smi)
+            mol.AddHydrogens()
+            if len(coord) == mol.NumAtoms():
+                for i, atom in enumerate(ob.OBMolAtomIter(mol)):
+                    atom.SetVector(*coord[i].tolist())
+            else:
+                mol.DeleteHydrogens()
+                for i, atom in enumerate(ob.OBMolAtomIter(mol)):
+                    atom.SetVector(*coord[i].tolist())
+                mol.AddHydrogens()
+        else:
+            mol = mol_from_unimol_data(smi, coord)
         return mol
     
     def __len__(self):
