@@ -66,7 +66,6 @@ class SmilesOrderDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
                 smi = None
                 orders = np.argsort(residue_idxs, kind='stable').tolist()
             else:
-
                 smi = self.obc.WriteString(mol).strip()
                 orders = ob.toPairData(mol.GetData('SMILES Atom Order')).GetValue()
                 orders = [int(o)-1 for o in orders.split(' ')]
@@ -129,7 +128,6 @@ class AtomsDataset(WrapDataset[list[str]]):
             raise ValueError            
         return atoms
 
-
 class CoordsDataset(WrapDataset[np.ndarray]):
     def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
         super().__init__(mol_data)
@@ -176,7 +174,6 @@ class RemainValencesDataset(Dataset[list[int]]):
                 remain_valences.append(remain_valence)
                 added_idxs.add(o)
         return remain_valences
-
 
 class MolTokenizeDataset(Dataset[list[str]]):
     def __init__(self, 
@@ -290,11 +287,11 @@ class MolTokenizeDataset(Dataset[list[str]]):
 
     def vocs(self):
         if self.format == 'atom_coords':
-            return set(ELEMENT_SYMBOLS) | self.coord_tokenizer.vocs()
+            return set(ELEMENT_SYMBOLS) | self.coord_tokenizer.vocs() | {'CA'}
         elif self.format == 'atom_valence_coords':
-            return set(ELEMENT_SYMBOLS) | self.coord_tokenizer.vocs() | {str(i) for i in range(MAX_VALENCE)}
+            return set(ELEMENT_SYMBOLS) | self.coord_tokenizer.vocs() | {str(i) for i in range(MAX_VALENCE)} | {'CA'}
         elif self.format in ['ordered_atoms_coords', 'atoms_coords']:
-            return set(ELEMENT_SYMBOLS) | self.coord_tokenizer.vocs() | {'[XYZ]'}
+            return set(ELEMENT_SYMBOLS) | self.coord_tokenizer.vocs() | {'[XYZ]', 'CA'}
         elif self.format == 'smiles_coords':
             return self.smi_tokenizer.vocs() | self.coord_tokenizer.vocs() | {'[XYZ]'}
         elif self.format == 'smile_coords':

@@ -15,7 +15,7 @@ from ..data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetData
 from ..data.datasets.crossdocked import CDDataset, CDProteinDataset
 from ..data.datasets.pdb import PDBUniMolRandomDataset
 from ..data.protein import Pocket, SelectDataset, PocketTokenizeDataset
-from ..data.molecule import SetHydrogenDataset, MolProcessDataset, SmilesOrderDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset, AtomsDataset, CoordsDataset, RemainValencesDataset
+from ..data.molecule import SetHydrogenDataset, SmilesOrderDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset, AtomsDataset, CoordsDataset, RemainValencesDataset
 from ..data.coord import CoordTransformDataset
 
 def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
@@ -65,7 +65,6 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             if dtype == 'lig':
                 pargs.heavy = 'all'
             mol = data
-            print(pargs, flush=True)
             if pargs.pre_coord:
                 mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
             if dtype == 'pocket':
@@ -220,7 +219,6 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     sentence.append('[LIGAND]')
     weights.append(args.lig_smiles_weight)
     lig = SetHydrogenDataset(lig, args.lig_h != 'none')
-    lig = MolProcessDataset(lig, args.seed, args.lig_randomize)
     smi, orders = SmilesOrderDataset(lig, args.lig_order, args.seed)
 
     if add_ligand:
