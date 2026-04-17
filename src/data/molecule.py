@@ -224,7 +224,7 @@ class MolTokenizeDataset(Dataset[list[str]]):
             tokens = []
             for i, o in enumerate(orders):
                 if reprs[o] != 'none':
-                    tokens += [atoms[o], remain_valences[i]]
+                    tokens += [atoms[o], str(remain_valences[i])]
                     if reprs[o] == 'all':
                         tokens += self.coord_tokenizer.tokenize_array(coords[o])
             poss = list(range(len(tokens)))
