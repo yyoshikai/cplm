@@ -11,6 +11,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 from torch import Tensor
 from torch.nn.modules.transformer import _get_activation_fn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
@@ -45,7 +46,7 @@ class MultiheadAttention(nn.Module):
         
         self.n_forward = 0
 
-    def forward(self, x: Tensor, sin: Tensor, cos: Tensor, is_causal: bool=True, src_mask: Tensor|None=None, cache: KVCache|None=None, cache_size: int|None=None) -> tuple[Tensor, Optional[Tensor]]:
+    def forward(self, x: Tensor, sin: Tensor, cos: Tensor, is_causal: bool=True, src_mask: Tensor|None=None, cache: KVCache|None=None) -> tuple[Tensor, Optional[Tensor]]:
         """
         x: Tensor[L, B, D](float)
         src_mask: Tensor expandable to [B, H, Lx, Lc]
@@ -62,7 +63,6 @@ class MultiheadAttention(nn.Module):
         self.n_forward += 1
 
         # set up shape vars
-        assert (cache is None) == (cache_size is None)
         L, B, D = x.shape
         Dh = D // self.num_heads
 
@@ -84,16 +84,16 @@ class MultiheadAttention(nn.Module):
         q = q.contiguous()
 
         if cache is not None:
-            cache_k, cache_v = cache
+            cache_k, cache_v, cache_size = cache
             cache_k[:, :, cache_size:cache_size+L, :].copy_(k, non_blocking=True)
             cache_v[:, :, cache_size:cache_size+L, :].copy_(v, non_blocking=True)
             k = cache_k[:,:,:cache_size+L, :]
             v = cache_v[:,:,:cache_size+L, :]
-            cache = cache_k, cache_v
+            cache = cache_k, cache_v, cache_size+L
             if src_mask is not None:
                 src_mask = src_mask[:,:,:,:cache_size+L]
         else:
-            cache = k, v
+            cache = k, v, L
         if src_mask is not None:
             src_mask = src_mask.contiguous()
             k = k.contiguous()
@@ -139,21 +139,21 @@ class TransformerEncoderLayer(nn.Module):
             activation = _get_activation_fn(activation)
         self.activation = activation
 
-    def forward(self, src: Tensor, sin: Tensor, cos: Tensor, is_causal: bool, src_mask: Tensor|None=None, cache: KVCache|None=None, cache_size: int|None=None) -> Tensor:
+    def forward(self, src: Tensor, sin: Tensor, cos: Tensor, is_causal: bool, src_mask: Tensor|None=None, cache: KVCache|None=None) -> Tensor:
 
         x = src
         if self.norm_first:
-            d_x, cache = self._sa_block(self.norm1(x), sin, cos, is_causal, src_mask, cache, cache_size)
+            d_x, cache = self._sa_block(self.norm1(x), sin, cos, is_causal, src_mask, cache)
             x = x + d_x
             x = x + self._ff_block(self.norm2(x))
         else:
-            d_x, cache = self._sa_block(x, sin, cos, is_causal, src_mask, cache, cache_size)
+            d_x, cache = self._sa_block(x, sin, cos, is_causal, src_mask, cache)
             x = self.norm1(x + d_x)
             x = self.norm2(x + self._ff_block(x))
         return x, cache
 
-    def _sa_block(self, x: Tensor, sin, cos, is_causal, src_mask, cache, cache_size) -> Tensor:
-        x, cache = self.self_attn(x, sin, cos, is_causal, src_mask, cache, cache_size)
+    def _sa_block(self, x: Tensor, sin, cos, is_causal, src_mask, cache) -> Tensor:
+        x, cache = self.self_attn(x, sin, cos, is_causal, src_mask, cache)
         return self.dropout1(x), cache
 
     def _ff_block(self, x: Tensor) -> Tensor:
@@ -332,6 +332,25 @@ class TransformerModel(Model):
             return caches, logit
         else:
             return caches
+        
+    def send_cache(self, caches: list[KVCache], tgt_rank: int):
+        for il, cache in enumerate(caches):
+            k, v, cache_size = cache
+            L, B, D = k.shape
+            dist.send_object_list([L, B, cache_size], tgt_rank)
+            dist.send(k, tgt_rank)
+            dist.send(v, tgt_rank)
+            
+        
+
+    def recv_cache(self, src_rank: int):
+        caches = []
+        for il in range(self.num_layers):
+            sizes = [None, None, None]
+            dist.recv_object_list(sizes, src_rank)
+            L, B, cache_size = sizes
+            k = torch.empty()
+
 
     @torch.inference_mode()
     def generate2(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int):
@@ -395,9 +414,9 @@ class TransformerModel(Model):
             (
                 torch.cat([caches[b][il][0] for b in range(B)], dim=0),
                 torch.cat([caches[b][il][1] for b in range(B)], dim=0), 
+                Lcontext
             ) for il in range(self.num_layers)
         ] # [i_layer][k,v][B, H, L, Dh]
-        cache_size = Lcontext
         del caches, ucaches
         cur_inputs = [ucur_inputs[iuc] for iuc in b2iuc]
         is_continues = [uis_continues[iuc] for iuc in b2iuc]
@@ -438,8 +457,7 @@ class TransformerModel(Model):
             x = torch.tensor(cur_inputs, dtype=torch.long, device=device).unsqueeze(0) # [1(L), B]
             x = self.embedding(x)
             for il, layer in enumerate(self.layers):
-                x, _ = layer(x, sin, cos, is_causal=False, cache=cache[il], cache_size=cache_size, src_mask=src_mask)
-            cache_size += 1
+                x, _ = layer(x, sin, cos, is_causal=False, cache=cache[il], src_mask=src_mask)
             logits = self.predictor(self.norm(x[0])) # [1(L), B, D] -> [B, D]
             cur_inputs = []
             for b, (logit, next_token_range) in enumerate(zip(logits, next_token_ranges)):

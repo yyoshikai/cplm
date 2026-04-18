@@ -139,11 +139,13 @@ class ReinforceDataIter:
         idxs = torch.tensor(idxs, dtype=torch.long, device=self.device)
         return idxs, pdbs, prompt_tokens, positions
 
-def send_cache(cache: dict, tgt_rank: int):
+def send_cache(cache: dict, tgt_rank: int, model: Model):
+
+
 
     pass
 
-def receive_cache(cache: dict, tgt_rank: int):
+def receive_cache(cache: dict, tgt_rank: int, mamba):
 
     pass
 
