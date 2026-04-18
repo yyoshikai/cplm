@@ -2,14 +2,16 @@ import sys, os, yaml, math
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 import numpy as np
+from rdkit import Chem
+from openbabel.openbabel import OBMol
 from src.utils import setdefault
 from src.utils.path import mwrite
 from src.data import StackDataset, Subset, index_dataset
-from src.data.tokenizer import SmilesTokenizer
+from src.data.molecule import Mol2PDBDataset
+from src.data.tokenizer import StringTokenizer2
 from src.train.data import get_finetune_data
 from src.generate import generate
 from src.generate.streamer import get_ligand_streamer, SaveLigandStreamer, TokenWriteStreamer, RangeWriteStreamer
-from src.chem import obmol2pdb
 
 
 if __name__ == '__main__':
@@ -56,11 +58,12 @@ if __name__ == '__main__':
     with open(f"{out_dir}/args.yaml", 'w') as f:
         yaml.dump(vars(args), f)
 
-    added_vocs = SmilesTokenizer().vocs()
+    added_vocs = StringTokenizer2(fargs.smiles_voc_dir).vocs()
     _voc_encoder, _raw, rec_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
+    rec_pdb_data = Mol2PDBDataset(rec_data)
 
     idx_data, prompt_token_data = index_dataset(prompt_token_data)
-    prompt_data = StackDataset(idx_data, rec_data, prompt_token_data, position_data)
+    prompt_data = StackDataset(idx_data, rec_pdb_data, prompt_token_data, position_data)
     if args.n is not None and args.n < len(prompt_data):
         sample_idxs = np.random.default_rng(args.sample_seed).choice(len(prompt_data), args.n, replace=False)
         prompt_data = Subset(prompt_data, sample_idxs)
@@ -71,9 +74,10 @@ if __name__ == '__main__':
     with cf.ProcessPoolExecutor() as e:
         if fargs.format == 'smiles_coords':
             def streamer_fn(item, i_trial, voc_encoder):
-                idx, rec, prompt_token, position = item
-                mwrite(f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb", obmol2pdb(rec))
-                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, args.no_token_range, fargs.lig_h)
+                idx, rec_pdb, prompt_token, position = item
+                pdb_path = f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb"
+                mwrite(pdb_path, rec_pdb)
+                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, args.no_token_range, fargs.lig_h, fargs.smiles_voc_dir)
                 streamer = SaveLigandStreamer(streamer)
                 streamer = TokenWriteStreamer(streamer, voc_encoder,
                     prompt_position=position,

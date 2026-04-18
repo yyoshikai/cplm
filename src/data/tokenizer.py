@@ -145,7 +145,7 @@ class StringTokenizer2(Tokenizer):
     def tokenize(self, string: str):
         tokens = self.pattern.findall(string)
         if len(''.join(tokens)) != len(string):
-            self.logger.info(f"Unknown token; fall back to StringTokenizer: {string}")
+            self.logger.info(f"Unknown token; fall back to StringTokenizer: '{string}'")
             return self.tokenizer.tokenize(string)
         return tokens
 
@@ -153,8 +153,8 @@ class StringTokenizer2(Tokenizer):
         return self.tokenizer.vocs()
     
 class SmilesTokenizer(StringTokenizer):
-    def __init__(self):
-        with open(f"{WORKDIR}/cplm/src/data/smiles_tokens.txt") as f:
+    def __init__(self, voc_file: str):
+        with open(f"{WORKDIR}/cplm/src/data/{voc_file}.txt") as f:
             tokens = f.read().splitlines()
         super().__init__(tokens)
 
@@ -185,7 +185,8 @@ class FloatTokenizer(Tokenizer):
         self.n_tokenized += 1
         self.n_tokenized_total += 1
         if should_show(self.n_tokenized_total, math.inf):
-            self.unk_logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
+            pass
+            # self.unk_logger.info(f"{self.n_over}/{self.n_tokenized} are over vmax, {self.n_under}/{self.n_tokenized} are under vmin")
         x = self.float_format.format(x)
         xi = x[:-4]
         xf = x[-4:]
@@ -273,7 +274,7 @@ class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
                     positions += [pos+pos_offset for pos in positions0]
                     pos_offset += len(words0)
             except Exception as e:
-                print(f"Error at {word}: {e.args}", flush=True)
+                print(f"Error at {idx}/{len(self)} in {word}: {e.args}", flush=True)
                 raise e
         return words, positions
     

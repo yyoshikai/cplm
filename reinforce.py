@@ -23,8 +23,9 @@ from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP, add_file_handler
 from src.chem import rdmol2obmol, pdb2obmol
 from src.evaluate import eval_vina, eval_qvina
-from src.data.protein import Protein2PDBDataset, AtomRepr
+from src.data.protein import AtomRepr
 from src.data.tokenizer import VocEncoder
+from src.data.molecule import Mol2PDBDataset
 from src.model import Model, Streamer
 from src.train import set_env, get_model, get_process_ranks
 from src.train.data import get_finetune_data
@@ -146,6 +147,7 @@ class Generator:
             coord_range: int,
             lig_h: AtomRepr,
             lig_format: str,
+            smiles_voc_dir: str,
             cpu: int,
             num_score_workers: int,
             target: str,
@@ -156,6 +158,7 @@ class Generator:
         self.coord_range = coord_range
         self.lig_h = lig_h
         self.lig_format = lig_format
+        self.smiles_voc_dir = smiles_voc_dir
         self.num_score_workers = num_score_workers
         self.cpu = cpu
         self.target = target
@@ -181,7 +184,7 @@ class Generator:
             position_streamers: list[PositionSaveStreamer] = []
             streamers = []
             for idx, pdb in enumerate(pdbs):
-                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, False, self.lig_h)
+                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, False, self.lig_h, self.smiles_voc_dir)
                 if do_save:
                     streamer = SaveLigandStreamer(streamer, f"{self.result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf")
                 streamer = GetScoreStreamer(streamer, ligand_streamer, e, self.target, pdb, 
@@ -391,7 +394,7 @@ def main():
     # data
     _voc_encoder, _raw_data, protein_data, _lig, token_data, position_data, _weight_data, _center_data, data_log \
             = get_finetune_data(fargs, 'train', 1.0, False, True, set(voc_encoder.i2voc[1:]), 'none')
-    protein_pdb_data = Protein2PDBDataset(protein_data)
+    protein_pdb_data = Mol2PDBDataset(protein_data)
     logs += data_log
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
@@ -421,7 +424,7 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, args.cpu, args.num_score_workers, args.target, device)
+    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, args.target, device)
     generator = SizeRecordGenerator(generator, result_dir)
     generator = ErrorRecordGenerator(generator, result_dir)
     norm = EmptyNorm()

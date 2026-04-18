@@ -153,7 +153,9 @@ def get_git_hash() -> str:
     p = subprocess.run('git rev-parse --short HEAD', shell=True, capture_output=True)
     return p.stdout.decode().strip()
 
-def should_show(n: int, max_interval: int|float|None=None):
+def should_show(n: int, max_interval: int|float|None=None, min_interval: int|None=None):
+    if min_interval is not None and n < min_interval:
+        return False
     if max_interval is None:
         max_interval = math.inf
     if n < max_interval:

@@ -1,33 +1,22 @@
-from typing import Literal, Optional
-from logging import getLogger
+from typing import Literal
 import numpy as np
 from torch.utils.data import Dataset
 from rdkit import Chem
-from ..chem import set_atom_order
-from .data import WrapDataset, get_rng
-from .tokenizer import SmilesTokenizer, FloatTokenizer
+from openbabel import openbabel as ob
+from ..chem import set_atom_order, get_coord_from_mol, ELEMENT_SYMBOLS
+from ..utils.path import WORKDIR
+from .data import WrapDataset, WrapTupleDataset, get_rng
+from .tokenizer import StringTokenizer2, FloatTokenizer
 from .protein import AtomRepr
 
-def element_symbols() -> list[str]:
-    table = Chem.GetPeriodicTable()
-    return [table.GetElementSymbol(i) for i in range(1, 119)]
-
-
 class MolProcessDataset(WrapDataset[Chem.Mol]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, h: bool, random: bool):
+    def __init__(self, mol_data: Dataset[Chem.Mol], base_seed: int, random: bool):
         super().__init__(mol_data)
         self.base_seed = base_seed
-        self.h = h
         self.random = random
     
     def __getitem__(self, idx: int):
         mol = self.dataset[idx]
-
-        # remove/add hydrogen
-        if self.h:
-            mol = Chem.AddHs(mol, addCoords=True)
-        else:
-            mol = Chem.RemoveHs(mol)
 
         # MolTokenizeDatasetに移しても良いと思ったが、get_finetune_dataでRenumberAtoms後のmolが必要なのでこうしているっぽい。
         rng = get_rng(self.base_seed, idx)
@@ -36,106 +25,293 @@ class MolProcessDataset(WrapDataset[Chem.Mol]):
 
 MAX_VALENCE = 10
 
-class MolTokenizer:
-    logger = getLogger(f"{__module__}.{__qualname__}")
-    def __init__(self, format: AtomRepr, h_coord: bool, coord_range: float, looper: Optional['Looper']=None):        
-        self.h_coord = h_coord
-        self.format = format
-        if self.format == 'smiles_coords':
-            self.smi_tokenizer = SmilesTokenizer()
-        self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
-        self.looper = looper
+class SetHydrogenDataset(WrapDataset[ob.OBMol|Chem.Mol]):
+    def __init__(self, dataset: Dataset[ob.OBMol|Chem.Mol], h: bool):
+        super().__init__(dataset)
+        self.h = h
+    def __getitem__(self, idx):
+        mol = self.dataset[idx]
+        if isinstance(mol, ob.OBMol):
+            if self.h:
+                success = mol.AddHydrogens()
+            else:
+                success = mol.DeleteHydrogens()
+            assert success
+        else:
+            if self.h:
+                mol = Chem.AddHs(mol, addCoords=True)
+            else:
+                mol = Chem.RemoveHs(mol)
+        return mol
 
-        self.logged = False
+class SmilesOrderDataset(WrapTupleDataset[tuple[str, np.ndarray]]):
+    def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol], order: Literal['residue', 'can', 'ran'], base_seed: int):
+        super().__init__(mol_data, 2)
+        self.order = order
+        self.base_seed = base_seed
+        # For OBMol
+        if order != 'residue':
+            self.obc = ob.OBConversion()
+            self.obc.SetOutFormat('smi')
+            self.obc.AddOption('h', self.obc.OUTOPTIONS)
+            if self.order == 'ran':
+                self.obc.AddOption('C', self.obc.OUTOPTIONS) # randomize
+            self.obc.AddOption('O', self.obc.OUTOPTIONS) # save output atom order
 
-    def tokenize(self, mol: Chem.Mol):
-        if self.looper is not None:
-            self.looper.put('mol_tokenize')
-        smi = Chem.MolToSmiles(mol, canonical=False)
-        atom_idxs = eval(mol.GetProp('_smilesAtomOutputOrder'))
-        
-        coords = mol.GetConformer().GetPositions()
-        atoms = list(mol.GetAtoms())
-        symbols = [atom.GetSymbol() for atom in atoms]
-        tokens = []
-        if self.format == 'atom_coords':
-            for i in range(mol.GetNumAtoms()):
-                ai = atom_idxs[i]
-                tokens.append(symbols[ai])
-                if self.h_coord or symbols[ai] != 'H':
-                    tokens += self.coord_tokenizer.tokenize_array(coords[ai])
-            order = list(range(len(tokens)))
-        elif self.format == 'atom_valence_coords':
-            tokenized_atom_idxs = []
-            for ai in atom_idxs:
-                tokens.append(symbols[ai])
+    def __getitem__(self, idx: int):
+        mol = self.dataset[idx]
+        if isinstance(mol, ob.OBMol):
+            if self.order == 'residue':
+                residue_idxs = np.array([atom.GetResidue().GetIdx() for atom in ob.OBMolAtomIter(mol)])
+                smi = None
+                orders = np.argsort(residue_idxs, kind='stable').tolist()
+            else:
+                smi = self.obc.WriteString(mol).strip()
+                orders = ob.toPairData(mol.GetData('SMILES Atom Order')).GetValue()
+                orders = [int(o)-1 for o in orders.split(' ')]
+        elif isinstance(mol, Chem.Mol):
+            if self.order == 'residue':
+                chain_id_is =[]
+                chain_id2i = {} # 出現した順に並べる
+                serial_numbers = []
+                for atom in mol.GetAtoms():
+                    rinfo = atom.GetPDBResidueInfo()
+                    if rinfo is None:
+                        rinfo = atom.GetNeighbors()[0].GetPDBResidueInfo()
+                    chain_id = rinfo.GetChainId()
+                    serial_numbers.append(rinfo.GetSerialNumber())
+                    if chain_id not in chain_id2i:
+                        chain_id2i[chain_id] = len(chain_id2i)
+                    chain_id_is.append(chain_id2i[chain_id])
+                orders = np.lexsort([serial_numbers, chain_id_is], ).tolist() # これがopenbabelと同じ順になる
+                smi = None
+            else:
+                if self.order == 'ran':
+                    smi = Chem.MolToSmiles(mol, doRandom=True)
+                else:
+                    smi = Chem.MolToSmiles(mol, canonical=True)
+                orders = eval(mol.GetProp('_smilesAtomOutputOrder'))
+        else:
+            raise ValueError(f"Unknown {type(mol)=}")
+        return smi, orders
+
+class AtomsDataset(WrapDataset[list[str]]):
+    """
+    Calpha炭素はCA
+    それ以外は元素記号 (2文字目は小文字 Mg等)
+    
+    """
+    def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
+        super().__init__(mol_data)
+    
+    def __getitem__(self, idx):
+        mol = self.dataset[idx]
+        if isinstance(mol, ob.OBMol):
+            atoms = []
+            for atom in ob.OBMolAtomIter(mol):
+                res = atom.GetResidue()
+                if res is not None and res.GetAtomID(atom) == ' CA ':
+                    atom = 'CA'
+                else:
+                    atom = ELEMENT_SYMBOLS[atom.GetAtomicNum()-1]
+                atoms.append(atom)
+        elif isinstance(mol, Chem.Mol):
+            atoms = []
+            for atom in mol.GetAtoms():
+                rinfo = atom.GetPDBResidueInfo()
+                if rinfo is not None and rinfo.GetName() == ' CA ':
+                    atom = 'CA'
+                else:
+                    atom = atom.GetSymbol()
+                atoms.append(atom)
+        else:
+            raise ValueError            
+        return atoms
+
+class CoordsDataset(WrapDataset[np.ndarray]):
+    def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
+        super().__init__(mol_data)
+    
+    def __getitem__(self, idx):
+        mol = self.dataset[idx]
+        if isinstance(mol, ob.OBMol):
+            return get_coord_from_mol(mol)
+        else:
+            return mol.GetConformer().GetPositions()
+
+class RemainValencesDataset(Dataset[list[int]]):
+    """
+    こちらは既にorder順に並べ替えられたものを必要とする。
+    
+    """
+    def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol], orders_data: Dataset[list[int]]):
+        self.mol_data = mol_data
+        self.orders_data = orders_data
+    def __getitem__(self, idx: int):
+        mol = self.mol_data[idx]
+        orders = self.orders_data[idx]
+
+        if isinstance(mol, ob.OBMol):
+            remain_valences = []
+            added_idxs = set()
+            for idx in orders:
+                atom = mol.GetAtomById(idx)
                 remain_valence = 0
-                for bond in atoms[ai].GetBonds():
-                    other_idx = bond.GetBeginAtomIdx()
-                    if other_idx == ai:
-                        other_idx = bond.GetEndAtomIdx()
-                    if other_idx not in tokenized_atom_idxs:
+                for natom in ob.OBAtomAtomIter(atom):
+                    if natom.GetId() not in added_idxs:
                         remain_valence += 1
-                tokens.append(str(remain_valence))
-                if self.h_coord or symbols[ai] != 'H':
-                    tokens += self.coord_tokenizer.tokenize_array(coords[ai])
-                tokenized_atom_idxs.append(ai)
-            order = list(range(len(tokens)))
+                remain_valences.append(remain_valence)
+                added_idxs.add(idx)
+        else:
+            remain_valences = []
+            added_idxs = set()
+            for o in orders:
+                atom = mol.GetAtomWithIdx(o)
+                remain_valence = 0
+                for natom in atom.GetNeighbors():
+                    if natom.GetIdx() not in added_idxs:
+                        remain_valence += 1
+                remain_valences.append(remain_valence)
+                added_idxs.add(o)
+        return remain_valences
+
+class MolTokenizeDataset(Dataset[list[str]]):
+    def __init__(self, 
+            atoms_data: Dataset[list[str]],
+            coords_data: Dataset[np.ndarray], 
+            smi_data: Dataset[str],
+            orders_data: Dataset[list[int]],
+            remain_valences_data: Dataset[list[int]],
+            format: Literal['atoms_coords', 'atom_coords', 'atom_valence_coords', 'smiles_coords', 'smile_coords'], 
+            coord_range: float,
+            smiles_voc_dir: str,
+            heavy: AtomRepr, h: AtomRepr
+    ):
+        self.atoms = atoms_data
+        self.coords = coords_data
+        self.smi = smi_data
+        self.orders = orders_data
+        self.remain_valences = remain_valences_data
+        self.format = format
+        self.smiles_voc_dir = smiles_voc_dir
+        self.heavy = heavy
+        self.h = h
+
+        self.coord_tokenizer = FloatTokenizer("mol coord", -coord_range, coord_range)
+        if self.format in ['smiles_coords', 'smile_coords']:
+            self.smi_tokenizer = StringTokenizer2(f"{WORKDIR}/cplm/src/data/vocs/{smiles_voc_dir}")
+        if self.format == 'smile_coords':
+            with open(f"{WORKDIR}/cplm/src/data/vocs/{smiles_voc_dir}/non_atom_tokens.txt") as f:
+                self.non_atom_tokens = f.read().splitlines()
+
+
+    def __getitem__(self, idx: int) -> tuple[list[str], list[int]]:
+        atoms = self.atoms[idx]
+        coords = self.coords[idx]
+        orders = self.orders[idx]
+        atom2repr = {'H': self.h, 'CA': 'all'} # others: self.heavy
+        reprs = [atom2repr.get(atom, self.heavy) for atom in atoms]
+        if self.format in ['atom_coords']:
+            tokens = []
+            for o in orders:
+                if reprs[o] != 'none':
+                    tokens.append(atoms[o])
+                    if reprs[o] == 'all':
+                        tokens += self.coord_tokenizer.tokenize_array(coords[o])
+            poss = list(range(len(tokens)))
+        elif self.format == 'atom_valence_coords':
+            remain_valences = self.remain_valences[idx]
+            tokens = []
+            for i, o in enumerate(orders):
+                if reprs[o] != 'none':
+                    tokens += [atoms[o], str(remain_valences[i])]
+                    if reprs[o] == 'all':
+                        tokens += self.coord_tokenizer.tokenize_array(coords[o])
+            poss = list(range(len(tokens)))
         elif self.format == 'ordered_atoms_coords':
             atom_tokens = []
             coord_tokens = []
-            atom_order = []
-            coord_order = []
-            x = 0
-            for i in range(len(symbols)):
-                atom_tokens.append(symbols[i])
-                atom_order.append(x)
-                x += 1
-                if self.h_coord or symbols[i] != 'H':
-                    coord_token = self.coord_tokenizer.tokenize_array(coords[i])
-                    coord_tokens += coord_token
-                    coord_order += list(range(x, x+len(coord_token)))
-                    x += len(coord_token)
-            tokens = atom_tokens+['[XYZ]']+coord_tokens
-            order = atom_order+[x]+coord_order
+            atom_poss = []
+            coord_poss = []
+            pos = 0
+            for o in orders:
+                if reprs[o] != 'none':
+                    atom_tokens.append(atoms[o])
+                    atom_poss.append(pos)
+                    pos += 1
+                    if reprs[o] == 'all':
+                        coord_tokens += self.coord_tokenizer.tokenize_array(coords[o])
+                        coord_poss.append(list(range(pos, pos+6)))
+                        pos += 6
+            tokens = atom_tokens + ['[XYZ]'] + coord_tokens
+            poss = atom_poss + [pos] + coord_poss
+
         elif self.format == 'atoms_coords':
-            coord_atom_idxs = [ai for ai in atom_idxs if (self.h_coord or symbols[ai] != 'H')]
-            tokens = [symbols[ai] for ai in atom_idxs] + ['[XYZ]'] \
-                    + self.coord_tokenizer.tokenize_array(coords[coord_atom_idxs].ravel())
-            order = list(range(len(tokens)))
+            tokens = [atoms[o] for o in orders if reprs[o] != 'none']+['[XYZ]']
+            coord_orders = [o for o in orders if reprs[o] == 'all']
+            tokens += self.coord_tokenizer.tokenize_array(coords[coord_orders].ravel())
+            poss = list(range(len(tokens)))
         elif self.format == 'smiles_coords':
-            tokens = self.smi_tokenizer.tokenize(smi)
-            shown_coords = np.concatenate([coords[ai] 
-                    for ai in atom_idxs if (symbols[ai] != 'H' or self.h_coord)])
-            tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(shown_coords)
-            order = list(range(len(tokens)))
+            smi = self.smi[idx]
+            tokens = self.smi_tokenizer.tokenize(smi)+['[XYZ]']
+            coord_orders = [o for o in orders if reprs[o] == 'all']
+            tokens += ['[XYZ]']+self.coord_tokenizer.tokenize_array(coords[coord_orders].ravel())
+            poss = list(range(len(tokens)))
+        elif self.format == 'smile_coords':
+            smi = self.smi[idx]
+            smi_tokens = self.smi_tokenizer.tokenize(smi)            
+            tokens = []
+            i = 0
+            for it, smi_token in enumerate(smi_tokens):
+                tokens.append(smi_token)
+                if smi_token not in self.non_atom_tokens:
+                    try:
+                        o = orders[i]
+                    except Exception as e:
+                        print(f"{smi_tokens=}")
+                        print(f"{len(orders)=}")
+                        print(f"{len(atoms)=}")
+                        print(f"{it=}")
+                        print(f"{len(tokens)=}", flush=True)
+                        print(f"{len(smi_tokens)=}", flush=True)
+                        raise e
+
+                    if reprs[o] == 'all':
+                        tokens += self.coord_tokenizer.tokenize_array(coords[o])
+                    i += 1
+            assert i == len(atoms)
+            poss = list(range(len(tokens)))
         else:
             raise ValueError(f"Unknown format={self.format}")
-        self.logger.info("Tokenize ended.")
-        return tokens, order
+        return tokens, poss
+
     def vocs(self):
         if self.format == 'atom_coords':
-            return set(element_symbols()) | self.coord_tokenizer.vocs()
+            return set(ELEMENT_SYMBOLS) | self.coord_tokenizer.vocs() | {'CA'}
         elif self.format == 'atom_valence_coords':
-            return set(element_symbols()) | self.coord_tokenizer.vocs() | {str(i) for i in range(MAX_VALENCE)}
+            return set(ELEMENT_SYMBOLS) | self.coord_tokenizer.vocs() | {str(i) for i in range(MAX_VALENCE)} | {'CA'}
         elif self.format in ['ordered_atoms_coords', 'atoms_coords']:
-            return set(element_symbols()) | self.coord_tokenizer.vocs() | {'[XYZ]'}
+            return set(ELEMENT_SYMBOLS) | self.coord_tokenizer.vocs() | {'[XYZ]', 'CA'}
         elif self.format == 'smiles_coords':
             return self.smi_tokenizer.vocs() | self.coord_tokenizer.vocs() | {'[XYZ]'}
+        elif self.format == 'smile_coords':
+            return self.smi_tokenizer.vocs() | self.coord_tokenizer.vocs()
 
+    def __len__(self):
+        return len(self.atoms)
 
-
-class MolTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol], *, format: Literal['smiles_coords', 'atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: float, h_coord: bool=True):
-        super().__init__(mol_data)
-        self.mol_data = mol_data
-        self.mol_tokenizer = MolTokenizer(format, h_coord, coord_range)
-        
+class Mol2PDBDataset(WrapDataset[str]):
+    def __init__(self, dataset: Dataset[ob.OBMol|Chem.Mol]):
+        super().__init__(dataset)
+        self.obc = ob.OBConversion()
+        self.obc.SetOutFormat('pdb')
     def __getitem__(self, idx: int):
-        return self.mol_tokenizer.tokenize(self.mol_data[idx])
-
-    def vocs(self) -> set[str]:
-        return self.mol_tokenizer.vocs()
+        protein = self.dataset[idx]
+        if isinstance(protein, ob.OBMol):
+            pdb = self.obc.WriteString(protein)
+        else:
+            pdb = Chem.MolToPDBBlock(protein)
+        return pdb
 
 class RandomScoreDataset(Dataset[float]):
     def __init__(self, min: float, max: float, size: int, seed: int):

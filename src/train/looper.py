@@ -9,10 +9,11 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
+from torch.utils.data import Dataset, get_worker_info
 from ..utils import should_show
 from ..utils.logger import NO_DUP
 from ..utils.notice import notice, SLACK_URL
-
+from ..data.data import WrapDataset
 """
 Basic usage:
 
@@ -40,9 +41,9 @@ class Looper:
     def end_loops(self):
         pass
     def state_dict(self) -> dict:
-        raise NotImplementedError
+        raise NotImplementedError(type(self).__name__)
     def load_state_dict(self):
-        raise NotImplementedError
+        raise NotImplementedError(type(self).__name__)
 
 class Loopers(list[Looper], Looper):
     def start_loops(self):
@@ -57,6 +58,11 @@ class Loopers(list[Looper], Looper):
     def end_loops(self):
         for streamer in self:
             streamer.end_loops()
+    def state_dict(self) -> dict:
+        return {str(i): looper.state_dict() for i, looper in enumerate(self)} 
+    def load_state_dict(self, state: dict):
+        for k, s in state.items():
+            self[int(k)].load_state_dict(s)
 
 class LogLooper(Looper):
     def __init__(self, logger: Logger, interval: int, init: int, loop_name: str, loops_name: str|None=None):
@@ -105,7 +111,7 @@ class TimeLooper(Looper):
         self.process2t[self.cur_process] += cur_end_t - self.cur_start_t
         
 
-        if process not in self.process2t and process != 'init':
+        if process not in self.process2t and process != 'init' and process not in self.process_graph[self.cur_process]:
             self.process_graph[process].add(self.cur_process)
         self.cur_start_t = cur_end_t
         self.cur_process = process

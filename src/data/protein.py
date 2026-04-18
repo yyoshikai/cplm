@@ -1,18 +1,25 @@
 import io
+import itertools as itr
 from dataclasses import dataclass
 from typing import Literal, Optional
 import numpy as np
-
-from openbabel.openbabel import OBMol, OBMolAtomIter, OBConversion
+from openbabel.openbabel import OBMol
+from rdkit import Chem
 from Bio import PDB
 from Bio.PDB.Residue import Residue
 from torch.utils.data import Dataset
+from .data import WrapDataset
 from ..utils import slice_str
-from ..chem import get_coord_from_mol, obmol2rdmol, set_atom_order, obmol2pdb, pdb2obmol
-from .data import WrapDataset, get_rng
+from ..chem import obmol2pdb, pdb2obmol
 from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
 
 AtomRepr = Literal['none', 'atom', 'all']
+
+non_metals = [
+    'H', 'He', 'B', 'C', 'N', 'O', 'F', 'Ne',
+    'Si', 'P', 'S', 'Cl', 'Ar', 'As', 'Se', 'Br', 'Kr',
+    'Te', 'I', 'Xe', 'At', 'Rn'
+]
 
 @dataclass
 class Pocket:
@@ -32,14 +39,15 @@ def pocket2pdb(pocket: Pocket, out_path: str):
             f.write(f"ATOM  {ia:5}  {atom:<3} UNK A   1    {coord[0]:8.03f}{coord[1]:8.03f}{coord[1]:8.03f}  1.00 40.00           {atom[0]}  \n")
 
 class _ProteinProcessSelect(PDB.Select):
-    def __init__(self, ion: bool, ligand: bool, water: bool):
+    def __init__(self, ion: bool, ligand: bool, water: bool, amino: bool=True):
         self.ion = ion
         self.ligand = ligand
         self.water = water
+        self.amino = amino
     def accept_residue(self, residue: Residue):
         id0 = residue.get_id()[0]
         if id0 == ' ': # amino acid
-            return True
+            return self.amino
         elif id0 == 'W':
             return self.water
         elif id0[:2] == 'H_':
@@ -51,22 +59,49 @@ class _ProteinProcessSelect(PDB.Select):
             raise ValueError
 
 
-class ProteinProcessDataset(WrapDataset[OBMol]):
-    def __init__(self, protein_data: Dataset[OBMol], ion: bool, ligand: bool, water: bool):
-        super().__init__(protein_data)
+class SelectDataset(WrapDataset[OBMol|Chem.Mol]):
+    def __init__(self, mol_data: Dataset[OBMol|Chem.Mol], ion: bool, ligand: bool, water: bool):
+        super().__init__(mol_data)
         self.select = _ProteinProcessSelect(ion, ligand, water)
+        self.ion = ion
+        self.ligand = ligand
+        self.water = water
 
     def __getitem__(self, idx: int):
-        protein = self.dataset[idx]
-        pdb = obmol2pdb(protein)
-        parser = PDB.PDBParser(QUIET=True)
-        protein = parser.get_structure('a', io.StringIO(pdb))
-        pdbio = PDB.PDBIO()
-        string_io = io.StringIO()
-        pdbio.set_structure(protein)
-        pdbio.save(string_io, self.select)
-        pdb = string_io.getvalue()
-        return pdb2obmol(pdb)
+        mol = self.dataset[idx]
+        if isinstance(mol, OBMol):
+            pdb = obmol2pdb(mol)
+            parser = PDB.PDBParser(QUIET=True)
+            mol = parser.get_structure('a', io.StringIO(pdb))
+            pdbio = PDB.PDBIO()
+            string_io = io.StringIO()
+            pdbio.set_structure(mol)
+            pdbio.save(string_io, self.select)
+            pdb = string_io.getvalue()
+            mol = pdb2obmol(pdb)
+        else:
+            rw_mol = Chem.RWMol(mol)
+            remove_atom_idxss = []
+            for frag_idxs in Chem.GetMolFrags(mol):
+                if len(frag_idxs) == 1:
+                    atom = mol.GetAtomWithIdx(frag_idxs[0])
+                    if atom.GetSymbol() == 'O':
+                        remain = self.water
+                    elif atom.GetSymbol() in non_metals: # NH3, CH4, etc.
+                        remain = self.ligand
+                    else: # Fe, Mg, etc.
+                        remain = self.ion
+                else:
+                    if all(mol.GetAtomWithIdx(idx).GetPDBResidueInfo().GetIsHeteroAtom() for idx in frag_idxs):
+                        remain = self.ligand
+                    else:
+                        remain = True
+                if not remain:
+                    remove_atom_idxss.append(frag_idxs)
+            for idx in sorted(itr.chain(*remove_atom_idxss), reverse=True):
+                rw_mol.RemoveAtom(idx)
+            mol = rw_mol.GetMol()
+        return mol
 
 class ProteinTokenizer:
     def __init__(self, *, heavy: AtomRepr, h: AtomRepr, format, coord_range):
@@ -130,17 +165,6 @@ class ProteinTokenizer:
         return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
                 | (set() if self.format == 'atom_coords' else {'[XYZ]'})
 
-class Protein2PDBDataset(WrapDataset[str]):
-    def __init__(self, dataset: Dataset[OBMol]):
-        super().__init__(dataset)
-        self.obc = OBConversion()
-        self.obc.SetOutFormat('pdb')
-    def __getitem__(self, idx: int):
-        protein = self.dataset[idx]
-        pdb = self.obc.WriteString(protein)
-        return pdb
-
-
 # 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
 class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     def __init__(self, pocket_data: Dataset[Pocket], *,
@@ -158,52 +182,3 @@ class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
     
     def vocs(self) -> set[str]:
         return self.protein_tokenizer.vocs()
-
-from .molecule import MolTokenizer
-class ProteinTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, protein_data: Dataset[OBMol], *,
-            heavy: AtomRepr, h: AtomRepr, format, coord_range: int, order: Literal['residue', 'can', 'ran'], base_seed: int, looper: Optional['Looper']=None):
-        super().__init__(protein_data)
-        self.protein_data = protein_data
-
-        self.order = order
-        if order == 'residue':
-            self.tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
-        else:
-            self.tokenizer = MolTokenizer(format, h_coord=h == 'all', coord_range=coord_range, looper=looper)
-
-        self.h = h
-        self.base_seed = base_seed
-        self.looper = looper
-
-    def __getitem__(self, idx: int):
-        protein = self.protein_data[idx]
-
-        # add/remove hydrogen
-        if self.h == 'none':
-            success = protein.DeleteHydrogens()
-        else:
-            success = protein.AddHydrogens()
-        assert success
-
-        if self.order == 'residue':
-            # Order atoms
-            atoms = np.array([atom.GetResidue().GetAtomID(atom).strip() for atom in OBMolAtomIter(protein)])
-            residue_idxs = np.array([atom.GetResidue().GetIdx() for atom in OBMolAtomIter(protein)])
-            coords = get_coord_from_mol(protein)
-            orders = np.argsort(residue_idxs, kind='stable')
-            atoms = atoms[orders]
-            coords = coords[orders]
-            # tokenize
-            tokens, orders = self.tokenizer(atoms, coords)
-        else:
-            if self.looper is not None:
-                self.looper.put('obmol2rdmol')
-            protein = obmol2rdmol(protein, sanitize=False) # sanitize=True raises errors but not needed for following processes
-            if self.looper is not None:
-                self.looper.put('set_atom_order')
-            protein = set_atom_order(protein, self.order == 'ran', get_rng(self.base_seed, idx))
-            tokens, orders = self.tokenizer.tokenize(protein)
-        return tokens, orders
-    def vocs(self) -> set[str]:
-        return self.tokenizer.vocs()

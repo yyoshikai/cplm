@@ -25,12 +25,12 @@ from transformers.trainer_pt_utils import get_parameter_names
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from schedulefree import RAdamScheduleFree
 
-from ..data import RevealIterator
+from ..data import RevealIterator, add_time_hook, DatasetTimeHook
 from ..data.tokenizer import VocEncoder
 from .collator import DDPStringCollateLoader, InfiniteLoader
 from ..model import TransformerModel, MambaModel
 from ..model.model import Model
-from ..utils import git_commit, get_git_hash, should_show
+from ..utils import git_commit, get_git_hash, should_show, setdefault
 from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, add_rotating_handler, set_third_party_logger
 from ..utils.model import get_num_params, get_model_size
 from ..utils.path import cleardir
@@ -182,7 +182,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
             'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
-            'forward_backward_time', 'optimizer'])
+            'forward_backward_time', 'optimizer', 'getitem_time'])
     parser.add_argument('--commit', action='store_false', dest='no_commit')
 
 def add_pretrain_args(parser: ArgumentParser):
@@ -191,14 +191,18 @@ def add_pretrain_args(parser: ArgumentParser):
     """
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
     # pocket-heavy-coordはデフォルトで入れるようにした。
-    parser.add_argument("--lig-randomize", action='store_true')
-    parser.add_argument("--lig-format", choices=['smiles_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
     parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
-    parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
+    parser.add_argument('--lig-order', default='ran')
+    parser.add_argument("--lig-format", choices=['smiles_coords', 'smile_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
+    parser.add_argument("--lig-cls", choices=['rdkit', 'ob'], required=True)
+
     parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
-    parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords'], default='atoms_coords')
+    parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
-    parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion', 'ligand', 'water'], nargs='*')
+    parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords', 'smiles_coords', 'smile_coords'], default='atoms_coords')
+    parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion'], nargs='*')
+    parser.add_argument("--pocket-cls", choices=['rdkit', 'ob'], required=True)
+    parser.add_argument("--pocket-max-n-token", type=int, required=True)
     parser.add_argument("--coord-range", type=int, default=250)
     # model
     parser.add_argument('--mamba', action='store_true')
@@ -207,6 +211,9 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument('--d-model', type=int, default=768)
     ## compatibility
     parser.add_argument("--model-bfloat16", action='store_true')
+    parser.add_argument("--smiles-voc-dir", default='smiles3')
+    parser.add_argument("--lig-pre-coord", action='store_true')
+    parser.add_argument("--pocket-pre-coord", action='store_true')
 
 def update_args(args: Namespace) -> Namespace:
     """
@@ -246,10 +253,8 @@ def update_args(args: Namespace) -> Namespace:
     [delattr(args, name) for name in pocket_arg_names if hasattr(args, name)]
 
     # 260312 d_model, n_layer
-    if not hasattr(args, 'n_layer'):
-        args.n_layer = None
-    if not hasattr(args, 'd_model'):
-        args.d_model = 768
+    setdefault(args, 'n_layer', None)
+    setdefault(args, 'd_model', 768)
 
     # 260313 atom_reprs
     atom_reprs = {
@@ -268,12 +273,37 @@ def update_args(args: Namespace) -> Namespace:
             delattr(args, name)
     
     # 260314 pocket_order
-    if not hasattr(args, 'pocket_order'):
-        args.pocket_order = 'residue'
+    setdefault(args, 'pocket_order', 'residue')
 
     # 260318 pocket_hetatm
-    if not hasattr(args, 'pocket_hetatm'):
-        args.pocket_hetatm = ['ion', 'ligand', 'water']
+    setdefault(args, 'pocket_hetatm', ['ion', 'ligand', 'water'])
+
+    # 260411 protein_cls -> 260417 pocket_cls
+    if not hasattr(args, 'pocket_cls'):
+        if hasattr(args, 'protein_cls'):
+            args.pocket_cls = args.protein_cls
+            delattr(args, 'protein_cls')
+        else:
+            args.pocket_cls = 'ob'
+
+    # 260411 smiles_voc_file, 260413 smiles_voc_dir
+    if not hasattr(args, 'smiles_voc_dir'):
+        smiles_voc_file = getattr(args, 'smiles_voc_file', 'smiles_tokens')
+        smiles_voc_dir = {
+            'smiles_tokens': 'smiles',
+            'smiles_tokens2': 'smiles2',
+        }[smiles_voc_file]
+        setattr(args, 'smiles_voc_dir', smiles_voc_dir)
+
+    if not hasattr(args, 'lig_order'):
+        setattr(args, 'lig_order', 'ran' if args.lig_randomize else 'can')
+        delattr(args, 'ilg_randomize')
+
+    # 260417 pre_coord
+    setdefault(args, 'lig_pre_coord', False)
+    setdefault(args, 'pocket_pre_coord', True)
+
+    setdefault(args, 'pocket_max_n_token', math.inf)
 
     return args
 
@@ -591,6 +621,10 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     # DataLoader
     if rank == DATA_RANK['train']:
         train_data = ConcatDataset(train_datas)
+        if 'getitem_time' in args.check:
+            dataset_time_hook = DatasetTimeHook(logger, 16 // max(1, args.num_workers), None)
+            train_data = add_time_hook(train_data, dataset_time_hook)
+            
         sampler = RandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
         train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=True, persistent_workers=False, prefetch_factor=10 if args.num_workers > 0 else None)
         train_loader = InfiniteLoader(train_loader)
@@ -693,7 +727,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         ## get batch
         train_looper.put('get_batch_iter')
         token_batch, position_batch, weight_batch = train_iter.__next__()
-        train_looper.put('get_batch_slice_token')
+        train_looper.put('process_batch')
         input, target = token_batch[:-1], token_batch[1:]
         train_looper.put('get_batch_slice_position')
         position = position_batch[:-1]
