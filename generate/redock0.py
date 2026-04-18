@@ -101,7 +101,7 @@ if __name__ == '__main__':
 
     if not fargs.protein:
         raise NotImplementedError
-    protein = PosebustersV2ProteinDataset(fargs.protein_cls)
+    protein = PosebustersV2ProteinDataset(fargs.pocket_cls)
     lig =PosebustersV2LigandDataset()
     score = RandomScoreDataset(-12, -10, len(protein), args.seed)
     raw_data = StackDataset(protein, lig, score)

@@ -39,14 +39,15 @@ def pocket2pdb(pocket: Pocket, out_path: str):
             f.write(f"ATOM  {ia:5}  {atom:<3} UNK A   1    {coord[0]:8.03f}{coord[1]:8.03f}{coord[1]:8.03f}  1.00 40.00           {atom[0]}  \n")
 
 class _ProteinProcessSelect(PDB.Select):
-    def __init__(self, ion: bool, ligand: bool, water: bool):
+    def __init__(self, ion: bool, ligand: bool, water: bool, amino: bool=True):
         self.ion = ion
         self.ligand = ligand
         self.water = water
+        self.amino = amino
     def accept_residue(self, residue: Residue):
         id0 = residue.get_id()[0]
         if id0 == ' ': # amino acid
-            return True
+            return self.amino
         elif id0 == 'W':
             return self.water
         elif id0[:2] == 'H_':

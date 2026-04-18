@@ -115,7 +115,7 @@ if __name__ == '__main__':
     assert targs.pocket_heavy == 'all'
     assert targs.pocket_format in ['ordered_atoms_coords', 'atoms_coords']
 
-    protein = PDBUniMolRandomDataset('valid', targs.protein_cls)
+    protein = PDBUniMolRandomDataset('valid', targs.pocket_cls, targs.pocket_h, targs.pocket_max_n_token, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
     protein = SelectDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
     protein = CacheDataset(protein)
     protein = SetHydrogenDataset(protein, targs.pocket_h != 'none')

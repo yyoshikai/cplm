@@ -202,6 +202,7 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords', 'smiles_coords', 'smile_coords'], default='atoms_coords')
     parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion'], nargs='*')
     parser.add_argument("--pocket-cls", choices=['rdkit', 'ob'], required=True)
+    parser.add_argument("--pocket-max-n-token", type=int, required=True)
     parser.add_argument("--coord-range", type=int, default=250)
     # model
     parser.add_argument('--mamba', action='store_true')
@@ -301,6 +302,8 @@ def update_args(args: Namespace) -> Namespace:
     # 260417 pre_coord
     setdefault(args, 'lig_pre_coord', False)
     setdefault(args, 'pocket_pre_coord', True)
+
+    setdefault(args, 'pocket_max_n_token', math.inf)
 
     return args
 
@@ -724,6 +727,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         ## get batch
         train_looper.put('get_batch')
         token_batch, position_batch, weight_batch = train_iter.__next__()
+        train_looper.put('process_batch')
         input, target = token_batch[:-1], token_batch[1:]
         position = position_batch[:-1]
         max_len, batch_size = token_batch.shape

@@ -44,7 +44,9 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
         if repeat == 0: continue
         
         data_split = 'valid' if 'data_epoch' in args.check else split
-        if dtype0 == 'pocket':
+        if cls == PDBUniMolRandomDataset:
+            raw = PDBUniMolRandomDataset(data_split, args.pocket_cls, args.pocket_h, args.pocket_max_n_token, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
+        elif dtype0 == 'pocket':
             raw = cls(split=data_split)
         else:
             raw = cls(data_split, getattr(args, f"{dtype}_cls"))
@@ -158,12 +160,12 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     if raw_data is None:
         if args.targetdiff:
             if args.protein:
-                raw_data = TargetDiffScafCDProteinDataset(split, args.protein_cls)
+                raw_data = TargetDiffScafCDProteinDataset(split, args.pocket_cls)
             else:
                 raw_data = TargetDiffScafCDDataset(split)
         else:
             if args.protein:
-                raw_data = CDProteinDataset(split, args.protein_cls)
+                raw_data = CDProteinDataset(split, args.pocket_cls)
             else:
                 raw_data = CDDataset(split)
     if sample != 1.0:
