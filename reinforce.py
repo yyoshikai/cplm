@@ -139,6 +139,16 @@ class ReinforceDataIter:
         idxs = torch.tensor(idxs, dtype=torch.long, device=self.device)
         return idxs, pdbs, prompt_tokens, positions
 
+def send_cache(cache: dict, tgt_rank: int):
+
+    pass
+
+def receive_cache(cache: dict, tgt_rank: int):
+
+    pass
+
+
+
 class Generator:
     def __init__(self, 
             voc_encoder: VocEncoder,
@@ -398,7 +408,6 @@ def main():
     logs += data_log
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
-    # data_iter = ReinforceDataIter(train_data, device, args.batch_size, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
 
     _, _, DATA_RANK = get_process_ranks()
     data_rank = DATA_RANK['train']
@@ -503,10 +512,10 @@ def main():
                 next_i_gen += b
                 if next_i_gen >= n_gen:
                     plogger.debug(f"{t=}: OK") 
-                    return -1
+                    return 1
             plogger.debug(f"{t=}: NG")
-            return 1
-        t, _ = solve_increasing_fn(is_ok, 10, 0.5)
+            return -1
+        _, t = solve_increasing_fn(is_ok, 10, 0.5)
 
         left_idxs = itr.chain(*[[i]*args.gen_per_prompt for i in range(args.prompt_per_opt)])
         idx2cached_rank = {}
@@ -556,7 +565,7 @@ def main():
                         if rank == ddp_rank:
                             idx2cache[idx] = receive_cache(idx2cached_rank[idx])
                         elif idx2cached_rank[idx] == rank:
-                            send_cache(idx2cache[idx])
+                            send_cache(idx2cache[idx], rank)
             
             ## generate
             batch_idxs = batch_idxss[ddp_rank]
