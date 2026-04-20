@@ -141,9 +141,11 @@ class StringCollateIterator(Iterable[list[T_in]]):
 
 
     def get_batch_size(self, length: int):
+        if self.proc_logger is not None:
+            self.proc_logger.debug(f"get_batch_size {length=} {self.gpu_size=}")
         bsz =  solve_increasing_fn_left(lambda bsz: self.gpuuse_getter(bsz, length)-self.gpu_size, 16)
         if self.proc_logger is not None:
-            self.proc_logger.debug(f"get_batch_size {length=} {self.gpu_size=}, {bsz=}")
+            self.proc_logger.debug(f"get_batch_size {bsz=}")
         return bsz
 
 class DDPStringCollateLoader(Iterable[T_out]):
