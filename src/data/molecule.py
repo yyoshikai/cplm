@@ -25,6 +25,22 @@ class MolProcessDataset(WrapDataset[Chem.Mol]):
 
 MAX_VALENCE = 10
 
+class RemoveIsotopeDataset(WrapDataset[ob.OBMol|Chem.Mol]):
+    def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
+        super().__init__(mol_data)
+    
+    def __getitem__(self, idx: int):
+        mol = self.dataset[idx]
+        if isinstance(mol, ob.OBMol):
+            for atom in ob.OBMolAtomIter(mol):
+                atom.SetIsotope(0)
+        elif isinstance(mol, Chem.Mol):
+            for atom in mol.GetAtoms():
+                atom.SetIsotope(0)
+        else:
+            raise ValueError
+        return mol
+
 class SetHydrogenDataset(WrapDataset[ob.OBMol|Chem.Mol]):
     def __init__(self, dataset: Dataset[ob.OBMol|Chem.Mol], h: bool):
         super().__init__(dataset)
