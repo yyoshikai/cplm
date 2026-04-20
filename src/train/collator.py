@@ -2,7 +2,7 @@ import os, math
 import itertools as itr
 from bisect import bisect_right
 from collections.abc import Callable, Iterable, Generator
-from logging import getLogger
+from logging import getLogger, Logger
 from typing import Optional, TypeVar
 import torch
 from torch import Tensor
@@ -53,7 +53,8 @@ class StringCollateIterator(Iterable[list[T_in]]):
             log_large_freq: int|float, 
             large_item_file: str|None=None, 
             looper: Looper|None=None, 
-            length_getter: Callable[[T_in], int]=lambda item: len(item[0])):
+            length_getter: Callable[[T_in], int]=lambda item: len(item[0]), 
+            proc_logger: Logger|None=None):
 
         self.loader = loader
         self.n_batch = n_batch
@@ -61,6 +62,7 @@ class StringCollateIterator(Iterable[list[T_in]]):
         self.gpuuse_getter = gpuuse_getter
         self.length_getter = length_getter
         self.looper = looper
+        self.proc_logger = proc_logger
 
         # logging
         self.large_item_file = large_item_file
@@ -139,13 +141,15 @@ class StringCollateIterator(Iterable[list[T_in]]):
 
 
     def get_batch_size(self, length: int):
-        return solve_increasing_fn_left(lambda bsz: self.gpuuse_getter(bsz, length)-self.gpu_size, 16)
-
+        bsz =  solve_increasing_fn_left(lambda bsz: self.gpuuse_getter(bsz, length)-self.gpu_size, 16)
+        if self.proc_logger is not None:
+            self.proc_logger.debug(f"get_batch_size {length=} {self.gpu_size=}, {bsz=}")
+        return bsz
 
 class DDPStringCollateLoader(Iterable[T_out]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, loader: Optional[Iterable[T_in]], collator: Callable[[T_in], T_out], gpuuse_getter: Callable[[int, int], float], gpu_size: float, device: torch.device, log_large_freq: int|float, main_rank: int=0,
-    large_item_file: str|None=None, looper: Looper|None=None, length_getter: Callable[[T_in], int]|None=lambda item: len(item[0])):
+    large_item_file: str|None=None, looper: Looper|None=None, length_getter: Callable[[T_in], int]|None=lambda item: len(item[0]), proc_logger: Logger|None=None):
         self.size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.main_rank = main_rank
@@ -156,7 +160,7 @@ class DDPStringCollateLoader(Iterable[T_out]):
 
         if self.is_main:
             self.batch_iterator = StringCollateIterator(loader, self.size, 
-                    gpu_size, gpuuse_getter, log_large_freq, large_item_file, looper, length_getter)
+                    gpu_size, gpuuse_getter, log_large_freq, large_item_file, looper, length_getter, proc_logger)
         else:
             self.batch_iterator = itr.repeat(None)
 

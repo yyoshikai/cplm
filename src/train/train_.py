@@ -182,7 +182,7 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--test", action='store_true')
     parser.add_argument("--check", nargs='*', default=[], choices=['early_stop', 
             'data_dist', 'data_epoch', 'data_loading', 'grad', 'random_state', 
-            'forward_backward_time', 'optimizer', 'getitem_time'])
+            'forward_backward_time', 'optimizer', 'getitem_time', 'get_gpuuse'])
     parser.add_argument('--commit', action='store_false', dest='no_commit')
 
 def add_pretrain_args(parser: ArgumentParser):
@@ -638,7 +638,8 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
     get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel=args.sdp_kernel)
     train_loader = DDPStringCollateLoader(train_loader, partial(collate, pad_token=voc_encoder.pad_token), get_gpuuse, 
             args.gpu_size, device, 100000, DATA_RANK['train'], 
-            f"{result_dir}/data/train_large_items.csv", train_looper if 'data_loading' in args.check else None)
+            f"{result_dir}/data/train_large_items.csv", train_looper if 'data_loading' in args.check else None, 
+            proc_logger=proc_logger if 'get_gpuuse' in args.check else None)
     train_iter = train_loader.__iter__()
 
     # criterion
