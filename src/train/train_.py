@@ -25,7 +25,7 @@ from transformers.trainer_pt_utils import get_parameter_names
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from schedulefree import RAdamScheduleFree
 
-from ..data import RevealIterator, add_time_hook, DatasetTimeHook
+from ..data import RevealIterator, LogIterator, add_time_hook, DatasetTimeHook
 from ..data.tokenizer import VocEncoder
 from .collator import DDPStringCollateLoader, InfiniteLoader
 from ..model import TransformerModel, MambaModel
@@ -628,6 +628,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         sampler = RandomSampler(train_data, generator=torch.Generator().manual_seed(args.seed))
         train_loader = DataLoader(train_data, batch_size=None, sampler=sampler, num_workers=args.num_workers, pin_memory=True, persistent_workers=False, prefetch_factor=10 if args.num_workers > 0 else None)
         train_loader = InfiniteLoader(train_loader)
+        train_loader = LogIterator(train_loader, 'train_data')
         if check_data_dist:
             train_loader = RevealIterator(train_loader, 'train')
             train_reveal_loader = train_loader

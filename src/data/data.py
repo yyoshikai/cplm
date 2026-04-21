@@ -206,6 +206,18 @@ def is_main_worker() -> bool:
     worker_info = get_worker_info()
     return worker_info is None or worker_info.id == 0
 
+class LogIterator(Iterable[T]):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+    def __init__(self, iterable: Iterable[T], name):
+        self.iterable = iterable
+        self.name = name
+    
+    def __iter__(self):
+        for i, item in enumerate(self.iterable):
+            if should_show(i, 10000):
+                logger.debug(f"Iterable {self.name}[{i}] yielded.")
+                yield item
+
 class RevealIterator(Iterable[T]):
     logger = getLogger(f'dexs.{__module__}.{__qualname__}')
     def __init__(self, iterable: Iterable[T], name):
