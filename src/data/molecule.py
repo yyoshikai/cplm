@@ -171,7 +171,7 @@ class RemainValencesDataset(Dataset[list[int]]):
             remain_valences = []
             added_idxs = set()
             for idx in orders:
-                atom = mol.GetAtomById(idx)
+                atom = mol.GetAtom(idx+1)
                 remain_valence = 0
                 for natom in ob.OBAtomAtomIter(atom):
                     if natom.GetId() not in added_idxs:
