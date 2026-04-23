@@ -216,7 +216,7 @@ class LogIterator(Iterable[T]):
         for i, item in enumerate(self.iterable):
             if should_show(i, 10000):
                 logger.debug(f"Iterable {self.name}[{i}] yielded.")
-                yield item
+            yield item
 
 class RevealIterator(Iterable[T]):
     logger = getLogger(f'dexs.{__module__}.{__qualname__}')
