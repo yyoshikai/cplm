@@ -211,7 +211,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     else:
         protein_tokens = PocketTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range)
     sentence += ['[POCKET]', protein_tokens, '[END]']
-    if args.pocket_format == 'atom_coords':
+    if args.pocket_format in ['atom_coords', 'atom_valence_coords']:
         assert args.pocket_atom_weight == args.pocket_coord_weight
         weights += [None, args.pocket_coord_weight, 0.0]
     else:
