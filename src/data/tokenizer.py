@@ -252,9 +252,18 @@ class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
         for word in self.sentence:
             if isinstance(word, Dataset):
                 if self.len is None:
-                    self.len = len(word)
+                    try:
+                        self.len = len(word)
+                    except Exception as e:
+                        print(type(word), flush=True)
+                        raise e
                 else:
-                    assert self.len == len(word)
+                    try:
+                        assert self.len == len(word)
+                    except Exception as e:
+                        print(type(word), flush=True)
+                        raise e
+    
         if self.len is None:
             raise ValueError(f"No dataset in sentence.")
 

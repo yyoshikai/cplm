@@ -10,7 +10,7 @@ from Bio.PDB.Residue import Residue
 from torch.utils.data import Dataset
 from .data import WrapDataset
 from ..utils import slice_str
-from ..chem import obmol2pdb, pdb2obmol
+from ..chem import obmol2pdb, pdb2obmol, Pocket
 from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
 
 AtomRepr = Literal['none', 'atom', 'all']
@@ -21,14 +21,6 @@ non_metals = [
     'Te', 'I', 'Xe', 'At', 'Rn'
 ]
 
-@dataclass
-class Pocket:
-    atoms: np.ndarray
-    coord: np.ndarray
-
-    def __post_init__(self):
-        assert len(self.atoms) == len(self.coord)
-        assert self.coord.ndim == 2 and self.coord.shape[1] == 3
 
 def pocket2pdb(pocket: Pocket, out_path: str):
     with open(out_path, 'w') as f:

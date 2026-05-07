@@ -38,7 +38,7 @@ class RemoveIsotopeDataset(WrapDataset[ob.OBMol|Chem.Mol]):
             for atom in mol.GetAtoms():
                 atom.SetIsotope(0)
         else:
-            raise ValueError
+            raise ValueError(f"Unknown {type(mol)=}")
         return mol
 
 class SetHydrogenDataset(WrapDataset[ob.OBMol|Chem.Mol]):

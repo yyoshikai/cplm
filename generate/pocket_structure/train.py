@@ -7,8 +7,8 @@ from torch.utils.data import StackDataset, Subset
 from src.utils import slice_str
 from src.data import CacheDataset, index_dataset
 from src.data.datasets.unimol import UniMolPocketDataset
-from src.data.protein import PocketTokenizeDataset, Pocket
-from src.data.protein import Pocket, AtomRepr
+from src.data.protein import PocketTokenizeDataset, AtomRepr
+from src.chem import Pocket
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
 from src.generate import generate
 from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer, RangeWriteStreamer

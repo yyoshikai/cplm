@@ -6,9 +6,8 @@ from torch.utils.data import Dataset
 from rdkit import Chem
 from rdkit.Geometry import Point3D
 from openbabel.openbabel import OBMol, OBMolAtomIter
-from ..chem import get_coord_from_mol, set_conf
+from ..chem import get_coord_from_mol, set_coord, Pocket
 from .data import WrapDataset, WrapTupleDataset, get_rng
-from .protein import Pocket
 
 class Scaler:
     def __init__(self, from_a: float, from_b: float, to_a: float, to_b: float):
@@ -57,17 +56,7 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
     
     def __getitem__(self, idx: int) -> tuple[Chem.Mol|Pocket|OBMol]:
         items = [data[idx] for data in self.datas]
-        coords = []
-        for item in items:
-            if isinstance(item, Chem.Mol):
-                coord = item.GetConformer().GetPositions()
-            elif isinstance(item, Pocket):
-                coord = item.coord
-            elif isinstance(item, OBMol):
-                coord = get_coord_from_mol(item)
-            else:
-                raise ValueError
-            coords.append(coord)
+        coords = [get_coord_from_mol(item) for item in items]
         rng = get_rng(self.base_seed, idx)
 
         # normalize
@@ -91,19 +80,45 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
         
         # set coord
         for item, coord in zip(items, coords):
-            if isinstance(item, Chem.Mol):
-                # confへの代入のみで元の分子も変更されることを確認 @tests/test.ipynb
-                set_conf(item.GetConformer(), coord)
-            elif isinstance(item, Pocket):
-                item.coord = coord
-            else:
-                for i, atom in enumerate(OBMolAtomIter(item)):
-                    atom.SetVector(coord[i,0], coord[i,1], coord[i,2])
+            set_coord(item, coord)
         if self.normalize_coord:
             items.append(center)
         if self.random_rotate:
             items.append(matrix)
         return tuple(items)
+
+class AlignCenterDataset(WrapTupleDataset[tuple[Chem.Mol|Pocket|OBMol,...]]):
+    def __init__(self, base_data: Dataset[Chem.Mol|Pocket|OBMol], *datas: 
+                tuple[Dataset[Chem.Mol|Pocket|OBMol]], base_seed: int, random_rotate_other: bool):
+        """
+        random_rotate_other: rotate only datas by one rotation matrix
+        
+        """
+        self.base_data = base_data
+        self.datas = (base_data,)+datas
+        self.base_seed = base_seed
+        self.random_rotate_other = random_rotate_other
+        super().__init__(base_data, len(self.datas))
+
+    def __getitem__(self, idx):
+        items = [data[idx] for data in self.datas]
+        coords = [get_coord_from_mol(item) for item in items]
+        rng = get_rng(self.base_seed, idx)
+
+        if coords[0].size > 0:
+            center = np.mean(coords[0], axis=0)
+            coords = [coord - np.mean(coord, axis=0)+center for coord in coords]
+        else:
+            assert all(coord.size == 0 for coord in coords)
+        
+        if self.random_rotate_other:
+            matrix = get_random_rotation_matrix(rng)
+            coords = [coord if i == 0 else np.matmul(coord, matrix) for i, coord in enumerate(coords)]
+        
+        for item, coord in zip(items, coords):
+            set_coord(item, coord)
+        return tuple(items)
+        
 
 def get_random_rotation_matrix(rng: np.random.Generator):
     # get axes

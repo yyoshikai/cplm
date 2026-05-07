@@ -113,6 +113,15 @@ class SampleDataset(Dataset[T_co]):
     def set_epoch(cls, epoch: int):
         cls.epoch = epoch
 
+class RandomChoiceDataset(WrapDataset[T]):
+    def __init__(self, dataset: Dataset[T], base_seed: int):
+        super().__init__(dataset)
+        self.base_seed = base_seed
+
+    def __getitem__(self, idx: int):
+        rng = get_rng(self.base_seed, idx)
+        return self.dataset[rng.integers()]
+
 class CacheDataset(WrapDataset):
     def __init__(self, dataset: Dataset):
         super().__init__(dataset)

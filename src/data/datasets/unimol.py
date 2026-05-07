@@ -6,9 +6,8 @@ import numpy as np
 from rdkit import Chem
 from openbabel import openbabel as ob
 from ..lmdb import PickleLMDBDataset
-from ..protein import Pocket
 from ..data import Subset
-from ...chem import array_to_conf
+from ...chem import array_to_conf, Pocket
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 

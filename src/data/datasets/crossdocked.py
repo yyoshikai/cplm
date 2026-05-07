@@ -12,8 +12,7 @@ from ..data import TupleDataset
 from rdkit import Chem
 confProDy(verbosity='none')
 from ...utils.path import WORKDIR
-from ...chem import read_pdb_path
-from ..protein import Pocket
+from ...chem import read_pdb_path, Pocket
 
 SAVE_DIR = f"{WORKDIR}/cplm/ssd/preprocess/results/finetune/r4_all"
 CDDIR = f"{WORKDIR}/cheminfodata/crossdocked"

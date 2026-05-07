@@ -8,15 +8,16 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from openbabel.openbabel import OBMol
+from ..chem import Pocket
 from ..data import RepeatDataset, Subset, StackDataset, TensorDataset, untuple_dataset, CacheDataset
 from ..data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from ..data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from ..data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
 from ..data.datasets.crossdocked import CDDataset, CDProteinDataset
 from ..data.datasets.pdb import PDBUniMolRandomDataset
-from ..data.protein import Pocket, SelectDataset, PocketTokenizeDataset
+from ..data.protein import SelectDataset, PocketTokenizeDataset
 from ..data.molecule import RemoveIsotopeDataset, SetHydrogenDataset, SmilesOrderDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset, AtomsDataset, CoordsDataset, RemainValencesDataset
-from ..data.coord import CoordTransformDataset
+from ..data.coord import CoordTransformDataset, AlignCenterDataset
 
 def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
     logs = []
@@ -142,7 +143,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             in zip(token_datas, position_datas, weight_datas)]
     return datas, voc_encoder, dnames, logs
 
-def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bool, random_rotate: bool, 
+def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bool, random_ligand: bool, random_rotate: bool, 
         added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[OBMol|Pocket]|None=None, encode: bool=True, tensor_position: bool=True):
     logs = []
 
@@ -169,7 +170,6 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
                 raw_data = CDProteinDataset(split, args.pocket_cls)
             else:
                 raw_data = CDDataset(split)
-    raw_data = RemoveIsotopeDataset(raw_data)
     if sample != 1.0:
         assert sample < 1.0
         rng = np.random.default_rng(args.seed)
@@ -177,6 +177,13 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
         raw_data = Subset(raw_data, idxs)
         assert len(raw_data) > 0
     protein, lig, score = untuple_dataset(raw_data, 3)
+    protein = RemoveIsotopeDataset(protein)
+    lig = RemoveIsotopeDataset(protein)
+    if random_ligand:
+        org_lig = lig
+        lig = UniMolLigandDataset(split, args.lig_cls)
+        org_lig, lig = AlignCenterDataset(org_lig, lig, base_seed=args.seed, random_rotate_other=True).untuple()
+        score = None
 
     ## rotation
     if args.protein:
@@ -214,6 +221,8 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     if prompt_score != 'none':
         if prompt_score == 'low':
             score = RandomScoreDataset(-12.0, -10.0, len(protein_tokens), args.seed)
+        if score is None:
+            raise ValueError("score is None")
         score_tokenizer = FloatTokenizer('score', -args.coord_range, args.coord_range)
         score = TokenizeDataset(score, score_tokenizer)
         sentence += ['[SCORE]', score, '[END]']
@@ -223,12 +232,12 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     sentence.append('[LIGAND]')
     weights.append(args.lig_smiles_weight)
     lig = SetHydrogenDataset(lig, args.lig_h != 'none')
-    smi, orders = SmilesOrderDataset(lig, args.lig_order, args.seed)
+    smi, orders = SmilesOrderDataset(lig, args.lig_order, args.seed).untuple()
 
     if add_ligand:
         atoms = AtomsDataset(lig)
         coords = CoordsDataset(lig)
-        valences = RemainValencesDataset(lig)
+        valences = RemainValencesDataset(lig, orders)
         lig_tokens = MolTokenizeDataset(atoms, coords, smi, orders, valences, args.lig_format, args.coord_range, args.smiles_voc_dir, 'all', args.lig_h)
         sentence += [lig_tokens, '[END]']
         weights += [args.lig_coord_weight, 0.0]

@@ -1,5 +1,6 @@
 import re
 from ctypes import c_double
+from dataclasses import dataclass
 from logging import getLogger
 from typing import Literal
 import numpy as np
@@ -7,6 +8,16 @@ from rdkit import Chem
 from rdkit.Chem import Conformer
 from rdkit.Geometry import Point3D
 from openbabel.openbabel import OBMol, OBConversion
+from openbabel import openbabel as ob
+
+@dataclass
+class Pocket:
+    atoms: np.ndarray
+    coord: np.ndarray
+
+    def __post_init__(self):
+        assert len(self.atoms) == len(self.coord)
+        assert self.coord.ndim == 2 and self.coord.shape[1] == 3
 
 logger = getLogger(__name__)
 
@@ -66,9 +77,27 @@ def array_to_conf(coord: np.ndarray) -> Conformer:
     set_conf(conf, coord)
     return conf
 
-def get_coord_from_mol(mol: OBMol) -> np.ndarray:
-    coord = mol.GetCoordinates()
-    return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
+def get_coord_from_mol(mol: OBMol|Chem.Mol|Pocket) -> np.ndarray:
+    if isinstance(mol, OBMol):
+        coord = mol.GetCoordinates()
+        return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
+    elif isinstance(mol, Chem.Mol):
+        return mol.GetConformer().GetPositions()
+    elif isinstance(mol, Pocket):
+        return mol.coord
+    else:
+        raise ValueError(f"Unknown {type(mol)=}")
+    
+def set_coord(mol: OBMol|Chem.Mol|Pocket, coord: np.ndarray) -> None:
+    if isinstance(mol, Chem.Mol):
+        # confへの代入のみで元の分子も変更されることを確認 @tests/test.ipynb
+        set_conf(mol.GetConformer(), coord)
+    elif isinstance(mol, Pocket):
+        mol.coord = coord
+    else:
+        for i, atom in enumerate(ob.OBMolAtomIter(mol)):
+            atom.SetVector(coord[i,0], coord[i,1], coord[i,2])
+
 
 def _randomize(mol: Chem.Mol, rng: np.random.Generator):
     for i in range(100): # ランダムに失敗する場合がある

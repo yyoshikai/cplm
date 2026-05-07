@@ -5,9 +5,8 @@ from rdkit import Chem
 from openbabel.openbabel import OBMol
 
 from ...utils.lmdb import load_lmdb
-from ..protein import Pocket
 from ..data import TupleDataset
-from ...chem import read_pdb_path
+from ...chem import read_pdb_path, Pocket
 
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_CD1_1_TYPES_DIR = f"{WORKDIR}/cheminfodata/crossdocked/CrossDocked2020_v1.1_types"
