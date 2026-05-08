@@ -120,7 +120,7 @@ class RandomChoiceDataset(WrapDataset[T]):
 
     def __getitem__(self, idx: int):
         rng = get_rng(self.base_seed, idx)
-        return self.dataset[rng.integers()]
+        return self.dataset[rng.integers(0, len(self.dataset))]
 
 class CacheDataset(WrapDataset):
     def __init__(self, dataset: Dataset):

@@ -9,7 +9,7 @@ from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from openbabel.openbabel import OBMol
 from ..chem import Pocket
-from ..data import RepeatDataset, Subset, StackDataset, TensorDataset, untuple_dataset, CacheDataset
+from ..data import RepeatDataset, Subset, StackDataset, TensorDataset, untuple_dataset, CacheDataset, RandomChoiceDataset
 from ..data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from ..data.datasets.targetdiff import TargetDiffScafCDDataset, TargetDiffScafCDProteinDataset
 from ..data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
@@ -178,10 +178,11 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
         assert len(raw_data) > 0
     protein, lig, score = untuple_dataset(raw_data, 3)
     protein = RemoveIsotopeDataset(protein)
-    lig = RemoveIsotopeDataset(protein)
+    lig = RemoveIsotopeDataset(lig)
     if random_ligand:
         org_lig = lig
         lig = UniMolLigandDataset(split, args.lig_cls)
+        lig = RandomChoiceDataset(lig, args.seed)
         org_lig, lig = AlignCenterDataset(org_lig, lig, base_seed=args.seed, random_rotate_other=True).untuple()
         score = None
 
@@ -211,7 +212,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     else:
         protein_tokens = PocketTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range)
     sentence += ['[POCKET]', protein_tokens, '[END]']
-    if args.pocket_format in ['atom_coords', 'atom_valence_coords']:
+    if args.pocket_format in ['atom_coords', 'atom_valence_coords', 'smile_coords']:
         assert args.pocket_atom_weight == args.pocket_coord_weight
         weights += [None, args.pocket_coord_weight, 0.0]
     else:
