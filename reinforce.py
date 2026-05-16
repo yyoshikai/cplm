@@ -382,7 +382,7 @@ def main():
     
     # Environment
     result_dir = f"reinforce/results/{args.studyname}"
-    logger, rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
+    (logger, ), rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
     ignore_rdkit_warning()
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
 
@@ -392,7 +392,7 @@ def main():
 
     # data
     _voc_encoder, _raw_data, protein_data, _lig, token_data, position_data, _weight_data, _center_data, data_log \
-            = get_finetune_data(fargs, 'train', 1.0, False, True, set(voc_encoder.i2voc[1:]), 'none')
+            = get_finetune_data(fargs, 'train', 1.0, False, False, True, set(voc_encoder.i2voc[1:]), 'none')
     protein_pdb_data = Mol2PDBDataset(protein_data)
     logs += data_log
     index_data, token_data = index_dataset(token_data)

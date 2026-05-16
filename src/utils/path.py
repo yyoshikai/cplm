@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 from addict import Dict
 
-WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
+WORKDIR = os.environ.get('WORKDIR', Path(__file__).parents[3])
 
 def cleardir(path):
     _cleardir(path)

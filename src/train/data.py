@@ -177,7 +177,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
         raw_data = Subset(raw_data, idxs)
         assert len(raw_data) > 0
     protein, lig, score = untuple_dataset(raw_data, 3)
-    # protein = RemoveIsotopeDataset(protein) 重くなりそうなので省略
+    protein = RemoveIsotopeDataset(protein)
     lig = RemoveIsotopeDataset(lig)
     if random_ligand:
         org_lig = lig
