@@ -8,10 +8,10 @@ from src.utils import setdefault
 from src.utils.path import mwrite
 from src.data import StackDataset, Subset, index_dataset
 from src.data.molecule import Mol2PDBDataset
-from src.data.tokenizer import StringTokenizer2
+from src.data.tokenizer import StringTokenizer2, VocEncoder
 from src.train.data import get_finetune_data
 from src.generate import generate
-from src.generate.streamer import get_ligand_streamer, SaveLigandStreamer, TokenWriteStreamer, RangeWriteStreamer
+from src.generate.streamer import get_ligand_streamer, SaveLigandStreamer, TokenWriteStreamer, RangeWriteStreamer, NoTokenRangeStreamer
 
 
 if __name__ == '__main__':
@@ -73,11 +73,13 @@ if __name__ == '__main__':
 
     with cf.ProcessPoolExecutor() as e:
         if fargs.format == 'smiles_coords':
-            def streamer_fn(item, i_trial, voc_encoder):
+            def streamer_fn(item, i_trial, voc_encoder: VocEncoder):
                 idx, rec_pdb, prompt_token, position = item
                 pdb_path = f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb"
                 mwrite(pdb_path, rec_pdb)
-                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, args.no_token_range, fargs.lig_h, fargs.smiles_voc_dir)
+                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, fargs.lig_h, fargs.smiles_voc_dir)
+                if args.no_token_range:
+                    streamer = NoTokenRangeStreamer(streamer, voc_encoder.voc_size)
                 streamer = SaveLigandStreamer(streamer)
                 streamer = TokenWriteStreamer(streamer, voc_encoder,
                     prompt_position=position,

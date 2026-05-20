@@ -2,9 +2,9 @@ import sys, os, struct, traceback, warnings, subprocess, math, csv
 from functools import partial
 from contextlib import contextmanager
 from bisect import bisect_right
-from collections.abc import Mapping, Sequence
-from logging import getLogger
-from typing import Any, Callable, Literal, ParamSpec, TypeVar
+from collections.abc import Mapping, Sequence, Iterable, Sized, Iterator
+from logging import getLogger, Logger
+from typing import Any, Callable, ParamSpec, TypeVar
 import numpy as np
 import pandas as pd
 try:    
@@ -288,3 +288,23 @@ def wraps(f: Callable[P, T]):
             return g(*args, **kwargs)
         return inner
     return wrap_inner
+
+class filter_long(Iterator[T]):
+    def __init__(self, iterable: Iterable[T], function: Callable[[T], Sized], max_size: int, logger: Logger):
+        self.iterable = iterable
+        self.function = function
+        self.max_size = max_size
+        self.logger = logger
+
+        self.iterator = iterable.__iter__()
+        self.n = 0    
+    def __next__(self):
+        while True:
+            item = self.iterator.__next__()
+            self.n += 1
+            size = len(self.function(item))
+            if size > self.max_size:
+                self.logger.debug(f"Item #{self.n-1} was filtered because {size=} > {self.max_size}")
+                continue
+            return item
+            

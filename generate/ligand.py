@@ -1,7 +1,8 @@
 from argparse import ArgumentParser, Namespace
 import yaml
+from src.data.tokenizer import VocEncoder
 from src.generate import generate
-from src.generate.streamer import SaveLigandStreamer, get_ligand_streamer, TokenWriteStreamer, RangeWriteStreamer
+from src.generate.streamer import SaveLigandStreamer, get_ligand_streamer, TokenWriteStreamer, RangeWriteStreamer, NoTokenRangeStreamer
 
 if __name__ == '__main__':
     # arguments
@@ -34,8 +35,10 @@ if __name__ == '__main__':
     out_dir = f"./generate/ligand/{'finetune' if args.finetune else 'training'}" \
             f"{f'/{args.genname}' if args.genname is not None else ''}/{args.studyname}/{args.opt}"
 
-    def streamer_fn(item, i_trial, voc_encoder):
-        streamer = get_ligand_streamer(targs.lig_format, targs.coord_range, voc_encoder, args.no_token_range, targs.lig_h, targs.smiles_voc_dir)
+    def streamer_fn(item, i_trial, voc_encoder: VocEncoder):
+        streamer = get_ligand_streamer(targs.lig_format, targs.coord_range, voc_encoder, targs.lig_h, targs.smiles_voc_dir)
+        if args.no_token_range:
+            streamer = NoTokenRangeStreamer(streamer, voc_encoder.voc_size)
         streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf/{item}.sdf")
         streamer = TokenWriteStreamer(streamer,
             voc_encoder=voc_encoder,

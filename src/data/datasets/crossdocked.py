@@ -1,7 +1,7 @@
 """
 251028 前処理のコードは消したので, 古いcommit(04fa7c93等)を参照してください。
 """
-import gzip
+import os, gzip
 from typing import Literal
 
 import torch
@@ -15,7 +15,7 @@ from ...utils.path import WORKDIR
 from ...chem import read_pdb_path, Pocket
 
 SAVE_DIR = f"{WORKDIR}/cplm/ssd/preprocess/results/finetune/r4_all"
-CDDIR = f"{WORKDIR}/cheminfodata/crossdocked"
+CDDIR = os.environ.get('CDDIR', f"{WORKDIR}/cheminfodata/crossdocked")
 
 class CDWholeDataset(TupleDataset[tuple[Pocket, Chem.Mol, float, str, str]]):
     def __init__(self):

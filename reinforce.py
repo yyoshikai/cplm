@@ -16,7 +16,7 @@ from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
-from src.utils import get_git_hash, wraps
+from src.utils import get_git_hash, wraps, filter_long
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
 from src.chem import rdmol2obmol, pdb2obmol
@@ -28,7 +28,7 @@ from src.model import Model, Streamer
 from src.train import set_env, get_model, get_process_ranks
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
-from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, PositionSaveStreamer, TimeLogStreamer
+from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
 from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
 from src.train.reinforce import EmptyNorm, ClampNorm, FillNorm, SampleDevFillNorm, SampleWhitenNorm, AllWhitenNorm, RecordNorm, Fill0Norm
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
@@ -95,9 +95,10 @@ def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
         return grads, diff_grads
     else:
         return grads, grads
-
-
+itr.filterfalse
 class ReinforceDataIter:
+    logger = getLogger(f"{__module__}.{__qualname__}")
+
     def __init__(self, train_data: Dataset, device: torch.device, batch_size: int, generate_per_sample: int, max_prompt_len: int, fix_pocket: bool, num_workers: int, seed: int):
         _, _, DATA_RANK = get_process_ranks()
         self.data_rank = DATA_RANK['train']
@@ -115,7 +116,7 @@ class ReinforceDataIter:
                 num_workers=num_workers, pin_memory=True, prefetch_factor=10 if num_workers > 0 else None)
             self.train_iter = loader.__iter__()
             if max_prompt_len is not None:
-                self.train_iter = itr.filterfalse(lambda x: len(x[2]) > max_prompt_len, self.train_iter)
+                self.train_iter = filter_long(self.train_iter, lambda x: x[2], max_prompt_len, self.logger)
             if self.fix_pocket:
                 self.train_fixed_item = self.train_iter.__next__()
                 del self.train_iter
@@ -182,11 +183,13 @@ class Generator:
             position_streamers: list[PositionSaveStreamer] = []
             streamers = []
             for idx, pdb in enumerate(pdbs):
-                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, False, self.lig_h, self.smiles_voc_dir)
+                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, self.lig_h, self.smiles_voc_dir)
+                out_dir = f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
                 if do_save:
-                    streamer = SaveLigandStreamer(streamer, f"{self.result_dir}/generation/{step}/{rank}_{idx}/new_sdf.sdf")
+                    streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf.sdf")
+                    streamer = TokenWriteStreamer(streamer, self.voc_encoder, positions[idx], f"{out_dir}/prompt_token.csv", f"{out_dir}/new_token.csv")
                 streamer = GetScoreStreamer(streamer, ligand_streamer, e, self.target, pdb, 
-                    f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}", 
+                    out_dir, 
                     cpu=self.cpu, print_prepare=step < 3) 
                 score_streamers.append(streamer)
                 streamer = TokenSaveStreamer(streamer)
@@ -353,8 +356,7 @@ def main():
     # get finetune info
     finetune_dir = f"finetune/results/{args.finetune_name}"
     with open(f"{finetune_dir}/args.yaml") as f:
-        fargs = yaml.safe_load(f)
-    fargs = Namespace(**fargs)
+        fargs = Namespace(**yaml.safe_load(f))
     assert fargs.no_score
     pname = fargs.pretrain_name
     pretrain_dir = f"training/results/{pname}"
