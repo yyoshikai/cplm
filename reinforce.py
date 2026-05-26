@@ -206,25 +206,46 @@ class Generator:
             for streamer in score_streamers:
                 streamer.result()
 
-        tokens = pad_sequence([
+        tokens = [
             torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens)
             for token_streamer in token_streamers
-        ], padding_value=self.voc_encoder.pad_token).to(device=self.device, dtype=torch.long)
-        input = tokens[:-1] # [L, B]
-        output = tokens[1:]
+        ]
 
-        weight = torch.zeros_like(output, dtype=torch.float) # [L, B]
+        weight = []
         for b, token_streamer in enumerate(token_streamers):
-            prompt_size, new_size = len(token_streamer.prompt_tokens), len(token_streamer.new_tokens)
-            weight[prompt_size-1:prompt_size+new_size-1, b] = 1.0
-        position = pad_sequence([
-            torch.tensor(position+position_streamer.new_positions) for position, position_streamer
+            prompt_size = len(token_streamer.prompt_tokens)
+            new_size = len(token_streamer.new_tokens)
+            w = torch.zeros(prompt_size+new_size-1)
+            w[prompt_size-1:] = 1.0
+            weight.append(w)
+        position = [
+            torch.tensor(position+position_streamer.new_positions)[:-2] for position, position_streamer
             in zip(positions, position_streamers)
-        ], padding_value=0).to(device=self.device, dtype=torch.long)[:-2]
+        ] # [L, B]
         
         errors = [streamer.error() for streamer in score_streamers]
         scores = [streamer.out for streamer in score_streamers]
-        return input, output, position, weight, scores, errors
+        return tokens, position, weight, scores, errors
+
+class BatchSplitGenerator(Generator):
+    def __init__(self, generator: Generator, batch_size: int):
+        self.generator = generator
+        self.batch_size = batch_size
+    
+    @wraps(Generator.generate)
+    def generate(self, model, step, prompt_tokens, positions, do_save, pdbs):
+        B = len(prompt_tokens)
+        outs = []
+        for bs in range(0, B, self.batch_size):
+            out = self.generator.generate(model, step, prompt_tokens[bs:bs+self.batch_size], positions[bs:bs+self.batch_size], do_save, pdbs[bs:bs+self.batch_size])
+            outs.append(out)
+        token, position, weight, scores, errors = zip(*outs)
+        token = list(itr.chain(*token))
+        position = list(itr.chain(*position))
+        weight = list(itr.chain(*weight))
+        scores = list(itr.chain(*scores))
+        errors = list(itr.chain(*errors))
+        return token, position, weight, scores, errors
 
 class SizeRecordGenerator(Generator):
     def __init__(self, generator: Generator, result_dir: str):
@@ -234,7 +255,7 @@ class SizeRecordGenerator(Generator):
 
     @wraps(Generator.generate)
     def generate(self, model, step, prompt_tokens, positions, do_save, pdbs):
-        input, output, position, weight, scores, errors = self.generator.generate(model, step, prompt_tokens, positions, do_save, pdbs)
+        token, position, weight, scores, errors = self.generator.generate(model, step, prompt_tokens, positions, do_save, pdbs)
         if self.is_empty:
             batch_size = len(prompt_tokens)
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -244,9 +265,9 @@ class SizeRecordGenerator(Generator):
             self.is_empty = False
         with open(self.path, 'a') as f:
             f.write(','.join([str(len(prompt)) for prompt in prompt_tokens]
-                    +[str(len(i)-len(prompt)) for i, prompt in zip(input, prompt_tokens)])+'\n')
+                    +[str(len(t)-len(prompt)-1) for t, prompt in zip(token, prompt_tokens)])+'\n')
 
-        return input, output, position, weight, scores, errors
+        return token, position, weight, scores, errors
 
 class ErrorRecordGenerator(Generator):
     def __init__(self, generator: Generator, result_dir: str):
@@ -256,7 +277,7 @@ class ErrorRecordGenerator(Generator):
     
     @wraps(Generator.generate)
     def generate(self, *args, **kwargs):
-        input, output, position, weight, scores, errors = self.generator.generate(*args, **kwargs)
+        token, position, weight, scores, errors = self.generator.generate(*args, **kwargs)
         if self.is_empty:
             batch_size = len(errors)
             os.makedirs(os.path.dirname(self.path))
@@ -265,7 +286,7 @@ class ErrorRecordGenerator(Generator):
             self.is_empty = False
         with open(self.path, 'a') as f:
             f.write(','.join(str(e) for e in errors)+'\n')
-        return input, output, position, weight, scores, errors
+        return token, position, weight, scores, errors
 
 @record
 def main():
@@ -301,6 +322,7 @@ def main():
     ## training
     parser.add_argument('--studyname', required=True)
     parser.add_argument('--batch-size', type=int, default=32)
+    parser.add_argument('--gen-batch-size', type=int)
     parser.add_argument('--max-opt', type=int, default=10000)
     ## optimizer
     parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
@@ -411,6 +433,8 @@ def main():
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
     generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, args.target, device)
+    if args.gen_batch_size is not None:
+        generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)
     generator = ErrorRecordGenerator(generator, result_dir)
     norm = EmptyNorm()
@@ -449,9 +473,17 @@ def main():
         idxs, pdbs, prompt_tokens, positions = data_iter.get()
 
         train_looper.put('generate')
-        input, output, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
+        tokens, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
         if is_starting:
             logger.info(f"step {step} raw scores={scores}")
+        tokens = pad_sequence(tokens, padding_value=voc_encoder.pad_token).to(device)
+        input = tokens[:-1]
+        output = tokens[1:]
+        position = pad_sequence(position, padding_value=0).to(device)
+        weight = pad_sequence(weight, padding_value=0.0).to(device)
+
+        
+        
         scores = norm(torch.tensor(scores, device=device), errors, idxs)
 
         # Forward Get prob & reward loss
