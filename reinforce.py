@@ -259,7 +259,7 @@ class ErrorRecordGenerator(Generator):
         input, output, position, weight, scores, errors = self.generator.generate(*args, **kwargs)
         if self.is_empty:
             batch_size = len(errors)
-            os.makedirs(os.path.dirname(self.path))
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, 'w') as f:
                 f.write(','.join(str(i) for i in range(batch_size))+'\n')
             self.is_empty = False
