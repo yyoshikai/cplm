@@ -37,7 +37,7 @@ def compare_loss(fname, snames, slabels=None, script='training', **kwargs):
     os.makedirs(os.path.dirname(fpath), exist_ok=True)
     ax.set_yscale('log')
     fig.savefig(fpath, **tightargs)
-    plt.close(fig)
+    return fig, ax
 
 def compare_loss_train(fname, snames, slabels=None, **kwargs):
     return compare_loss(fname, snames, slabels, 'training', **kwargs)
