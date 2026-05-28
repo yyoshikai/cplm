@@ -250,7 +250,7 @@ class BatchSplitGenerator(Generator):
 class SizeRecordGenerator(Generator):
     def __init__(self, generator: Generator, result_dir: str):
         self.generator = generator
-        self.path = f"{result_dir}/scores/{dist.get_rank()}.csv"
+        self.path = f"{result_dir}/size/{dist.get_rank()}.csv"
         self.is_empty = True
 
     @wraps(Generator.generate)
@@ -266,7 +266,6 @@ class SizeRecordGenerator(Generator):
         with open(self.path, 'a') as f:
             f.write(','.join([str(len(prompt)) for prompt in prompt_tokens]
                     +[str(len(t)-len(prompt)-1) for t, prompt in zip(token, prompt_tokens)])+'\n')
-
         return token, position, weight, scores, errors
 
 class ErrorRecordGenerator(Generator):
