@@ -255,7 +255,6 @@ class SizeRecordGenerator(Generator):
 
     @wraps(Generator.generate)
     def generate(self, model, step, prompt_tokens, positions, do_save, pdbs):
-        token, position, weight, scores, errors = self.generator.generate(model, step, prompt_tokens, positions, do_save, pdbs)
         if self.is_empty:
             batch_size = len(prompt_tokens)
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -264,8 +263,11 @@ class SizeRecordGenerator(Generator):
                 f.write((','.join(list(str(i) for i in range(batch_size))*2))+'\n')
             self.is_empty = False
         with open(self.path, 'a') as f:
-            f.write(','.join([str(len(prompt)) for prompt in prompt_tokens]
-                    +[str(len(t)-len(prompt)-1) for t, prompt in zip(token, prompt_tokens)])+'\n')
+            f.write(','.join([str(len(prompt)) for prompt in prompt_tokens]))
+        token, position, weight, scores, errors = self.generator.generate(model, step, prompt_tokens, positions, do_save, pdbs)
+        with open(self.path, 'a') as f:
+            f.write(','.join([str(len(t)-len(prompt)-1) for t, prompt in zip(token, prompt_tokens)])+'\n')
+
         return token, position, weight, scores, errors
 
 class ErrorRecordGenerator(Generator):
