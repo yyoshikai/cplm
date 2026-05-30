@@ -1,8 +1,9 @@
 import itertools as itr
 from time import time
-from collections.abc import Generator
+from collections.abc import Generator, Callable
 from logging import getLogger
 import numpy as np, pandas as pd
+import torch
 from tqdm import tqdm
 from rdkit import Chem
 from rdkit.Chem.rdDetermineBonds import DetermineBondOrders, DetermineBonds
@@ -75,6 +76,7 @@ class GeneratorStreamer(Streamer):
     def put(self, tokens: list[int]):
         return self.put_gen.send(tokens)
 
+# Verbosity
 class TokenWriteStreamer(WrapperStreamer):
     def __init__(self, streamer: Streamer, voc_encoder: VocEncoder, prompt_position: list[int], prompt_csv_path: str, new_csv_path: str):
         super().__init__(streamer)
@@ -179,6 +181,31 @@ class TqdmStreamer(WrapperStreamer):
         self.pbar.update()
         return self.streamer.put(tokens)
 
+class GPUUseStreamer(WrapperStreamer):
+    def __init__(self, streamer: Streamer, device: torch.device, outer: Callable[[int], None]):
+        super().__init__(streamer)
+        self.device = device
+        self.outer = outer
+        self.outer(torch.cuda.max_memory_allocated(self.device))
+    def put(self, tokens: list[int]):
+        self.outer(torch.cuda.max_memory_allocated(self.device))
+        return self.streamer.put(tokens)
+
+class DummyStreamer(Streamer):
+    def __init__(self, voc_size: int, token_range_size: int, n_gen: int):
+        self.position = 0
+        self.voc_size = voc_size
+        self.token_range = list(range(voc_size))
+        self.n_gen = n_gen
+        self.i_gen = 0
+
+    def put(self, tokens: list[int]) -> tuple[bool, int, list[int]]:
+        self.position += len(tokens)
+        self.i_gen += 1
+        return self.i_gen <= self.n_gen, self.position, self.token_range
+
+
+# Ligands
 class LigandStreamer(Streamer):
     def ligand(self) -> Chem.Mol|None:
         raise NotImplementedError

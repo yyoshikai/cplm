@@ -95,7 +95,7 @@ def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
         return grads, diff_grads
     else:
         return grads, grads
-itr.filterfalse
+
 class ReinforceDataIter:
     logger = getLogger(f"{__module__}.{__qualname__}")
 
@@ -263,7 +263,7 @@ class SizeRecordGenerator(Generator):
                 f.write((','.join(list(str(i) for i in range(batch_size))*2))+'\n')
             self.is_empty = False
         with open(self.path, 'a') as f:
-            f.write(','.join([str(len(prompt)) for prompt in prompt_tokens]))
+            f.write(','.join([str(len(prompt)) for prompt in prompt_tokens])+',')
         token, position, weight, scores, errors = self.generator.generate(model, step, prompt_tokens, positions, do_save, pdbs)
         with open(self.path, 'a') as f:
             f.write(','.join([str(len(t)-len(prompt)-1) for t, prompt in zip(token, prompt_tokens)])+'\n')

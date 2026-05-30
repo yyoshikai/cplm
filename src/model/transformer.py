@@ -318,6 +318,13 @@ class TransformerModel(Model):
         contexts: list[Tensor(L, torch.long)]
         positions: list[Tensor(L, torch.long)]
         """
+        # For utility
+        B = len(contexts)
+        for b in range(B):
+            if not isinstance(contexts[b], Tensor):
+                raise ValueError(f"{type(contexts[{b}])=}, but it should be torch.Tensor")
+            if not isinstance(positions[b], list):
+                raise ValueError(F"{type(positions[b])=}, but it should be list[int]")
 
         # get shape
         B = len(contexts)
