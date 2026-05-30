@@ -369,7 +369,7 @@ def main():
     parser.add_argument('--fix-pocket', action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
     parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu'])
-    parser.add_argument('--record-memory-history-step', type=int, default=None)
+    parser.add_argument('--record-memory-history-step', type=int, default=0)
     args = parser.parse_args()
     ## set default args
     if args.test: args.studyname+='_test'
@@ -418,7 +418,7 @@ def main():
     (logger, ), rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
     ignore_rdkit_warning()
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
-    if 'memory_history' in args.check:
+    if args.record_memory_history_step > 0:
         torch.cuda.memory._record_memory_history(max_entries=100000)
 
     # model
