@@ -290,6 +290,12 @@ class ErrorRecordGenerator(Generator):
             f.write(','.join(str(e) for e in errors)+'\n')
         return token, position, weight, scores, errors
 
+def save_and_disable_memory_history(path: str):
+    os.makedirs(os.path.pardir(path), exist_ok=True)
+    torch.cuda.memory._dump_snapshot(path)
+    torch.cuda.memory._record_memory_history(None)
+
+
 @record
 def main():
     # arguments
@@ -362,7 +368,8 @@ def main():
     parser.add_argument('--all-autocast', action='store_true')
     parser.add_argument('--fix-pocket', action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
-    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu', 'memory_history'])
+    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu'])
+    parser.add_argument('--record-memory-history-step', type=int, default=None)
     args = parser.parse_args()
     ## set default args
     if args.test: args.studyname+='_test'
@@ -469,44 +476,47 @@ def main():
     trainer.save(result_dir)
 
     train_looper.start_loops()
-    for step in range(args.max_opt):
-        is_starting = step < 3
-        do_save = step in do_save_steps
+    try:
+        for step in range(args.max_opt):
+            is_starting = step < 3
+            do_save = step in do_save_steps
 
-        train_looper.put('get_batch')
-        idxs, pdbs, prompt_tokens, positions = data_iter.get()
+            train_looper.put('get_batch')
+            idxs, pdbs, prompt_tokens, positions = data_iter.get()
 
-        train_looper.put('generate')
-        tokens, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
-        if is_starting:
-            logger.info(f"step {step} raw scores={scores}")
-        tokens = pad_sequence(tokens, padding_value=voc_encoder.pad_token).to(device)
-        input = tokens[:-1]
-        output = tokens[1:]
-        position = pad_sequence(position, padding_value=0).to(device)
-        weight = pad_sequence(weight, padding_value=0.0).to(device)
+            train_looper.put('generate')
+            tokens, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
+            if is_starting:
+                logger.info(f"step {step} raw scores={scores}")
+            tokens = pad_sequence(tokens, padding_value=voc_encoder.pad_token).to(device)
+            input = tokens[:-1]
+            output = tokens[1:]
+            position = pad_sequence(position, padding_value=0).to(device)
+            weight = pad_sequence(weight, padding_value=0.0).to(device)
 
-        
-        scores = norm(torch.tensor(scores, device=device), errors, idxs)
+            
+            scores = norm(torch.tensor(scores, device=device), errors, idxs)
 
-        # Forward Get prob & reward loss
-        train_looper.put('train')
-        trainer.train(input, output, position, weight, scores, errors, idxs)
-        
-        if step % args.save_opt == 0:
-            train_looper.put('save')
-            trainer.save(result_dir)
+            # Forward Get prob & reward loss
+            train_looper.put('train')
+            trainer.train(input, output, position, weight, scores, errors, idxs)
+            
+            if step % args.save_opt == 0:
+                train_looper.put('save')
+                trainer.save(result_dir)
 
-        if step == 3:
-            logger.info("RDKit logger will be disabled from now on.")
-            getLogger('rdkit').propagate = False
+            if step == 3:
+                logger.info("RDKit logger will be disabled from now on.")
+                getLogger('rdkit').propagate = False
 
-        if 'memory_history' in args.check and step == 0:
-            os.makedirs(f"{result_dir}/memory_history", exist_ok=True)
-            torch.cuda.memory._dump_snapshot(f"{result_dir}/memory_history/{rank}.pkl")
-            torch.cuda.memory._record_memory_history(None)
+            if args.record_memory_history_step == step+1:
+                save_and_disable_memory_history(f"{result_dir}/memory_history/{rank}.pkl")
 
-        train_looper.end_loop()
+            train_looper.end_loop()
+    except Exception as e:
+        if args.record_memory_history_step >= step+1:
+            save_and_disable_memory_history(f"{result_dir}/memory_history/{rank}.pkl")
+        raise e
     train_looper.end_loops()
     dist.destroy_process_group()
 
