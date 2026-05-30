@@ -487,7 +487,6 @@ def main():
         weight = pad_sequence(weight, padding_value=0.0).to(device)
 
         
-        
         scores = norm(torch.tensor(scores, device=device), errors, idxs)
 
         # Forward Get prob & reward loss
@@ -502,7 +501,7 @@ def main():
             logger.info("RDKit logger will be disabled from now on.")
             getLogger('rdkit').propagate = False
 
-        if 'memory_history' in args.check and step == 1:
+        if 'memory_history' in args.check and step == 0:
             os.makedirs(f"{result_dir}/memory_history", exist_ok=True)
             torch.cuda.memory._dump_snapshot(f"{result_dir}/memory_history/{rank}.pkl")
             torch.cuda.memory._record_memory_history(None)
