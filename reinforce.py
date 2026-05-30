@@ -291,7 +291,7 @@ class ErrorRecordGenerator(Generator):
         return token, position, weight, scores, errors
 
 def save_and_disable_memory_history(path: str):
-    os.makedirs(os.path.pardir(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.cuda.memory._dump_snapshot(path)
     torch.cuda.memory._record_memory_history(None)
 
