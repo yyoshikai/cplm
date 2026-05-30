@@ -26,6 +26,7 @@ from src.data.tokenizer import VocEncoder
 from src.data.molecule import Mol2PDBDataset
 from src.model import Model, Streamer
 from src.train import set_env, get_model, get_process_ranks
+from src.train.collator import solve_increasing_fn_left
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
 from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
@@ -432,7 +433,11 @@ def main():
     logs += data_log
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
+    if args.max_prompt_len is None:
+        args.max_prompt_len = solve_increasing_fn_left(lambda L: model_.get_gpuuse(1, L, True, 'FLASH')-args.gpu_size, 40000) - args.max_new_token
+        logger.info(f"args.max_prompt_len was set to {args.max_prompt_len}", **NO_DUP)
     data_iter = ReinforceDataIter(train_data, device, args.sample_per_step, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
+
 
     ## records
     train_looper = Loopers([
