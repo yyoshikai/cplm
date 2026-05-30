@@ -417,10 +417,11 @@ class TransformerModel(Model):
                 length_mask = torch.any(src_mask.squeeze(1, 2) == 0, dim=0) # [Lmax, ]
                 src_mask = src_mask[:, :, :, length_mask].contiguous()
                 ## cache
-                cache = [(
-                    k[is_continues][:, :, length_mask], 
-                    v[is_continues][:,:,length_mask],
-                ) for k, v in cache]
+                for il in range(self.num_layers):
+                    cache[il] = (
+                        cache[il][0][is_continues][:,:,length_mask], 
+                        cache[il][1][is_continues][:,:,length_mask], 
+                    )
 
             # make position
             sin, cos = self.get_pos_buffer(positions) # [B, Dh], [B, Dh]

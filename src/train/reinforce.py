@@ -582,7 +582,6 @@ class WrapTrainer(Trainer):
     def step_info(self):
         return self.trainer.step_info()
 
-
 class SaveBatchTrainer(WrapTrainer):
     def __init__(self, trainer: Trainer, result_dir: str, do_save_steps: list[int], voc_encoder: VocEncoder):
         super().__init__(trainer)
