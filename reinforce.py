@@ -99,17 +99,17 @@ itr.filterfalse
 class ReinforceDataIter:
     logger = getLogger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, train_data: Dataset, device: torch.device, batch_size: int, generate_per_sample: int, max_prompt_len: int, fix_pocket: bool, num_workers: int, seed: int):
+    def __init__(self, train_data: Dataset, device: torch.device, sample_per_step: int, generate_per_sample: int, max_prompt_len: int, fix_pocket: bool, num_workers: int, seed: int):
         _, _, DATA_RANK = get_process_ranks()
         self.data_rank = DATA_RANK['train']
         self.rank = dist.get_rank()
         self.ddp_size = dist.get_world_size()
 
         self.device = device
-        self.batch_size = batch_size
+        self.sample_per_step = sample_per_step
         self.generate_per_sample = generate_per_sample
         self.fix_pocket = fix_pocket
-        assert self.batch_size * self.ddp_size % self.generate_per_sample == 0
+        assert self.sample_per_step * self.generate_per_sample % self.ddp_size == 0
         if self.rank == self.data_rank:
             loader = DataLoader(train_data, batch_size=None, 
                 sampler=InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(seed)),
@@ -124,10 +124,11 @@ class ReinforceDataIter:
     def get(self) -> tuple[Tensor, list[str], list[Tensor], list[list[int]]]:
         if self.rank == self.data_rank:
             all_items = []
-            for si in range(self.batch_size*self.ddp_size // self.generate_per_sample):
+            for si in range(self.sample_per_step):
                 item = self.train_fixed_item if self.fix_pocket else self.train_iter.__next__()
                 all_items += [item] * self.generate_per_sample
-            batched_items = [all_items[r*self.batch_size:(r+1)*self.batch_size] for r in range(self.ddp_size)]
+            batch_size = self.sample_per_step * self.generate_per_sample // self.ddp_size
+            batched_items = [all_items[r*batch_size:(r+1)*batch_size] for r in range(self.ddp_size)]
         else:
             batched_items = None
         items_box = [None]
@@ -322,7 +323,7 @@ def main():
     parser.add_argument('--valid-sample', type=float, default=1.0)
     ## training
     parser.add_argument('--studyname', required=True)
-    parser.add_argument('--batch-size', type=int, default=32)
+    parser.add_argument('--sample-per-step', type=int, default=8)
     parser.add_argument('--gen-batch-size', type=int)
     parser.add_argument('--max-opt', type=int, default=10000)
     ## optimizer
@@ -361,7 +362,7 @@ def main():
     parser.add_argument('--all-autocast', action='store_true')
     parser.add_argument('--fix-pocket', action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
-    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu'])
+    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu', 'memory_history'])
     args = parser.parse_args()
     ## set default args
     if args.test: args.studyname+='_test'
@@ -410,6 +411,8 @@ def main():
     (logger, ), rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
     ignore_rdkit_warning()
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
+    if 'memory_history' in args.check:
+        torch.cuda.memory._record_memory_history(max_entries=100000)
 
     # model
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
@@ -422,7 +425,7 @@ def main():
     logs += data_log
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
-    data_iter = ReinforceDataIter(train_data, device, args.batch_size, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
+    data_iter = ReinforceDataIter(train_data, device, args.sample_per_step, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
 
     ## records
     train_looper = Loopers([
@@ -498,6 +501,11 @@ def main():
         if step == 3:
             logger.info("RDKit logger will be disabled from now on.")
             getLogger('rdkit').propagate = False
+
+        if 'memory_history' in args.check and step == 1:
+            os.makedirs(f"{result_dir}/memory_history", exist_ok=True)
+            torch.cuda.memory._dump_snapshot(f"{result_dir}/memory_history/{rank}.pkl")
+            torch.cuda.memory._record_memory_history(None)
 
         train_looper.end_loop()
     train_looper.end_loops()
