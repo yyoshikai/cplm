@@ -6,7 +6,7 @@ import numpy as np, pandas as pd
 import torch
 from tqdm import tqdm
 from rdkit import Chem
-from rdkit.Chem.rdDetermineBonds import DetermineBondOrders, DetermineBonds
+from rdkit.Chem.rdDetermineBonds import DetermineBonds
 from ..utils import should_show
 from ..utils.path import make_pardir, mwrite, WORKDIR
 from ..model import Streamer, WrapperStreamer
@@ -365,21 +365,36 @@ class AtomsCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
             if token not in self.atom_token_range:
                 yield False, n_prompt_token+n_atom+1, [self.voc_encoder.voc2i['[END]']]
                 return
-            atoms.append(token)
+            atoms.append(self.voc_encoder.i2voc[token])
         self.n_generated_atom = len(atoms)
 
         start_point = n_prompt_token+1 if self.atom_order else n_prompt_token+n_atom+1
         coords, pos, error = yield from coord_streamer(self.n_generated_atom, start_point, None, self.voc_encoder, self.coord_range, self.atom_order, self.center)
-        if coords is not None:
+        if error is not None:
+            self._error = error
+        else:
+            assert coords is not None
             self._mol = Chem.RWMol()
+            for symbol in atoms:
+                self._mol.AddAtom(Chem.Atom(symbol))
             try:
-                for symbol in atoms:
-                    self._mol.AddAtom(Chem.Atom(symbol))
                 self._mol.AddConformer(array_to_conf(coords))
-                DetermineBondOrders(self._mol)
+            except Exception as e:
+                self.logger.info(f"Error at AddConformer: {type(e).__name__}{e.args}")
+                self._error = 'ADD_CONFORMER'
+                self._mol = None
+                yield False, pos, [self.voc_encoder.voc2i['[END]']]
+                return
+            self.logger.info(f"atoms={atoms}")
+            try:
+                DetermineBonds(self._mol)
             except Exception as e:
                 self.logger.warning(f"Error while making atom: {e.args[0]}")
+                self._error = 'DETERMINE_BOND_ORDERS'
                 self._mol = None
+                yield False, pos, [self.voc_encoder.voc2i['[END]']]
+                return
+            self._error = None
         yield False, pos, [self.voc_encoder.voc2i['[END]']]
 
     def ligand(self):
