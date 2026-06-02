@@ -433,9 +433,13 @@ def main():
     logs += data_log
     index_data, token_data = index_dataset(token_data)
     train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
+    max_prompt_len_by_gpu = solve_increasing_fn_left(lambda L: model_.get_gpuuse(1, L, True, 'FLASH')-args.gpu_size, 40000) - args.max_new_token
     if args.max_prompt_len is None:
-        args.max_prompt_len = solve_increasing_fn_left(lambda L: model_.get_gpuuse(1, L, True, 'FLASH')-args.gpu_size, 40000) - args.max_new_token
+        args.max_prompt_len = max_prompt_len_by_gpu
         logger.info(f"args.max_prompt_len was set to {args.max_prompt_len}", **NO_DUP)
+    else:
+        if args.max_prompt_len > max_prompt_len_by_gpu:
+            logger.warning(f"{args.max_prompt_len=} > {max_prompt_len_by_gpu=}")
     data_iter = ReinforceDataIter(train_data, device, args.sample_per_step, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
 
 
@@ -498,8 +502,6 @@ def main():
             output = tokens[1:]
             position = pad_sequence(position, padding_value=0).to(device)
             weight = pad_sequence(weight, padding_value=0.0).to(device)
-
-            
             scores = norm(torch.tensor(scores, device=device), errors, idxs)
 
             # Forward Get prob & reward loss
