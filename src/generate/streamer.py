@@ -309,7 +309,7 @@ class SmileCoordsStreamer(GeneratorStreamer, LigandStreamer):
                         self._error = coord_error
                         break
                     coordss.append(coords)
-        coordss = np.stack(coordss, axis=0)
+        coordss = np.concatenate(coordss, axis=0)
         if self.center is not None:
             coords += self.center
         smi = ''.join(smi_tokens)
