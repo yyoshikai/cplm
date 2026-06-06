@@ -1,777 +1,531 @@
-import os, psutil, math, copy
-from collections import defaultdict, Counter
-from typing import Literal, Any
-from contextlib import nullcontext
+import os, yaml, math, random
+import itertools as itr
+import concurrent.futures as cf
+from argparse import ArgumentParser, Namespace
+from logging import getLogger
 import numpy as np, pandas as pd
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-import torch.nn.functional as F
-from torch.nn.parallel import DistributedDataParallel
-from torch.nn.utils.rnn import pad_sequence
 from torch import Tensor
+from torch.utils.data import Dataset, DataLoader, StackDataset
+from torch.nn.utils.rnn import pad_sequence
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from src.utils import IterateRecorder, wraps
-from src.utils.path import cleardir
-from src.utils.ddp import reduce_float, all_gather
-from src.train.collator import solve_increasing_fn_left
+from torch.distributed.elastic.multiprocessing.errors import record
+from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors
+from src.data._sampler import InfiniteRandomSampler
+from src.data import index_dataset
+from src.utils import get_git_hash, wraps, filter_long
+from src.utils.rdkit import ignore_rdkit_warning
+from src.utils.logger import NO_DUP
+from src.chem import rdmol2obmol, pdb2obmol
+from src.evaluate import eval_vina, eval_qvina
+from src.data.protein import AtomRepr
 from src.data.tokenizer import VocEncoder
-from src.model import Model
-from src.train import get_optimizer_scheduler, get_process_ranks
-from src.train.looper import Looper
+from src.data.molecule import Mol2PDBDataset
+from src.model import Model, Streamer
+from src.train import set_env, get_model, get_process_ranks
+from src.train.collator import solve_increasing_fn_left
+from src.train.data import get_finetune_data
+from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
+from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
+from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
+from src.train.reinforce import EmptyNorm, ClampNorm, FillNorm, SampleDevFillNorm, SampleWhitenNorm, AllWhitenNorm, RecordNorm, Fill0Norm
+WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
-class ReinforceModel(nn.Module):
-    def __init__(self, model: Model, baseline):
-        super().__init__()
-        self.baseline = baseline
-        self.model = model
-        if baseline:
-            self.value_head = nn.Linear(model.state_size, 1)
-    
-    def forward(self, src: Tensor, position: Tensor):
-        logits, states = self.model(src, position, out_state=True)
-        if self.baseline:
-            values = self.value_head(states).squeeze(-1)
+## Scoring function
+def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool):
+    match target:
+        case 'min_vina':
+            score, min_score, error = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
+            return -min_score if min_score is not None else np.nan
+        case 'vina':
+            score, min_score, error = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
+            return -score if min_score is not None else np.nan
+        case 'mw_max':
+            return rdMolDescriptors.CalcExactMolWt(lig_rdmol)
+        case 'qvina':
+            os.makedirs(out_dir, exist_ok=True)
+            with open(f"{out_dir}/rec_input.pdb", 'w') as f:
+                f.write(rec_pdb)
+            score = eval_qvina(lig_rdmol, f"{out_dir}/rec_input.pdb", out_dir, timeout=60, cpu=cpu, print_prepare=print_prepare)[0]
+            return -score if score is not None else np.nan
+        case 'dummy':
+            return random.random()
+# 参考
+error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}
+
+class GetScoreStreamer(WrapperStreamer):
+    def __init__(self, streamer: Streamer, ligand_streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool):
+        super().__init__(streamer)
+        self.ligand_streamer = ligand_streamer
+        self.e = e
+        self.kwargs = dict(target=target, rec_pdb=rec_pdb, out_dir=out_dir, cpu=cpu, print_prepare=print_prepare)
+        self.future = None
+        self.out = np.nan
+    def put(self, tokens):
+        is_remain, position, token_range = self.streamer.put(tokens)
+        if not is_remain and self.ligand_streamer.error() is None:
+            self.future = self.e.submit(get_score, lig_rdmol=self.ligand_streamer.ligand(), **self.kwargs)
+        return is_remain, position, token_range
+    def result(self):
+        if self.future is not None:
+            self.out = self.future.result()
+    def error(self):
+        ligand_error = self.ligand_streamer.error()
+        if ligand_error is not None:
+            return ligand_error
+        elif np.isnan(self.out):
+            return 'VINA'
         else:
-            values = None
-        return logits, values
+            return None
 
-
-def get_all_stat(values: Tensor) -> tuple[float, float]:
-    all_values = all_gather(values)
-    mean = torch.nanmean(all_values).item()
-    std = torch.nanmean((all_values-mean)**2).sqrt().item()
-    return mean, std
-
-def get_sample_stat(values: Tensor, idxs: Tensor) -> tuple[Tensor, Tensor]:
-    all_values = all_gather(values)
-    all_idxs = all_gather(idxs)
-    B, = values.shape
-
-    sample_means = torch.full_like(values, math.nan)
-    sample_stds = torch.full_like(values, math.nan)
-    for uidx in torch.unique(idxs):
-        uidx_all_values = all_values[all_idxs == uidx]
-        if torch.all(torch.isnan(uidx_all_values)):
-            continue
-        mean = torch.nanmean(uidx_all_values)
-        std = torch.nanmean((uidx_all_values-mean)**2).sqrt()
-        sample_means[idxs == uidx] = mean
-        sample_stds[idxs == uidx] = std
-    return sample_means, sample_stds
-
-def all_gather_counter(c: dict) -> dict:
-    cs = [None]*dist.get_world_size()
-    dist.all_gather_object(cs, c)
-    all_c = {}
-    for c in cs:
-        for k, n in c.items():
-            if k in all_c:
-                all_c[k] += n
+def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
+    grads = { name: param.grad.clone() if param.grad is not None else None 
+            for name, param in model.named_parameters() }
+    if prev_grads is not None:
+        diff_grads = {}
+        for name, grad in grad.items():
+            prev_grad = prev_grads[name]
+            if grad is None:
+                assert prev_grad is None
+                diff_grads[name] = None
             else:
-                all_c[k] = n
-    return all_c
-
-
-def get_velocity(
-        model: ReinforceModel, 
-        input: Tensor, 
-        position: Tensor, 
-        weight: Tensor, 
-        scores: list[Tensor], 
-        idxs: Tensor, 
-        sample_whiten: list[Literal['mean', 'std']], 
-        all_whiten: list[Literal['mean', 'std']], 
-        mbatch_size: int
-) -> Tensor:
-    """
-    Parameters
-    ----------
-    input, position, weight: Tensor(float)[L, B]
-    scores: list[Tensor(float)[L+1,]]
-
-    Returns
-    -------
-    velocity: Tensor(float)[L, B]
-    
-    """
-    model
-    L, B = input.shape
-    velocity = []
-    if model.baseline:
-        values = []
-        with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-            for mbatch_start in range(0, B, mbatch_size):
-                mslice = slice(mbatch_start, mbatch_start+mbatch_size)
-                _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
-                values += list(values_m.T)
-            advantage = [scores[b][1:] - values[b] for b in range(B)]
-            velocity = [torch.cumsum(adv[::-1])[::-1] for adv in advantage]
+                diff_grads[name] = grad if prev_grad is None else grad - prev_grad
+        return grads, diff_grads
     else:
-        velocity = [torch.cumsum(score[:1:-1])[::-1] for score in scores]
-    velocity = pad_sequence(velocity) # [L, B]
+        return grads, grads
 
-    # sample-wise whiten
-    ## get sample-wise stat
-    idx2n = {}
-    idx2s = {}
-    idx2s2 = {}
-    for idx in torch.unique(idxs).tolist():
-        idx_weight = weight[:, idxs == idx]
-        idx_velocity = velocity[:, idxs == idx]
-        idx2n[idx] = idx_weight.sum().item()
-        idx2s[idx] = (idx_velocity*idx_weight).sum().item()
-        idx2s2[idx] = (idx_velocity**2*idx_weight).sum().item()
-    idx2n = all_gather_counter(idx2n)
-    idx2s = all_gather_counter(idx2s)
-    idx2s2 = all_gather_counter(idx2s2)
+class ReinforceDataIter:
+    logger = getLogger(f"{__module__}.{__qualname__}")
 
-    means = torch.zeros_like(scores)
-    stds = torch.zeros_like(scores)
-    for idx in torch.unique(idxs).tolist():
-        mean = idx2s[idx] / idx2n[idx]
-        std = math.sqrt((idx2s2[idx] / idx2n[idx]) - mean**2)+1e-5
-        means[idxs == idx] = mean
-        stds[idxs == idx] = std
-    ## whiten
-    sample_whiten_mean = 'mean' in sample_whiten
-    sample_whiten_std = 'std' in sample_whiten
-    if sample_whiten_mean and sample_whiten_std:
-        velocity = (velocity-means)/stds
-    elif sample_whiten_mean:
-        velocity = (velocity-means)
-    elif sample_whiten_std:
-        velocity = (velocity-means)/stds+means
-
-    # all whiten
-    all_n = sum(idx2n.values())
-    all_s = sum(idx2s.values())
-    all_s2 = sum(idx2s2.values())
-    all_mean = all_s / all_n
-    all_std = math.sqrt((all_s2/all_n)-all_mean**2)+1e-5
-    all_s
-    all_whiten_mean = 'mean' in all_whiten
-    all_whiten_std = 'std' in all_whiten
-    if all_whiten_mean and all_whiten_std:
-        velocity = (velocity-all_mean)/all_std
-    elif all_whiten_mean:
-        velocity = velocity-all_mean
-    elif all_whiten_std:
-        velocity = (velocity-all_mean)/all_std+all_mean
-    return velocity
-
-def scale_loss(exp_loss: Tensor, weight: Tensor, scale: list[Literal['batch_size', 'all_exp', 'episode_exp']]) -> Tensor:
-    """
-    exp_losses: Tensor[L, B]
-    weight: Tensor[L, B]
-    
-    Returns
-    -------
-    eposide_losses: [, B]
-
-    """
-    _, B = exp_loss.shape
-    ns_exp = weight.sum(dim=0)
-    world_size = dist.get_world_size()
-    exp_loss = exp_loss*weight
-    episode_losses = torch.sum(exp_loss*weight, dim=0) # [B, ]
-    episode_losses *= world_size # DDPで平均されるのを一旦解消
-
-    if 'batch_size' in scale:
-        episode_losses /= world_size*B
-    if 'all_exp' in scale:
-        all_exp = reduce_float(weight.sum().item(), weight.device)
-        episode_losses /= all_exp
-    if 'episode_exp' in scale:
-        episode_losses /= ns_exp
-    return episode_losses
-
-def get_mbatch_size(mbatch_size: int|None, L: int, gpu_size: float, model: Model, bfloat16: bool=True) -> int:
-    
-    if mbatch_size is None:
-        mbatch_size = solve_increasing_fn_left(lambda bsz: model.get_gpuuse(bsz, L, bfloat16, 'FLASH')-gpu_size, 16)
-    if mbatch_size == 0:
-        raise ValueError(f"Input was too large")
-    return mbatch_size
-
-class Trainer:
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        raise NotImplementedError
-    def save(self, result_dir: str):
-        raise NotImplementedError
-    def policy_model(self) -> Model:
-        raise NotImplementedError
-    def batch_info(self) -> dict[str, Tensor]:
-        raise NotImplementedError
-    def step_info(self) -> dict[str, Any]:
-        raise NotImplementedError
-
-
-class ReinforceTrainer(Trainer):
-    def __init__(self, model: Model, baseline: bool, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, adv_sample_whiten, adv_all_whiten, loss_scale, kl_factor: float, value_factor: float, train_looper: Looper, clip_grad_value: float|None, clip_grad_norm: float, result_dir: str):
-        self.step = 0
-        self._batch_info = {}
-        self._step_info = {}
-
-        device = next(model.parameters()).device
+    def __init__(self, train_data: Dataset, device: torch.device, sample_per_step: int, generate_per_sample: int, max_prompt_len: int, fix_pocket: bool, num_workers: int, seed: int):
+        _, _, DATA_RANK = get_process_ranks()
+        self.data_rank = DATA_RANK['train']
         self.rank = dist.get_rank()
-        _, self.save_rank, _ = get_process_ranks()
+        self.ddp_size = dist.get_world_size()
 
-        self.init_model = copy.deepcopy(model)
-        self.reinforce_model = ReinforceModel(model, baseline)
-        self.reinforce_model.to(device)
-        self.model = DistributedDataParallel(self.reinforce_model)
+        self.device = device
+        self.sample_per_step = sample_per_step
+        self.generate_per_sample = generate_per_sample
+        self.fix_pocket = fix_pocket
+        assert self.sample_per_step * self.generate_per_sample % self.ddp_size == 0
+        if self.rank == self.data_rank:
+            loader = DataLoader(train_data, batch_size=None, 
+                sampler=InfiniteRandomSampler(train_data, generator=torch.Generator().manual_seed(seed)),
+                num_workers=num_workers, pin_memory=True, prefetch_factor=10 if num_workers > 0 else None)
+            self.train_iter = loader.__iter__()
+            if max_prompt_len is not None:
+                self.train_iter = filter_long(self.train_iter, lambda x: x[2], max_prompt_len, self.logger)
+            if self.fix_pocket:
+                self.train_fixed_item = self.train_iter.__next__()
+                del self.train_iter
 
-        # optimizer
-        self.optimizer, self.scheduler = get_optimizer_scheduler(self.model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer)
+    def get(self) -> tuple[Tensor, list[str], list[Tensor], list[list[int]]]:
+        if self.rank == self.data_rank:
+            all_items = []
+            for si in range(self.sample_per_step):
+                item = self.train_fixed_item if self.fix_pocket else self.train_iter.__next__()
+                all_items += [item] * self.generate_per_sample
+            batch_size = self.sample_per_step * self.generate_per_sample // self.ddp_size
+            batched_items = [all_items[r*batch_size:(r+1)*batch_size] for r in range(self.ddp_size)]
+        else:
+            batched_items = None
+        items_box = [None]
+        dist.scatter_object_list(items_box, batched_items, src=self.data_rank)
+        idxs, pdbs, prompt_tokens, positions = zip(*items_box[0])
+        prompt_tokens = [token.to(self.device) for token in prompt_tokens]
+        positions = [position.tolist() for position in positions]
+        idxs = torch.tensor(idxs, dtype=torch.long, device=self.device)
+        return idxs, pdbs, prompt_tokens, positions
 
-        # train args
-        self.mbatch_size = mbatch_size
-        self.gpu_size = gpu_size
-        self.adv_sample_whiten = adv_sample_whiten
-        self.adv_all_whiten = adv_all_whiten
-        self.loss_scale = loss_scale
-        self.kl_factor = kl_factor
-        self.value_factor = value_factor
-        self.train_looper = train_looper
-        self.clip_grad_value = clip_grad_value
-        self.clip_grad_norm = clip_grad_norm
-        self.result_dir = result_dir
-
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: list[Tensor], errors: list[str], idxs: Tensor):
-        # get & whiten velocity
-        L, B = input.shape
-        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.reinforce_model.model)
-        self.train_looper.put('velocity')
-        velocity = get_velocity(self.reinforce_model, input, position, weight, scores, idxs, self.adv_sample_whiten, self.adv_all_whiten, mbatch_size)
-
-        self.train_looper.put('forward_backward')
-        self.model.train()
-        self.optimizer.zero_grad()
-        save_grad = self.step in [0, 100]
-        with self.model.join():
-            reward_loss = 0.0
-            kl_loss = 0.0
-            value_loss = 0.0
-            values = []
-            log_probs = []
-            if save_grad:
-                term2grads = {term: defaultdict(float) for term in ['reward', 'kl', 'value']}
-            for mbatch_start in range(0, B, mbatch_size):
-                mslice = slice(mbatch_start, mbatch_start+mbatch_size)
-                input_m = input[:, mslice]
-                output_m = output[:, mslice]
-                position_m = position[:,mslice]
-                weight_m = weight[:, mslice]
-                rewards_m = scores[mslice]
-                with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-                    with torch.inference_mode():
-                        init_logits = self.init_model(input_m, position_m) # [L, B, N]
-                        init_log_probs_all = F.log_softmax(init_logits, dim=-1).detach() # [L, B, N]
-                    logits_m, values_m = self.model(input_m, position_m) # [L, B, T], [L, B]
-
-                    log_probs_all = F.log_softmax(logits_m, dim=-1) # [L, B, N]
-                    log_probs_m = torch.gather(log_probs_all, dim=-1, index=output_m.unsqueeze(-1)).squeeze(-1) # [L, B]
-                    reward_loss_m = -velocity[:, mslice]*log_probs_m
-                    reward_loss_m = scale_loss(reward_loss_m, weight_m, self.loss_scale)
-
-                    ## KL loss
-                    log_probs_all = F.log_softmax(logits_m, dim=-1)
-                    kl_loss_m = F.kl_div(input=log_probs_all, target=init_log_probs_all, reduction='none', 
-                        log_target=True) # [Lo-1, B, N]
-                    kl_loss_m = kl_loss_m.sum(dim=-1) # [Lo-1, B]
-                    kl_loss_m = scale_loss(kl_loss_m, weight_m, self.loss_scale) * self.kl_factor
-
-                    if self.reinforce_model.baseline:
-                        value_loss_m = (rewards_m-values_m)**2*0.5
-                        value_loss_m = scale_loss(value_loss_m, weight_m, self.loss_scale) * self.value_factor
-                    else:
-                        value_loss_m = torch.zeros_like(velocity, requires_grad=True) # [L, B]
-                        values_m = torch.zeros_like(velocity) # [L, B]
-                                        
-                if save_grad:
-                    self.train_looper.put('save_grad')
-                    terms = {'reward': reward_loss_m.sum(), 'kl': kl_loss_m.sum(), 'value': value_loss_m.sum()}
-                    for term_name, term in terms.items():
-                        grads = torch.autograd.grad(term, self.model.parameters(), retain_graph=True, allow_unused=True)
-                        for (param_name, _), grad in zip(self.model.named_parameters(), grads):
-                            if grad is not None:
-                                term2grads[term_name][param_name] += grad
-                    self.train_looper.put('forward_backward')
-                loss = reward_loss_m.sum()+kl_loss_m.sum()+value_loss_m.sum()
-                loss.backward()
-                reward_loss += reward_loss_m.sum().item()
-                kl_loss += kl_loss_m.sum().item()
-                value_loss += value_loss_m.sum().item()
-                log_probs.append(log_probs_m.detach())
-                values.append(values_m.detach())
-        self._batch_info = {
-            'log_prob': (torch.cat(log_probs, dim=1) / math.log(10)).float().cpu(), 
-            'velocity': velocity.float().cpu(),
-            'value': torch.cat(values, dim=1).float().cpu()
-        }
-        self._step_info = dict(
-            lr=self.scheduler.get_last_lr()[0], 
-            reward_loss=reward_loss, 
-            kl_loss=kl_loss, 
-            value_loss=value_loss, 
-            mbatch_size=mbatch_size,
-            pred_gpu_use=self.reinforce_model.model.get_gpuuse(mbatch_size, L, True, 'FLASH')
-        )
-        if save_grad:
-            for term, grads in term2grads.items():
-                for param_name, grad in grads.items():
-                    dist.reduce(grad, dst=self.save_rank, op=dist.ReduceOp.AVG)
-            if self.rank == self.save_rank:
-                for term, grads in term2grads.items():
-                    torch.save(dict(grads), f"{self.result_dir}/grads/{term}/step{self.step}.pth")
-
-        # Optimizer's step
-        self.train_looper.put('optim')
-        if self.clip_grad_value is not None:
-            torch.nn.utils.clip_grad_value_(self.model.parameters(), self.clip_grad_value)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
-        self.optimizer.step()
-        self.scheduler.step()
-        self.step += 1
-
-    def save(self, result_dir):
-        if self.rank == self.save_rank:
-            os.makedirs(f"{result_dir}/models", exist_ok=True)
-            torch.save(self.policy_model().state_dict(), f"{result_dir}/models/{self.step}.pth")
-            if self.reinforce_model.baseline:
-                os.makedirs(f"{result_dir}/value_models", exist_ok=True)
-                torch.save(self.reinforce_model.value_head.state_dict(), f"{result_dir}/value_models/{self.step}.pth")
-            if self.step > 0:
-                cleardir(f"{result_dir}/optimizers")
-                torch.save(self.optimizer.state_dict(), f"{result_dir}/optimizers/{self.step}.pth")
-    def policy_model(self):
-        return self.reinforce_model.model
-    def batch_info(self):
-        return self._batch_info
-    def step_info(self):
-        return self._step_info
-
-def get_log_prob(logits: Tensor, output: Tensor):
-    """
-    Args:
-        logits (Tensor(float)[L, B, T]): logits (before softmax)
-        output (Tensor(long)[L, B]): output indices
-    Returns:
-        Tensor(float)[L, B]: log prob of output token
-    """
-    log_probs_all = F.log_softmax(logits, dim=-1) # [L, B, N]
-    log_probs = torch.gather(log_probs_all, dim=-1, index=output.unsqueeze(-1)).squeeze(-1) # [L, B]
-    return log_probs
-
-
-class DPOTrainer(Trainer):
-    def __init__(self, model: Model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, kl_factor: float, train_looper: Looper, clip_grad_value: float|None, clip_grad_norm: float):
-        """
-        DPO Trainer with Placket-Luce model
-        """
-        self.step = 0
-        self._batch_info = self._step_info = {}
-        self.rank = dist.get_rank()
-        
-        self.init_model = copy.deepcopy(model)
-        self.model = DistributedDataParallel(model)
-        self.optimizer, self.scheduler = get_optimizer_scheduler(self.model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer)
-
-        self.mbatch_size = mbatch_size
-        self.gpu_size = gpu_size
-        self.kl_factor = kl_factor
-        self.clip_grad_value = clip_grad_value
-        self.clip_grad_norm = clip_grad_norm
-        self.train_looper = train_looper
-
-        _, self.save_rank, _ = get_process_ranks()
-
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        
-        self.train_looper.put('train_rs')
-        self.model.train()
-        self.optimizer.zero_grad()
-        L, B = input.shape
-        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.init_model)
-        rs = [] # [B, ]
-        with torch.autocast('cuda', torch.bfloat16), \
-            sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
-            torch.inference_mode():
-            for mb in range(0, B, mbatch_size):
-                mslice = slice(mb, mb+mbatch_size)
-                init_logits_m = self.init_model(input[:,mslice], position[:,mslice]) # [L, Bm, D]
-                init_log_probs_m = get_log_prob(init_logits_m, output[:,mslice]) # [L, Bm]
-                logits_m = self.model(input[:,mslice], position[:,mslice]) # [L, Bm, D]
-                log_probs_m = get_log_prob(logits_m, output[:,mslice])
-                rs_m = torch.sum((log_probs_m-init_log_probs_m)*weight[:,mslice], dim=0)*self.kl_factor
-                rs.append(rs_m)
-        rs = torch.cat(rs)
-
-        self.train_looper.put('train_gather_rs')
-        all_rs = all_gather(rs)
-
-        self.train_looper.put('train_backward_rs')
-        all_rs.requires_grad_()
-        all_idxs = all_gather(idxs)
-        all_scores = all_gather(scores)
-        loss = 0
-        for idx in torch.unique(all_idxs).tolist():
-            irs = all_rs[all_idxs == idx]
-            iscores = all_scores[all_idxs == idx] # ex. [1.0, 0.5, 1.5, 0.0]
-            irs = irs[torch.argsort(-iscores, stable=False)]
-            Bi = len(irs)
-            for i in range(Bi):
-                loss += torch.log_softmax(irs[i:], dim=0)[0]
-        loss.backward()
-        r_grads = all_rs.grad[B*self.rank:B*(self.rank+1)]*0.001
-
-        self.train_looper.put('train_backward_model')
-        self.model.train()
-        log_probs = []
-        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, True)
-        for mb in range(0, B, mbatch_size):
-            with torch.autocast('cuda', torch.bfloat16), \
-                    sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
-                    self.model.no_sync() if mb+mbatch_size < B else nullcontext():
-                mslice = slice(mb, mb+mbatch_size)
-                logits_m = self.model(input[:,mslice], position[:,mslice]) # [L, Bm, D]
-                log_probs_m = get_log_prob(logits_m, output[:,mslice])
-                log_probs.append(log_probs_m.detach())
-                rs_m = torch.sum(log_probs_m*weight[:,mslice], dim=0)
-                rs_m.backward(gradient=r_grads[mslice])
-
-        self.train_looper.put('train_update')
-        self._batch_info = {
-            'log_prob': (torch.cat(log_probs, dim=1)/math.log(10)).float().cpu(),
-            'velocity': r_grads.float().cpu().unsqueeze(0).expand_as(input)
-        }
-        self._step_info = dict(lr=self.scheduler.get_last_lr()[0], loss=loss.item())
-        self._step_info.update({f'r_grad_{i}': r_grads[i].item() for i in range(B)})
-
-        # Optimizer's step
-        if self.clip_grad_value is not None:
-            torch.nn.utils.clip_grad_value_(self.model.parameters(), self.clip_grad_value)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
-        self.optimizer.step()
-        self.scheduler.step()
-        self.step += 1
-
-    def save(self, result_dir):
-        if self.rank == self.save_rank:
-            os.makedirs(f"{result_dir}/models", exist_ok=True)
-            torch.save(self.model.module.state_dict(), f"{result_dir}/models/{self.step}.pth")
-            if self.step > 0:
-                cleardir(f"{result_dir}/optimizers")
-                torch.save(self.optimizer.state_dict(), f"{result_dir}/optimizers/{self.step}.pth")
-    def policy_model(self):
-        return self.model.module
-    def batch_info(self):
-        return self._batch_info
-    def step_info(self):
-        return self._step_info
-
-    
-class GRPOTrainer(Trainer):
-    def __init__(self, model: Model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, kl_factor: float, clip_grad_value: float|None, clip_grad_norm: float, n_ppo_step: int, ppo_clip_eps: float):
-        self.step = 0
-        self._batch_info = self._step_info = {}
-
-        self.rank = dist.get_rank()
-        _, self.save_rank, _ = get_process_ranks()
-
-        self.init_model = copy.deepcopy(model)
-        self.model = DistributedDataParallel(model)
-        self.optimizer, self.scheduler = get_optimizer_scheduler(self.model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer)
-        self.clip_grad_norm = clip_grad_norm
-        self.clip_grad_value = clip_grad_value
-
-        self.mbatch_size = mbatch_size
-        self.gpu_size = gpu_size
-        self.n_ppo_step = n_ppo_step
-        self.eps = ppo_clip_eps
-        self.kl_factor = kl_factor
-
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        
-        L, B = input.shape
-        device = input.device
-
-        advs = whiten_scores(scores, idxs, sample_whiten=['mean', 'std'], all_whiten=[])
-        all_weight = reduce_float(weight.sum().item(), device)
-        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, True)
-
-        init_log_probs = []
-        with torch.autocast('cuda', torch.bfloat16), \
-                sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
-                torch.inference_mode():
-            for mb in range(0, B, mbatch_size):
-                mslice = slice(mb, mb+mbatch_size)
-                init_log_probs_m = get_log_prob(self.init_model(input[:,mslice], position[:,mslice]).detach(), output[:,mslice])
-                init_log_probs.append(init_log_probs_m)
-        init_log_probs = torch.cat(init_log_probs, dim=1)
-
-
-        self.model.train()
-        self.init_model.train()
-        self._batch_info = {}
-        self._step_info = {}
-        reward_losses = []
-        kl_losses = []
-        for step in range(self.n_ppo_step):
-            log_probs = []
-            grads = []
-            self.optimizer.zero_grad()
-            reward_loss = 0
-            kl_loss = 0
-            for mb in range(0, B, mbatch_size):
-                with torch.autocast('cuda', torch.bfloat16), \
-                        sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
-                        self.model.no_sync() if mb+mbatch_size < B else nullcontext():
-                    mslice = slice(mb, mb+mbatch_size)
-                    log_probs_m = get_log_prob(self.model(input[:,mslice], position[:,mslice]), output[:,mslice])
-                    log_probs_m.retain_grad()
-                    log_probs.append(log_probs_m.detach())
-                    rs_m = log_probs_m - init_log_probs[:, mslice]
-                    rs_clip_m = torch.clamp(rs_m, 1-self.eps, 1+self.eps) # [L, B]
-                    reward_losses_m = torch.min(rs_m*advs[mslice], rs_clip_m*advs[mslice])
-                    reward_loss_m = torch.sum(reward_losses_m*weight[:,mslice])
-                    reward_loss += reward_loss_m.item()
-                    kl_loss_m = torch.sum((torch.exp(rs_m)-rs_m-1)*weight[:,mslice])
-                    kl_loss += kl_loss_m.item()
-                    loss = (reward_loss_m+kl_loss_m*self.kl_factor) / all_weight * dist.get_world_size()
-                    loss.backward()
-                    grads.append(log_probs_m.grad)
-            if step == 0:
-                log_probs = torch.cat(log_probs, dim=1)
-                grads = torch.cat(grads, dim=1)
-                self._batch_info = {
-                    'log_prob0': (log_probs / math.log(10)).float().cpu(),
-                    'grad0': grads.float().cpu()
-                }
-            if self.clip_grad_value is not None:
-                torch.nn.utils.clip_grad_value_(self.model.parameters(), self.clip_grad_value)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
-            self.optimizer.step()
-            self.scheduler.step()
-        self._step_info['reward_loss'] = reward_losses
-        self._step_info['kl_loss'] = kl_losses
-    def save(self, result_dir):
-        if self.rank == self.save_rank:
-            os.makedirs(f"{result_dir}/models", exist_ok=True)
-            torch.save(self.model.module.state_dict(), f"{result_dir}/models/{self.step}.pth")
-            if self.step > 0:
-                cleardir(f"{result_dir}/optimizers")
-                torch.save(self.optimizer.state_dict(), f"{result_dir}/optimizers/{self.step}.pth")
-    def policy_model(self):
-        return self.model.module
-    def batch_info(self):
-        return self._batch_info
-    def step_info(self):
-        return self._step_info
-
-
-class WrapTrainer(Trainer):
-    def __init__(self, trainer: Trainer):
-        self.trainer = trainer
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        return self.trainer.train(input, output, position, weight, scores, errors, idxs)
-    def save(self, result_dir: str):
-        self.trainer.save(result_dir)
-    def policy_model(self):
-        return self.trainer.policy_model()
-    def batch_info(self):
-        return self.trainer.batch_info()
-    def step_info(self):
-        return self.trainer.step_info()
-
-class SaveBatchTrainer(WrapTrainer):
-    def __init__(self, trainer: Trainer, result_dir: str, do_save_steps: list[int], voc_encoder: VocEncoder):
-        super().__init__(trainer)
-        self.step = 0
-        self.rank = dist.get_rank()
-        self.result_dir = result_dir
-        self.do_save_steps = do_save_steps
+class Generator:
+    def __init__(self, 
+            voc_encoder: VocEncoder,
+            result_dir: str, 
+            max_new_token: int,
+            coord_range: int,
+            lig_h: AtomRepr,
+            lig_format: str,
+            smiles_voc_dir: str,
+            cpu: int,
+            num_score_workers: int,
+            target: str,
+            device: torch.device,):
         self.voc_encoder = voc_encoder
-
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        L, B = input.shape
-        self.trainer.train(input, output, position, weight, scores, errors, idxs)
-
-        if self.step in self.do_save_steps:
-            
-            os.makedirs(f"{self.result_dir}/batches/{self.step}", exist_ok=True)
-            for b in (range(B) if self.step in [0, 100] else [0]):
-                df = pd.DataFrame(dict(
-                    input=[self.voc_encoder.i2voc[i] for i in input[:,b]], 
-                    output=[self.voc_encoder.i2voc[i] for i in output[:,b]], 
-                    position=position[:,b].float().cpu(),
-                    weight=weight[:,b].float().cpu(),
-                    **{k: v[:, b] for k, v in self.batch_info().items()})
-                )
-                df.to_csv(f"{self.result_dir}/batches/{self.step}/{self.rank}_{b}.csv")
-                with open(f"{self.result_dir}/batches/{self.step}/{self.rank}_{b}.txt", 'w') as f:
-                    f.write(df.to_string())
-                
-        self.step += 1
-
-class GetMemoryTrainer(WrapTrainer):
-    def __init__(self, trainer: Trainer, device: torch.device):
-        super().__init__(trainer)
+        self.result_dir = result_dir
+        self.max_new_token = max_new_token
+        self.coord_range = coord_range
+        self.lig_h = lig_h
+        self.lig_format = lig_format
+        self.smiles_voc_dir = smiles_voc_dir
+        self.num_score_workers = num_score_workers
+        self.cpu = cpu
+        self.target = target
         self.device = device
 
-    def step_info(self):
-        step_info = self.trainer.step_info()
-        step_info.update({
-            'memory_gb': psutil.virtual_memory().used/(2**30), 
-            'gpu_gb': torch.cuda.max_memory_allocated(self.device)/2**30
-        })
-        return step_info
+    def generate(
+            self,
+            model: Model, 
 
-class SaveStepTrainer(WrapTrainer):
-    def __init__(self, trainer: Trainer, result_dir: str, record_opt: int, max_opt: int):
-        super().__init__(trainer)
-        self.step = 0
+            step: int,
+            prompt_tokens: list[Tensor],
+            positions,
+            do_save: bool,
+
+            pdbs: list[str],
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, list[float], list[str|None]]:
         rank = dist.get_rank()
-        self.step_recorder = IterateRecorder(f"{result_dir}/steps/{rank}.csv", record_opt)
-        self.max_opt = max_opt
 
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        self.trainer.train(input, output, position, weight, scores, errors, idxs)
-        self.step_recorder.record(**self.step_info())
-        if self.step == self.max_opt:
-            self.step_recorder.flush()
+        model.eval()
+        with cf.ProcessPoolExecutor(self.num_score_workers) as e:
+            score_streamers: list[GetScoreStreamer]= []
+            token_streamers: list[TokenSaveStreamer] = []
+            position_streamers: list[PositionSaveStreamer] = []
+            streamers = []
+            for idx, pdb in enumerate(pdbs):
+                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, self.lig_h, self.smiles_voc_dir)
+                out_dir = f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
+                if do_save:
+                    streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf.sdf")
+                    streamer = TokenWriteStreamer(streamer, self.voc_encoder, positions[idx], f"{out_dir}/prompt_token.csv", f"{out_dir}/new_token.csv")
+                streamer = GetScoreStreamer(streamer, ligand_streamer, e, self.target, pdb, 
+                    out_dir, 
+                    cpu=self.cpu, print_prepare=step < 3) 
+                score_streamers.append(streamer)
+                streamer = TokenSaveStreamer(streamer)
+                token_streamers.append(streamer)
+                streamer = PositionSaveStreamer(streamer)
+                position_streamers.append(streamer)
+                if step < 5:
+                    streamer = TimeLogStreamer(streamer, str(idx), 10.0)
+                    # if idx == 0:
+                    # streamer = TqdmStreamer(streamer, total=max_new_token, desc="generate")
+                streamers.append(streamer)
+            with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+                model.generate2(prompt_tokens, positions, streamers, self.max_new_token)
+            for streamer in score_streamers:
+                streamer.result()
 
+        tokens = [
+            torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens)
+            for token_streamer in token_streamers
+        ]
 
-# Score normalizer
-class Norm:
-    def __call__(self, raw_scores: Tensor, errors: list[str], idxs: Tensor) -> Tensor:
-        raise NotImplementedError
-    
-    def get_error_mask(self, errors: list[str], device: torch.device):
-        is_vina_error = torch.tensor([error == 'VINA' for error in errors], dtype=torch.bool, device=device)
-        is_gen_error = torch.tensor([error is not None for error in errors], dtype=torch.bool, device=device) & (~is_vina_error)
-        return is_vina_error, is_gen_error
-
-class EmptyNorm(Norm):
-    def __call__(self, raw_scores, errors, idxs):
-        return raw_scores
-
-class ClampNorm(Norm):
-    def __init__(self, norm: Norm, min: float):
-        self.norm = norm
-        self.min = min
-
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        return torch.clamp(scores, min=self.min)
-
-class FillNorm(Norm):
-    def __init__(self, norm: Norm, gen_error_score: float, vina_error_score: float):
-        self.norm = norm
-        self.gen_error_score = gen_error_score
-        self.vina_error_score = vina_error_score
-    
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        is_gen_error, is_vina_error = self.get_error_mask(errors, scores.device)
-        scores[is_gen_error] = self.gen_error_score
-        scores[is_vina_error] = self.vina_error_score
-        return scores
-
-class SampleDevFillNorm(Norm):
-    def __init__(self, norm: Norm, gen_error_dev: float, vina_error_dev: float):
-        self.norm = norm
-        self.gen_error_dev = gen_error_dev
-        self.vina_error_dev = vina_error_dev
-
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        is_gen_error, is_vina_error = self.get_error_mask(errors, scores.device)
-        sample_mean, sample_std = get_sample_stat(scores, idxs)
-        if math.isfinite(self.gen_error_dev) and torch.any(is_gen_error):
-            scores[is_gen_error] = sample_mean[is_gen_error]+sample_std[is_gen_error]*self.gen_error_dev
-        if math.isfinite(self.vina_error_dev):
-            scores[is_vina_error] = sample_mean[is_vina_error]+sample_std[is_vina_error]*self.vina_error_dev
-        return scores
-
-class SampleWhitenNorm(Norm):
-    def __init__(self, norm: Norm, mean: bool, std: bool):
-        self.norm = norm
-        self.mean = mean
-        self.std = std
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        if not self.mean and not self.std:
-            return scores
+        weight = []
+        for b, token_streamer in enumerate(token_streamers):
+            prompt_size = len(token_streamer.prompt_tokens)
+            new_size = len(token_streamer.new_tokens)
+            w = torch.zeros(prompt_size+new_size-1)
+            w[prompt_size-1:] = 1.0
+            weight.append(w)
+        position = [
+            torch.tensor(position+position_streamer.new_positions)[:-2] for position, position_streamer
+            in zip(positions, position_streamers)
+        ] # [L, B]
         
-        # sample whiten
-        sample_means, sample_stds = get_sample_stat(scores, idxs)
-        sample_stds+=1e-5
-        if self.mean and self.std:
-            scores = (scores-sample_means)/sample_stds
-        elif self.mean:
-            scores = scores-sample_means
-        elif self.std:
-            scores = (scores-sample_means)/sample_stds+self.mean
-        return scores
+        errors = [streamer.error() for streamer in score_streamers]
+        scores = [streamer.out for streamer in score_streamers]
+        return tokens, position, weight, scores, errors
 
-class AllWhitenNorm(Norm):
-    def __init__(self, norm: Norm, mean: bool, std: bool):
-        self.norm = norm
-        self.mean = mean
-        self.std = std
+class BatchSplitGenerator(Generator):
+    def __init__(self, generator: Generator, batch_size: int):
+        self.generator = generator
+        self.batch_size = batch_size
+    
+    @wraps(Generator.generate)
+    def generate(self, model, step, prompt_tokens, positions, do_save, pdbs):
+        B = len(prompt_tokens)
+        outs = []
+        for bs in range(0, B, self.batch_size):
+            out = self.generator.generate(model, step, prompt_tokens[bs:bs+self.batch_size], positions[bs:bs+self.batch_size], do_save, pdbs[bs:bs+self.batch_size])
+            outs.append(out)
+        token, position, weight, scores, errors = zip(*outs)
+        token = list(itr.chain(*token))
+        position = list(itr.chain(*position))
+        weight = list(itr.chain(*weight))
+        scores = list(itr.chain(*scores))
+        errors = list(itr.chain(*errors))
+        return token, position, weight, scores, errors
 
-
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        world_size = dist.get_world_size()
-        # all_gather scores
-        all_scores = [torch.zeros_like(scores) for _ in range(world_size)]
-        dist.all_gather(all_scores, scores)
-        all_scores = torch.cat(all_scores)
-        
-        # all whiten
-        mean, std = get_all_stat(scores)
-        if not torch.all(torch.isnan(scores)):
-            if self.mean and self.std:
-                scores = (scores - mean) / (std+1e-5)
-            elif self.mean:
-                scores = scores - mean
-            elif self.std:
-                scores = (scores - mean) / (std+1e-5) + mean
-        return scores
-
-class Fill0Norm(Norm):
-    def __init__(self, norm):
-        self.norm = norm
-
-
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        scores[torch.isnan(scores)] = 0.0
-        return scores
-
-
-class RecordNorm(Norm):
-    def __init__(self, norm: Norm, result_dir: str):
-        self.norm = norm
-        self.path = f"{result_dir}/scores/{dist.get_rank()}.csv"
+class SizeRecordGenerator(Generator):
+    def __init__(self, generator: Generator, result_dir: str):
+        self.generator = generator
+        self.path = f"{result_dir}/size/{dist.get_rank()}.csv"
         self.is_empty = True
-    
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
 
+    @wraps(Generator.generate)
+    def generate(self, model, step, prompt_tokens, positions, do_save, pdbs):
         if self.is_empty:
-            B = len(scores)
+            batch_size = len(prompt_tokens)
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, 'w') as f:
-                f.write(','.join(['raw']*B+['normamized']*B)+'\n')
-                f.write(','.join([str(i%B) for i in range(B*2)])+'\n')
+                f.write(','.join(['prompt']*batch_size+['output']*batch_size)+'\n')
+                f.write((','.join(list(str(i) for i in range(batch_size))*2))+'\n')
             self.is_empty = False
         with open(self.path, 'a') as f:
-            f.write(','.join(str(s) for s in raw_scores.tolist())+',')
-            f.write(','.join(str(s) for s in scores.tolist())+'\n')
+            f.write(','.join([str(len(prompt)) for prompt in prompt_tokens])+',')
+        token, position, weight, scores, errors = self.generator.generate(model, step, prompt_tokens, positions, do_save, pdbs)
+        with open(self.path, 'a') as f:
+            f.write(','.join([str(len(t)-len(prompt)-1) for t, prompt in zip(token, prompt_tokens)])+'\n')
 
-        return scores
+        return token, position, weight, scores, errors
 
+class ErrorRecordGenerator(Generator):
+    def __init__(self, generator: Generator, result_dir: str):
+        self.generator = generator
+        self.path = f"{result_dir}/errors/{dist.get_rank()}.csv"
+        self.is_empty = True
+    
+    @wraps(Generator.generate)
+    def generate(self, *args, **kwargs):
+        token, position, weight, scores, errors = self.generator.generate(*args, **kwargs)
+        if self.is_empty:
+            batch_size = len(errors)
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, 'w') as f:
+                f.write(','.join(str(i) for i in range(batch_size))+'\n')
+            self.is_empty = False
+        with open(self.path, 'a') as f:
+            f.write(','.join(str(e) for e in errors)+'\n')
+        return token, position, weight, scores, errors
+
+def save_and_disable_memory_history(path: str):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.cuda.memory._dump_snapshot(path)
+    torch.cuda.memory._record_memory_history(None)
+
+
+@record
+def main():
+    # arguments
+    parser = ArgumentParser()
+    ## score
+    parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', 'qvina', 'dummy'], required=True)
+    parser.add_argument('--max-new-token', type=int, default=1000)
+    ### score scale & normalization
+    parser.add_argument('--min-valid-score', type=float, default=-math.inf)
+    parser.add_argument('--gen-error-score', type=float, default=math.nan)
+    parser.add_argument('--vina-error-score', type=float, default=math.nan)
+    parser.add_argument('--gen-error-sample-deviation', type=float, default=math.nan)
+    parser.add_argument('--vina-error-sample-deviation', type=float, default=math.nan)
+    parser.add_argument('--sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--all-whiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--gen-error-white-score', type=float, default=math.nan)
+    parser.add_argument('--vina-error-white-score', type=float, default=math.nan)
+    parser.add_argument('--sample-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--all-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--adv-all-whiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--adv-sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
+    parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline', 'dpo', 'grpo', 'dapo'], required=True)
+    ## Trainer
+    ### PPO
+    parser.add_argument('--n-ppo-step', type=int, default=5)
+    parser.add_argument('--ppo-clip-eps', type=float, default=0.2)
+    ## Data
+    parser.add_argument('--max-prompt-len', type=int)
+    parser.add_argument('--generate-per-sample', type=int, default=1)
+    parser.add_argument('--train-sample', type=float, default=1.0)
+    parser.add_argument('--valid-sample', type=float, default=1.0)
+    ## training
+    parser.add_argument('--studyname', required=True)
+    parser.add_argument('--sample-per-step', type=int, default=8)
+    parser.add_argument('--gen-batch-size', type=int)
+    parser.add_argument('--max-opt', type=int, default=10000)
+    ## optimizer
+    parser.add_argument('--weight-decay', type=float, default=0.0) # same as BindGPT
+    parser.add_argument('--clip-grad-value', type=float, default=None)
+    parser.add_argument('--clip-grad-norm', type=float, default=1.0) # same as BindGPT
+    parser.add_argument('--loss-scale', choices=['batch_size', 'all_exp', 'episode_exp'], nargs='*', default=[])
+    parser.add_argument('--kl-factor', type=float, default=0.05) # --alpha in old code. same as BindGPT
+    parser.add_argument('--value-factor', type=float, default=0.05)
+    ## lr/scheduler
+    parser.add_argument('--lr', type=float, default=1.4e-5) # same as BindGPT
+    parser.add_argument('--scheduler', default='constant') # same as BindGPT
+    parser.add_argument("--schedule-free", action='store_true')
+    parser.add_argument("--warmup-ratio", type=float, default=0.04)
+    ## finetune
+    parser.add_argument('--finetune-name', required=True)
+    parser.add_argument('--finetune-opt', type=int, default=None)
+    parser.add_argument('--finetune-patience-val', type=int)
+    ## environment
+    parser.add_argument('--num-workers', type=int, default=0)
+    parser.add_argument('--num-score-workers', type=int, default=1)
+    parser.add_argument('--gc', action='store_true')
+    parser.add_argument('--gpu-size-gb', type=float)
+    parser.add_argument('--mbatch-size', type=int)
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--commit', action='store_false', dest='no_commit')
+    ## verbosity
+    parser.add_argument('--tqdm-generate', action='store_true')
+    parser.add_argument('--record-opt', type=int, default=10)
+    parser.add_argument('--save-opt', type=int)
+    ## test
+    parser.add_argument('--cpu', type=int)
+    parser.add_argument('--test', action='store_true')
+    parser.add_argument("--deterministic", action='store_true')
+    parser.add_argument('--use-categorical', action='store_true')
+    parser.add_argument('--all-autocast', action='store_true')
+    parser.add_argument('--fix-pocket', action='store_true')
+    parser.add_argument("--weight-decay-all", action='store_true')
+    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu'])
+    parser.add_argument('--record-memory-history-step', type=int, default=0)
+    args = parser.parse_args()
+    ## set default args
+    if args.test: args.studyname+='_test'
+    if args.save_opt is None:
+        args.save_opt = 1 if args.test else 500
+    if args.mbatch_size is None:
+        assert args.gpu_size_gb is not None
+        args.gpu_size = args.gpu_size_gb * (2**30)
+    else:
+        assert args.gpu_size_gb is None
+        args.gpu_size = None
+    args.sdp_kernel = 'FLASH'
+    logs = []
+
+    # get finetune info
+    finetune_dir = f"finetune/results/{args.finetune_name}"
+    with open(f"{finetune_dir}/args.yaml") as f:
+        fargs = Namespace(**yaml.safe_load(f))
+    assert fargs.no_score
+    pname = fargs.pretrain_name
+    pretrain_dir = f"training/results/{pname}"
+    with open(f"{pretrain_dir}/args.yaml") as f:
+        pargs = Namespace(**yaml.safe_load(f))
+
+    ## set finetune opt
+    if args.finetune_opt is None:
+        if args.finetune_patience_val is not None: # set from early stopping
+            logs.append(f"finetune_opt was set from patience_val={args.finetune_patience_val}")
+            dfval = pd.read_csv(f"{finetune_dir}/vals/0.csv")
+            losses = dfval['mean_loss'].values
+            for val in range(len(losses)-args.finetune_patience_val):
+                if losses[val] <= losses[val:val+args.finetune_patience_val+1].min():
+                    break
+            else:
+                raise ValueError(f"Early stopping not finished.")
+            args.finetune_opt = int(dfval['opt'].values[val])
+        else: # set from max_opt
+            args.finetune_opt = fargs.max_opt
+        logs.append(f"finetune_opt was set to {args.finetune_opt}")
+    else:
+        assert args.finetune_patience_val is None
+    do_save_steps = [0, 1, 100, 200, 400, 700]+list(range(1000, args.max_opt, 1000))
+    
+    # Environment
+    result_dir = f"reinforce/results/{args.studyname}"
+    (logger, ), rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
+    ignore_rdkit_warning()
+    logger.info(f"git hash={get_git_hash()}", **NO_DUP)
+    if args.record_memory_history_step > 0:
+        torch.cuda.memory._record_memory_history(max_entries=100000)
+
+    # model
+    init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
+    model_, voc_encoder = get_model(pargs, None, init_state_path, device)
+
+    # data
+    _voc_encoder, _raw_data, protein_data, _lig, token_data, position_data, _weight_data, _center_data, data_log \
+            = get_finetune_data(fargs, 'train', 1.0, False, False, True, set(voc_encoder.i2voc[1:]), 'none')
+    protein_pdb_data = Mol2PDBDataset(protein_data)
+    logs += data_log
+    index_data, token_data = index_dataset(token_data)
+    train_data = StackDataset(index_data, protein_pdb_data, token_data, position_data)
+    max_prompt_len_by_gpu = solve_increasing_fn_left(lambda L: model_.get_gpuuse(1, L, True, 'FLASH')-args.gpu_size, 40000) - args.max_new_token
+    if args.max_prompt_len is None:
+        args.max_prompt_len = max_prompt_len_by_gpu
+        logger.info(f"args.max_prompt_len was set to {args.max_prompt_len}", **NO_DUP)
+    else:
+        if args.max_prompt_len > max_prompt_len_by_gpu:
+            logger.warning(f"{args.max_prompt_len=} > {max_prompt_len_by_gpu=}")
+    data_iter = ReinforceDataIter(train_data, device, args.sample_per_step, args.generate_per_sample, args.max_prompt_len, args.fix_pocket, args.num_workers, args.seed)
+
+
+    ## records
+    train_looper = Loopers([
+        LogLooper(logger, 1000, 5, 'step', 'training'),
+        TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 1000),
+        TimeLogLooper(logger, 'step', 1000), 
+        GPUUseLooper(logger, device, 'step', 5)
+    ])
+    if 'gpu' in args.check:
+        train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
+    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, args.target, device)
+    if args.gen_batch_size is not None:
+        generator = BatchSplitGenerator(generator, args.gen_batch_size)
+    generator = SizeRecordGenerator(generator, result_dir)
+    generator = ErrorRecordGenerator(generator, result_dir)
+    norm = EmptyNorm()
+    if math.isfinite(args.min_valid_score):
+        norm = ClampNorm(norm, args.min_valid_score)
+    norm = FillNorm(norm, args.gen_error_score, args.vina_error_score)
+    norm = SampleDevFillNorm(norm, args.gen_error_sample_deviation, args.vina_error_sample_deviation)
+    norm = SampleWhitenNorm(norm, 'mean' in args.sample_whiten, 'std' in args.sample_whiten)
+    norm = AllWhitenNorm(norm, 'mean' in args.all_whiten, 'std' in args.all_whiten)
+    norm = FillNorm(norm, args.gen_error_white_score, args.vina_error_white_score)
+    norm = SampleWhitenNorm(norm, 'mean' in args.sample_rewhiten, 'std' in args.sample_rewhiten)
+    norm = AllWhitenNorm(norm, 'mean' in args.all_rewhiten, 'std' in args.all_rewhiten)
+    norm = Fill0Norm(norm)
+    norm = RecordNorm(norm, result_dir)
+    
+    log_optimizer = 'optimizer' in args.check
+    if args.trainer in ['reinforce', 'reinforce_no_baseline']:
+        baseline = args.trainer == 'reinforce'
+        trainer = ReinforceTrainer(model_, baseline, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.adv_all_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)
+    elif args.trainer == 'dpo':
+        trainer = DPOTrainer(model_, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.kl_factor, train_looper, args.clip_grad_value, args.clip_grad_norm)
+    elif args.trainer == 'grpo':
+        trainer = GRPOTrainer(model_, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.kl_factor, args.clip_grad_value, args.clip_grad_norm, args.n_ppo_step, args.ppo_clip_eps)
+    trainer = GetMemoryTrainer(trainer, device)
+    trainer = SaveBatchTrainer(trainer, result_dir, do_save_steps, voc_encoder)
+    trainer = SaveStepTrainer(trainer, result_dir, args.record_opt, args.max_opt)
+    # save at step 0
+    trainer.save(result_dir)
+
+    train_looper.start_loops()
+    try:
+        for step in range(args.max_opt):
+            is_starting = step < 3
+            do_save = step in do_save_steps
+
+            train_looper.put('get_batch')
+            idxs, pdbs, prompt_tokens, positions = data_iter.get()
+
+            train_looper.put('generate')
+            tokens, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
+            if is_starting:
+                logger.info(f"step {step} raw scores={scores}")
+            tokens = pad_sequence(tokens, padding_value=voc_encoder.pad_token).to(device)
+            input = tokens[:-1]
+            output = tokens[1:]
+            position = pad_sequence(position, padding_value=0).to(device)
+            weight = pad_sequence(weight, padding_value=0.0).to(device)
+            scores = norm(torch.tensor(scores, device=device), errors, idxs)
+
+            # Forward Get prob & reward loss
+            train_looper.put('train')
+            trainer.train(input, output, position, weight, scores, errors, idxs)
+            
+            if step % args.save_opt == 0:
+                train_looper.put('save')
+                trainer.save(result_dir)
+
+            if step == 3:
+                logger.info("RDKit logger will be disabled from now on.")
+                getLogger('rdkit').propagate = False
+
+            if args.record_memory_history_step == step+1:
+                save_and_disable_memory_history(f"{result_dir}/memory_history/{rank}.pkl")
+
+            train_looper.end_loop()
+    except Exception as e:
+        if args.record_memory_history_step >= step+1:
+            save_and_disable_memory_history(f"{result_dir}/memory_history/{rank}.pkl")
+        raise e
+    train_looper.end_loops()
+    dist.destroy_process_group()
+
+if __name__ == '__main__':
+    main()
