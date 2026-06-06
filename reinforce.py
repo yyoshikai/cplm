@@ -20,7 +20,7 @@ from src.utils import get_git_hash, wraps, filter_long
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
 from src.chem import rdmol2obmol, pdb2obmol
-from src.evaluate import eval_vina, eval_qvina
+from src.evaluate import eval_vina, eval_qvina, eval_vina_atom
 from src.data.protein import AtomRepr
 from src.data.tokenizer import VocEncoder
 from src.data.molecule import Mol2PDBDataset
@@ -43,6 +43,9 @@ def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int,
         case 'vina':
             score, min_score, error = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
             return -score if min_score is not None else np.nan
+        case 'vina_atom':
+            free_energy, E_inter, E_intra = eval_vina_atom(lig_rdmol, rec_pdb)
+            return free_energy, E_inter, E_intra
         case 'mw_max':
             return rdMolDescriptors.CalcExactMolWt(lig_rdmol)
         case 'qvina':
@@ -53,25 +56,67 @@ def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int,
             return -score if score is not None else np.nan
         case 'dummy':
             return random.random()
+        
+def get_atom_score(target, lig_rdmol: Chem.Mol, rec_pdb: str):
+    match target:
+        case 'vina_atom':
+            free_energy, E_inter, E_intra = eval_vina_atom(lig_rdmol, rec_pdb)
+            return -free_energy, -E_inter, -E_intra
+        case _:
+            raise ValueError
+
 # 参考
 error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}
 
 class GetScoreStreamer(WrapperStreamer):
-    def __init__(self, streamer: Streamer, ligand_streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool):
+    def __init__(self, streamer: Streamer, ligand_streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool, valid_reward: float):
         super().__init__(streamer)
         self.ligand_streamer = ligand_streamer
         self.e = e
         self.kwargs = dict(target=target, rec_pdb=rec_pdb, out_dir=out_dir, cpu=cpu, print_prepare=print_prepare)
         self.future = None
         self.out = np.nan
+        self.target = target
+        self.prompt_size = None
+        self.gen_size = 0
+        self.valid_reward = valid_reward
     def put(self, tokens):
         is_remain, position, token_range = self.streamer.put(tokens)
+        if self.prompt_size is None:
+            self.prompt_size = len(tokens)
+        else:
+            assert len(tokens) == 1
+            self.gen_size += 1
         if not is_remain and self.ligand_streamer.error() is None:
             self.future = self.e.submit(get_score, lig_rdmol=self.ligand_streamer.ligand(), **self.kwargs)
         return is_remain, position, token_range
     def result(self):
         if self.future is not None:
-            self.out = self.future.result()
+            out = self.future.result()
+            atom_poss, coord_poss = self.ligand_streamer.atom_poss()
+            if self.target == 'vina_atom':
+                _, score_inter, score_intra = out # [Na,], [Na, Na]
+                reward = torch.zeros(self.prompt_size+self.gen_size)
+                reward[atom_poss] += score_inter * 0.5
+                reward[coord_poss] += score_inter * 0.5
+
+                atom_order = torch.argsort(atom_poss)
+                coord_order = torch.argsort(coord_poss)
+                assert torch.all(atom_order == coord_order)
+                order = atom_order
+                score_intra = score_intra[order][:,order]
+                score_intra = (score_intra+score_intra.T).triu().sum(dim=0)
+                reward[atom_poss[order]] += score_intra * 0.5
+                reward[coord_poss[order]] += score_intra * 0.5
+                reward[-1] += self.valid_reward
+            else:
+                reward = torch.zeros(self.prompt_size+self.gen_size)
+                reward[-1] = self.out
+        else:
+            reward = torch.zeros(self.prompt_size+self.gen_size)
+        return reward
+
+
     def error(self):
         ligand_error = self.ligand_streamer.error()
         if ligand_error is not None:
@@ -152,7 +197,8 @@ class Generator:
             cpu: int,
             num_score_workers: int,
             target: str,
-            device: torch.device,):
+            device: torch.device,
+            valid_reward: float):
         self.voc_encoder = voc_encoder
         self.result_dir = result_dir
         self.max_new_token = max_new_token
@@ -164,6 +210,7 @@ class Generator:
         self.cpu = cpu
         self.target = target
         self.device = device
+        self.valid_reward = valid_reward
 
     def generate(
             self,
@@ -192,7 +239,7 @@ class Generator:
                     streamer = TokenWriteStreamer(streamer, self.voc_encoder, positions[idx], f"{out_dir}/prompt_token.csv", f"{out_dir}/new_token.csv")
                 streamer = GetScoreStreamer(streamer, ligand_streamer, e, self.target, pdb, 
                     out_dir, 
-                    cpu=self.cpu, print_prepare=step < 3) 
+                    cpu=self.cpu, print_prepare=step < 3, valid_reward=self.valid_reward) 
                 score_streamers.append(streamer)
                 streamer = TokenSaveStreamer(streamer)
                 token_streamers.append(streamer)
@@ -200,8 +247,6 @@ class Generator:
                 position_streamers.append(streamer)
                 if step < 5:
                     streamer = TimeLogStreamer(streamer, str(idx), 10.0)
-                    # if idx == 0:
-                    # streamer = TqdmStreamer(streamer, total=max_new_token, desc="generate")
                 streamers.append(streamer)
             with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
                 model.generate2(prompt_tokens, positions, streamers, self.max_new_token)
@@ -302,7 +347,7 @@ def main():
     # arguments
     parser = ArgumentParser()
     ## score
-    parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', 'qvina', 'dummy'], required=True)
+    parser.add_argument('--target', choices=['min_vina', 'vina', 'vina_atom', 'mw_max', 'logp', 'qvina', 'dummy'], required=True)
     parser.add_argument('--max-new-token', type=int, default=1000)
     ### score scale & normalization
     parser.add_argument('--min-valid-score', type=float, default=-math.inf)
@@ -319,6 +364,7 @@ def main():
     parser.add_argument('--adv-all-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--adv-sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline', 'dpo', 'grpo', 'dapo'], required=True)
+    parser.add_argument('--valid-reward', type=float, required=True)
     ## Trainer
     ### PPO
     parser.add_argument('--n-ppo-step', type=int, default=5)
@@ -452,7 +498,7 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, args.target, device)
+    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, args.target, device, args.valid_reward)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)
@@ -502,7 +548,10 @@ def main():
             output = tokens[1:]
             position = pad_sequence(position, padding_value=0).to(device)
             weight = pad_sequence(weight, padding_value=0.0).to(device)
-            scores = norm(torch.tensor(scores, device=device), errors, idxs)
+            if args.target == 'vina_atom':
+                pass
+            else:
+                scores = norm(torch.tensor(scores, device=device), errors, idxs)
 
             # Forward Get prob & reward loss
             train_looper.put('train')

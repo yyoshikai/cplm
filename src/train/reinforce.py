@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
+from torch.nn.utils.rnn import pad_sequence
 from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from src.utils import IterateRecorder, wraps
@@ -71,12 +72,13 @@ def all_gather_counter(c: dict) -> dict:
                 all_c[k] = n
     return all_c
 
+
 def get_velocity(
         model: ReinforceModel, 
         input: Tensor, 
         position: Tensor, 
         weight: Tensor, 
-        scores: Tensor, 
+        scores: list[Tensor], 
         idxs: Tensor, 
         sample_whiten: list[Literal['mean', 'std']], 
         all_whiten: list[Literal['mean', 'std']], 
@@ -86,7 +88,7 @@ def get_velocity(
     Parameters
     ----------
     input, position, weight: Tensor(float)[L, B]
-    scores: Tensor(float)[B,]
+    scores: list[Tensor(float)[L+1,]]
 
     Returns
     -------
@@ -96,17 +98,18 @@ def get_velocity(
     model
     L, B = input.shape
     velocity = []
-    with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-        for mbatch_start in range(0, B, mbatch_size):
-            mslice = slice(mbatch_start, mbatch_start+mbatch_size)
-            _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
-            if model.baseline:
-                velocity_m = scores[mslice].unsqueeze(0) - values_m
-            else:
-                mb = min(B-mbatch_start, mbatch_size)
-                velocity_m = scores[mslice].unsqueeze(0).expand(L, mb)
-            velocity.append(velocity_m)
-    velocity = torch.cat(velocity, dim=1).detach() # [L, B]
+    if model.baseline:
+        values = []
+        with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+            for mbatch_start in range(0, B, mbatch_size):
+                mslice = slice(mbatch_start, mbatch_start+mbatch_size)
+                _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
+                values += list(values_m.T)
+            advantage = [scores[b][1:] - values[b] for b in range(B)]
+            velocity = [torch.cumsum(adv[::-1])[::-1] for adv in advantage]
+    else:
+        velocity = [torch.cumsum(score[:1:-1])[::-1] for score in scores]
+    velocity = pad_sequence(velocity) # [L, B]
 
     # sample-wise whiten
     ## get sample-wise stat
@@ -235,7 +238,7 @@ class ReinforceTrainer(Trainer):
         self.clip_grad_norm = clip_grad_norm
         self.result_dir = result_dir
 
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: list[Tensor], errors: list[str], idxs: Tensor):
         # get & whiten velocity
         L, B = input.shape
         mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.reinforce_model.model)

@@ -8,10 +8,10 @@ from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule
 from vina import Vina
 from openbabel import openbabel as ob
 from openbabel.openbabel import OBMol, OBConversion
-from .prepare_receptor4 import main as prepare_receptor4_func
-from .utils import silence_print
-from .utils.path import make_pardir, WORKDIR
-from .chem import sdf2obmol, pdb2obmol, rdmol2obmol, get_coord_from_mol
+from ..prepare_receptor4 import main as prepare_receptor4_func
+from ..utils import silence_print
+from ..utils.path import make_pardir, WORKDIR
+from ..chem import sdf2obmol, pdb2obmol, rdmol2obmol, get_coord_from_mol
 logger = getLogger(__name__)
 
 T = TypeVar('T')
@@ -128,3 +128,5 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
         return affinity, None, stdout, stderr
     except Exception as e:
         return affinity, e, stdout, stderr
+
+

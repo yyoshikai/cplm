@@ -281,16 +281,7 @@ class MolTokenizeDataset(Dataset[list[str]]):
             for it, smi_token in enumerate(smi_tokens):
                 tokens.append(smi_token)
                 if smi_token not in self.non_atom_tokens:
-                    try:
-                        o = orders[i]
-                    except Exception as e:
-                        print(f"{smi_tokens=}")
-                        print(f"{len(orders)=}")
-                        print(f"{len(atoms)=}")
-                        print(f"{it=}")
-                        print(f"{len(tokens)=}", flush=True)
-                        print(f"{len(smi_tokens)=}", flush=True)
-                        raise e
+                    o = orders[i]
 
                     if reprs[o] == 'all':
                         tokens += self.coord_tokenizer.tokenize_array(coords[o])
