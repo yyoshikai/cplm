@@ -30,40 +30,12 @@ from src.train.collator import solve_increasing_fn_left
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
 from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
-from src.train.reinforce_atom import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
-from src.train.reinforce_atom import EmptyNorm, ClampNorm, FillNorm, SampleDevFillNorm, SampleWhitenNorm, AllWhitenNorm, RecordNorm, Fill0Norm
+from src.train.reinforce_atom import ReinforceTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
-## Scoring function
-def get_score(target, lig_rdmol: Chem.Mol, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool):
-    match target:
-        case 'min_vina':
-            score, min_score, error = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
-            return -min_score if min_score is not None else np.nan
-        case 'vina':
-            score, min_score, error = eval_vina(rdmol2obmol(lig_rdmol), pdb2obmol(rec_pdb), f"{out_dir}/protein_h.pdbqt")
-            return -score if min_score is not None else np.nan
-        case 'vina_atom':
-            free_energy, E_inter, E_intra = eval_vina_atom(lig_rdmol, rec_pdb)
-            return free_energy, E_inter, E_intra
-        case 'mw_max':
-            return rdMolDescriptors.CalcExactMolWt(lig_rdmol)
-        case 'qvina':
-            os.makedirs(out_dir, exist_ok=True)
-            with open(f"{out_dir}/rec_input.pdb", 'w') as f:
-                f.write(rec_pdb)
-            score = eval_qvina(lig_rdmol, f"{out_dir}/rec_input.pdb", out_dir, timeout=60, cpu=cpu, print_prepare=print_prepare)[0]
-            return -score if score is not None else np.nan
-        case 'dummy':
-            return random.random()
-        
-def get_atom_score(target, lig_rdmol: Chem.Mol, rec_pdb: str):
-    match target:
-        case 'vina_atom':
-            free_energy, E_inter, E_intra = eval_vina_atom(lig_rdmol, rec_pdb)
-            return -free_energy, -E_inter, -E_intra
-        case _:
-            raise ValueError
+def get_atom_score(lig_rdmol: Chem.Mol, rec_pdb: str):
+    free_energy, E_inter, E_intra = eval_vina_atom(lig_rdmol, rec_pdb)
+    return -free_energy, -E_inter, -E_intra
 
 # 参考
 error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}
@@ -88,7 +60,7 @@ class GetScoreStreamer(WrapperStreamer):
             assert len(tokens) == 1
             self.gen_size += 1
         if not is_remain and self.ligand_streamer.error() is None:
-            self.future = self.e.submit(get_score, lig_rdmol=self.ligand_streamer.ligand(), **self.kwargs)
+            self.future = self.e.submit(get_atom_score, lig_rdmol=self.ligand_streamer.ligand(), **self.kwargs)
         return is_remain, position, token_range
     def result(self):
         if self.future is not None:
@@ -347,7 +319,6 @@ def main():
     # arguments
     parser = ArgumentParser()
     ## score
-    parser.add_argument('--target', choices=['min_vina', 'vina', 'vina_atom', 'mw_max', 'logp', 'qvina', 'dummy'], required=True)
     parser.add_argument('--max-new-token', type=int, default=1000)
     ### score scale & normalization
     parser.add_argument('--min-valid-score', type=float, default=-math.inf)
@@ -363,7 +334,7 @@ def main():
     parser.add_argument('--all-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--adv-all-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--adv-sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline', 'dpo', 'grpo', 'dapo'], required=True)
+    parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline'], required=True)
     parser.add_argument('--valid-reward', type=float, required=True)
     ## Trainer
     ### PPO
@@ -498,32 +469,15 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, args.target, device, args.valid_reward)
+    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, device, args.valid_reward)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)
     generator = ErrorRecordGenerator(generator, result_dir)
-    norm = EmptyNorm()
-    if math.isfinite(args.min_valid_score):
-        norm = ClampNorm(norm, args.min_valid_score)
-    norm = FillNorm(norm, args.gen_error_score, args.vina_error_score)
-    norm = SampleDevFillNorm(norm, args.gen_error_sample_deviation, args.vina_error_sample_deviation)
-    norm = SampleWhitenNorm(norm, 'mean' in args.sample_whiten, 'std' in args.sample_whiten)
-    norm = AllWhitenNorm(norm, 'mean' in args.all_whiten, 'std' in args.all_whiten)
-    norm = FillNorm(norm, args.gen_error_white_score, args.vina_error_white_score)
-    norm = SampleWhitenNorm(norm, 'mean' in args.sample_rewhiten, 'std' in args.sample_rewhiten)
-    norm = AllWhitenNorm(norm, 'mean' in args.all_rewhiten, 'std' in args.all_rewhiten)
-    norm = Fill0Norm(norm)
-    norm = RecordNorm(norm, result_dir)
     
     log_optimizer = 'optimizer' in args.check
-    if args.trainer in ['reinforce', 'reinforce_no_baseline']:
-        baseline = args.trainer == 'reinforce'
-        trainer = ReinforceTrainer(model_, baseline, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.adv_all_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)
-    elif args.trainer == 'dpo':
-        trainer = DPOTrainer(model_, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.kl_factor, train_looper, args.clip_grad_value, args.clip_grad_norm)
-    elif args.trainer == 'grpo':
-        trainer = GRPOTrainer(model_, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.kl_factor, args.clip_grad_value, args.clip_grad_norm, args.n_ppo_step, args.ppo_clip_eps)
+    baseline = args.trainer == 'reinforce'
+    trainer = ReinforceTrainer(model_, baseline, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.adv_all_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)
     trainer = GetMemoryTrainer(trainer, device)
     trainer = SaveBatchTrainer(trainer, result_dir, do_save_steps, voc_encoder)
     trainer = SaveStepTrainer(trainer, result_dir, args.record_opt, args.max_opt)
@@ -548,10 +502,6 @@ def main():
             output = tokens[1:]
             position = pad_sequence(position, padding_value=0).to(device)
             weight = pad_sequence(weight, padding_value=0.0).to(device)
-            if args.target == 'vina_atom':
-                pass
-            else:
-                scores = norm(torch.tensor(scores, device=device), errors, idxs)
 
             # Forward Get prob & reward loss
             train_looper.put('train')

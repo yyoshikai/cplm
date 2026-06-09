@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
+from torch.nn.utils.rnn import pad_sequence
 from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from src.utils import IterateRecorder, wraps
@@ -18,65 +19,14 @@ from src.data.tokenizer import VocEncoder
 from src.model import Model
 from src.train import get_optimizer_scheduler, get_process_ranks
 from src.train.looper import Looper
-
-class ReinforceModel(nn.Module):
-    def __init__(self, model: Model, baseline):
-        super().__init__()
-        self.baseline = baseline
-        self.model = model
-        if baseline:
-            self.value_head = nn.Linear(model.state_size, 1)
-    
-    def forward(self, src: Tensor, position: Tensor):
-        logits, states = self.model(src, position, out_state=True)
-        if self.baseline:
-            values = self.value_head(states).squeeze(-1)
-        else:
-            values = None
-        return logits, values
-
-
-def get_all_stat(values: Tensor) -> tuple[float, float]:
-    all_values = all_gather(values)
-    mean = torch.nanmean(all_values).item()
-    std = torch.nanmean((all_values-mean)**2).sqrt().item()
-    return mean, std
-
-def get_sample_stat(values: Tensor, idxs: Tensor) -> tuple[Tensor, Tensor]:
-    all_values = all_gather(values)
-    all_idxs = all_gather(idxs)
-    B, = values.shape
-
-    sample_means = torch.full_like(values, math.nan)
-    sample_stds = torch.full_like(values, math.nan)
-    for uidx in torch.unique(idxs):
-        uidx_all_values = all_values[all_idxs == uidx]
-        if torch.all(torch.isnan(uidx_all_values)):
-            continue
-        mean = torch.nanmean(uidx_all_values)
-        std = torch.nanmean((uidx_all_values-mean)**2).sqrt()
-        sample_means[idxs == uidx] = mean
-        sample_stds[idxs == uidx] = std
-    return sample_means, sample_stds
-
-def all_gather_counter(c: dict) -> dict:
-    cs = [None]*dist.get_world_size()
-    dist.all_gather_object(cs, c)
-    all_c = {}
-    for c in cs:
-        for k, n in c.items():
-            if k in all_c:
-                all_c[k] += n
-            else:
-                all_c[k] = n
-    return all_c
+from .reinforce import ReinforceModel, get_all_stat, get_sample_stat, all_gather_counter, scale_loss, get_mbatch_size
 
 def get_velocity(
         model: ReinforceModel, 
         input: Tensor, 
         position: Tensor, 
         weight: Tensor, 
-        scores: Tensor, 
+        scores: list[Tensor], 
         idxs: Tensor, 
         sample_whiten: list[Literal['mean', 'std']], 
         all_whiten: list[Literal['mean', 'std']], 
@@ -86,7 +36,7 @@ def get_velocity(
     Parameters
     ----------
     input, position, weight: Tensor(float)[L, B]
-    scores: Tensor(float)[B,]
+    scores: list[Tensor(float)[L+1,]]
 
     Returns
     -------
@@ -96,17 +46,18 @@ def get_velocity(
     model
     L, B = input.shape
     velocity = []
-    with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-        for mbatch_start in range(0, B, mbatch_size):
-            mslice = slice(mbatch_start, mbatch_start+mbatch_size)
-            _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
-            if model.baseline:
-                velocity_m = scores[mslice].unsqueeze(0) - values_m
-            else:
-                mb = min(B-mbatch_start, mbatch_size)
-                velocity_m = scores[mslice].unsqueeze(0).expand(L, mb)
-            velocity.append(velocity_m)
-    velocity = torch.cat(velocity, dim=1).detach() # [L, B]
+    if model.baseline:
+        values = []
+        with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+            for mbatch_start in range(0, B, mbatch_size):
+                mslice = slice(mbatch_start, mbatch_start+mbatch_size)
+                _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
+                values += list(values_m.T)
+            advantage = [scores[b][1:] - values[b] for b in range(B)]
+            velocity = [torch.cumsum(adv[::-1])[::-1] for adv in advantage]
+    else:
+        velocity = [torch.cumsum(score[:1:-1])[::-1] for score in scores]
+    velocity = pad_sequence(velocity) # [L, B]
 
     # sample-wise whiten
     ## get sample-wise stat
@@ -157,40 +108,6 @@ def get_velocity(
         velocity = (velocity-all_mean)/all_std+all_mean
     return velocity
 
-def scale_loss(exp_loss: Tensor, weight: Tensor, scale: list[Literal['batch_size', 'all_exp', 'episode_exp']]) -> Tensor:
-    """
-    exp_losses: Tensor[L, B]
-    weight: Tensor[L, B]
-    
-    Returns
-    -------
-    eposide_losses: [, B]
-
-    """
-    _, B = exp_loss.shape
-    ns_exp = weight.sum(dim=0)
-    world_size = dist.get_world_size()
-    exp_loss = exp_loss*weight
-    episode_losses = torch.sum(exp_loss*weight, dim=0) # [B, ]
-    episode_losses *= world_size # DDPで平均されるのを一旦解消
-
-    if 'batch_size' in scale:
-        episode_losses /= world_size*B
-    if 'all_exp' in scale:
-        all_exp = reduce_float(weight.sum().item(), weight.device)
-        episode_losses /= all_exp
-    if 'episode_exp' in scale:
-        episode_losses /= ns_exp
-    return episode_losses
-
-def get_mbatch_size(mbatch_size: int|None, L: int, gpu_size: float, model: Model, bfloat16: bool=True) -> int:
-    
-    if mbatch_size is None:
-        mbatch_size = solve_increasing_fn_left(lambda bsz: model.get_gpuuse(bsz, L, bfloat16, 'FLASH')-gpu_size, 16)
-    if mbatch_size == 0:
-        raise ValueError(f"Input was too large")
-    return mbatch_size
-
 class Trainer:
     def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
         raise NotImplementedError
@@ -235,7 +152,7 @@ class ReinforceTrainer(Trainer):
         self.clip_grad_norm = clip_grad_norm
         self.result_dir = result_dir
 
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
+    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: list[Tensor], errors: list[str], idxs: Tensor):
         # get & whiten velocity
         L, B = input.shape
         mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.reinforce_model.model)
@@ -362,212 +279,6 @@ def get_log_prob(logits: Tensor, output: Tensor):
     return log_probs
 
 
-class DPOTrainer(Trainer):
-    def __init__(self, model: Model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, kl_factor: float, train_looper: Looper, clip_grad_value: float|None, clip_grad_norm: float):
-        """
-        DPO Trainer with Placket-Luce model
-        """
-        self.step = 0
-        self._batch_info = self._step_info = {}
-        self.rank = dist.get_rank()
-        
-        self.init_model = copy.deepcopy(model)
-        self.model = DistributedDataParallel(model)
-        self.optimizer, self.scheduler = get_optimizer_scheduler(self.model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer)
-
-        self.mbatch_size = mbatch_size
-        self.gpu_size = gpu_size
-        self.kl_factor = kl_factor
-        self.clip_grad_value = clip_grad_value
-        self.clip_grad_norm = clip_grad_norm
-        self.train_looper = train_looper
-
-        _, self.save_rank, _ = get_process_ranks()
-
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        
-        self.train_looper.put('train_rs')
-        self.model.train()
-        self.optimizer.zero_grad()
-        L, B = input.shape
-        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.init_model)
-        rs = [] # [B, ]
-        with torch.autocast('cuda', torch.bfloat16), \
-            sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
-            torch.inference_mode():
-            for mb in range(0, B, mbatch_size):
-                mslice = slice(mb, mb+mbatch_size)
-                init_logits_m = self.init_model(input[:,mslice], position[:,mslice]) # [L, Bm, D]
-                init_log_probs_m = get_log_prob(init_logits_m, output[:,mslice]) # [L, Bm]
-                logits_m = self.model(input[:,mslice], position[:,mslice]) # [L, Bm, D]
-                log_probs_m = get_log_prob(logits_m, output[:,mslice])
-                rs_m = torch.sum((log_probs_m-init_log_probs_m)*weight[:,mslice], dim=0)*self.kl_factor
-                rs.append(rs_m)
-        rs = torch.cat(rs)
-
-        self.train_looper.put('train_gather_rs')
-        all_rs = all_gather(rs)
-
-        self.train_looper.put('train_backward_rs')
-        all_rs.requires_grad_()
-        all_idxs = all_gather(idxs)
-        all_scores = all_gather(scores)
-        loss = 0
-        for idx in torch.unique(all_idxs).tolist():
-            irs = all_rs[all_idxs == idx]
-            iscores = all_scores[all_idxs == idx] # ex. [1.0, 0.5, 1.5, 0.0]
-            irs = irs[torch.argsort(-iscores, stable=False)]
-            Bi = len(irs)
-            for i in range(Bi):
-                loss += torch.log_softmax(irs[i:], dim=0)[0]
-        loss.backward()
-        r_grads = all_rs.grad[B*self.rank:B*(self.rank+1)]*0.001
-
-        self.train_looper.put('train_backward_model')
-        self.model.train()
-        log_probs = []
-        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, True)
-        for mb in range(0, B, mbatch_size):
-            with torch.autocast('cuda', torch.bfloat16), \
-                    sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
-                    self.model.no_sync() if mb+mbatch_size < B else nullcontext():
-                mslice = slice(mb, mb+mbatch_size)
-                logits_m = self.model(input[:,mslice], position[:,mslice]) # [L, Bm, D]
-                log_probs_m = get_log_prob(logits_m, output[:,mslice])
-                log_probs.append(log_probs_m.detach())
-                rs_m = torch.sum(log_probs_m*weight[:,mslice], dim=0)
-                rs_m.backward(gradient=r_grads[mslice])
-
-        self.train_looper.put('train_update')
-        self._batch_info = {
-            'log_prob': (torch.cat(log_probs, dim=1)/math.log(10)).float().cpu(),
-            'velocity': r_grads.float().cpu().unsqueeze(0).expand_as(input)
-        }
-        self._step_info = dict(lr=self.scheduler.get_last_lr()[0], loss=loss.item())
-        self._step_info.update({f'r_grad_{i}': r_grads[i].item() for i in range(B)})
-
-        # Optimizer's step
-        if self.clip_grad_value is not None:
-            torch.nn.utils.clip_grad_value_(self.model.parameters(), self.clip_grad_value)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
-        self.optimizer.step()
-        self.scheduler.step()
-        self.step += 1
-
-    def save(self, result_dir):
-        if self.rank == self.save_rank:
-            os.makedirs(f"{result_dir}/models", exist_ok=True)
-            torch.save(self.model.module.state_dict(), f"{result_dir}/models/{self.step}.pth")
-            if self.step > 0:
-                cleardir(f"{result_dir}/optimizers")
-                torch.save(self.optimizer.state_dict(), f"{result_dir}/optimizers/{self.step}.pth")
-    def policy_model(self):
-        return self.model.module
-    def batch_info(self):
-        return self._batch_info
-    def step_info(self):
-        return self._step_info
-
-    
-class GRPOTrainer(Trainer):
-    def __init__(self, model: Model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, kl_factor: float, clip_grad_value: float|None, clip_grad_norm: float, n_ppo_step: int, ppo_clip_eps: float):
-        self.step = 0
-        self._batch_info = self._step_info = {}
-
-        self.rank = dist.get_rank()
-        _, self.save_rank, _ = get_process_ranks()
-
-        self.init_model = copy.deepcopy(model)
-        self.model = DistributedDataParallel(model)
-        self.optimizer, self.scheduler = get_optimizer_scheduler(self.model, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer)
-        self.clip_grad_norm = clip_grad_norm
-        self.clip_grad_value = clip_grad_value
-
-        self.mbatch_size = mbatch_size
-        self.gpu_size = gpu_size
-        self.n_ppo_step = n_ppo_step
-        self.eps = ppo_clip_eps
-        self.kl_factor = kl_factor
-
-    def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
-        
-        L, B = input.shape
-        device = input.device
-
-        advs = whiten_scores(scores, idxs, sample_whiten=['mean', 'std'], all_whiten=[])
-        all_weight = reduce_float(weight.sum().item(), device)
-        mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.model.module, True)
-
-        init_log_probs = []
-        with torch.autocast('cuda', torch.bfloat16), \
-                sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
-                torch.inference_mode():
-            for mb in range(0, B, mbatch_size):
-                mslice = slice(mb, mb+mbatch_size)
-                init_log_probs_m = get_log_prob(self.init_model(input[:,mslice], position[:,mslice]).detach(), output[:,mslice])
-                init_log_probs.append(init_log_probs_m)
-        init_log_probs = torch.cat(init_log_probs, dim=1)
-
-
-        self.model.train()
-        self.init_model.train()
-        self._batch_info = {}
-        self._step_info = {}
-        reward_losses = []
-        kl_losses = []
-        for step in range(self.n_ppo_step):
-            log_probs = []
-            grads = []
-            self.optimizer.zero_grad()
-            reward_loss = 0
-            kl_loss = 0
-            for mb in range(0, B, mbatch_size):
-                with torch.autocast('cuda', torch.bfloat16), \
-                        sdpa_kernel(SDPBackend.FLASH_ATTENTION), \
-                        self.model.no_sync() if mb+mbatch_size < B else nullcontext():
-                    mslice = slice(mb, mb+mbatch_size)
-                    log_probs_m = get_log_prob(self.model(input[:,mslice], position[:,mslice]), output[:,mslice])
-                    log_probs_m.retain_grad()
-                    log_probs.append(log_probs_m.detach())
-                    rs_m = log_probs_m - init_log_probs[:, mslice]
-                    rs_clip_m = torch.clamp(rs_m, 1-self.eps, 1+self.eps) # [L, B]
-                    reward_losses_m = torch.min(rs_m*advs[mslice], rs_clip_m*advs[mslice])
-                    reward_loss_m = torch.sum(reward_losses_m*weight[:,mslice])
-                    reward_loss += reward_loss_m.item()
-                    kl_loss_m = torch.sum((torch.exp(rs_m)-rs_m-1)*weight[:,mslice])
-                    kl_loss += kl_loss_m.item()
-                    loss = (reward_loss_m+kl_loss_m*self.kl_factor) / all_weight * dist.get_world_size()
-                    loss.backward()
-                    grads.append(log_probs_m.grad)
-            if step == 0:
-                log_probs = torch.cat(log_probs, dim=1)
-                grads = torch.cat(grads, dim=1)
-                self._batch_info = {
-                    'log_prob0': (log_probs / math.log(10)).float().cpu(),
-                    'grad0': grads.float().cpu()
-                }
-            if self.clip_grad_value is not None:
-                torch.nn.utils.clip_grad_value_(self.model.parameters(), self.clip_grad_value)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
-            self.optimizer.step()
-            self.scheduler.step()
-        self._step_info['reward_loss'] = reward_losses
-        self._step_info['kl_loss'] = kl_losses
-    def save(self, result_dir):
-        if self.rank == self.save_rank:
-            os.makedirs(f"{result_dir}/models", exist_ok=True)
-            torch.save(self.model.module.state_dict(), f"{result_dir}/models/{self.step}.pth")
-            if self.step > 0:
-                cleardir(f"{result_dir}/optimizers")
-                torch.save(self.optimizer.state_dict(), f"{result_dir}/optimizers/{self.step}.pth")
-    def policy_model(self):
-        return self.model.module
-    def batch_info(self):
-        return self._batch_info
-    def step_info(self):
-        return self._step_info
-
-
 class WrapTrainer(Trainer):
     def __init__(self, trainer: Trainer):
         self.trainer = trainer
@@ -638,137 +349,3 @@ class SaveStepTrainer(WrapTrainer):
         self.step_recorder.record(**self.step_info())
         if self.step == self.max_opt:
             self.step_recorder.flush()
-
-
-# Score normalizer
-class Norm:
-    def __call__(self, raw_scores: Tensor, errors: list[str], idxs: Tensor) -> Tensor:
-        raise NotImplementedError
-    
-    def get_error_mask(self, errors: list[str], device: torch.device):
-        is_vina_error = torch.tensor([error == 'VINA' for error in errors], dtype=torch.bool, device=device)
-        is_gen_error = torch.tensor([error is not None for error in errors], dtype=torch.bool, device=device) & (~is_vina_error)
-        return is_vina_error, is_gen_error
-
-class EmptyNorm(Norm):
-    def __call__(self, raw_scores, errors, idxs):
-        return raw_scores
-
-class ClampNorm(Norm):
-    def __init__(self, norm: Norm, min: float):
-        self.norm = norm
-        self.min = min
-
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        return torch.clamp(scores, min=self.min)
-
-class FillNorm(Norm):
-    def __init__(self, norm: Norm, gen_error_score: float, vina_error_score: float):
-        self.norm = norm
-        self.gen_error_score = gen_error_score
-        self.vina_error_score = vina_error_score
-    
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        is_gen_error, is_vina_error = self.get_error_mask(errors, scores.device)
-        scores[is_gen_error] = self.gen_error_score
-        scores[is_vina_error] = self.vina_error_score
-        return scores
-
-class SampleDevFillNorm(Norm):
-    def __init__(self, norm: Norm, gen_error_dev: float, vina_error_dev: float):
-        self.norm = norm
-        self.gen_error_dev = gen_error_dev
-        self.vina_error_dev = vina_error_dev
-
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        is_gen_error, is_vina_error = self.get_error_mask(errors, scores.device)
-        sample_mean, sample_std = get_sample_stat(scores, idxs)
-        if math.isfinite(self.gen_error_dev) and torch.any(is_gen_error):
-            scores[is_gen_error] = sample_mean[is_gen_error]+sample_std[is_gen_error]*self.gen_error_dev
-        if math.isfinite(self.vina_error_dev):
-            scores[is_vina_error] = sample_mean[is_vina_error]+sample_std[is_vina_error]*self.vina_error_dev
-        return scores
-
-class SampleWhitenNorm(Norm):
-    def __init__(self, norm: Norm, mean: bool, std: bool):
-        self.norm = norm
-        self.mean = mean
-        self.std = std
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        if not self.mean and not self.std:
-            return scores
-        
-        # sample whiten
-        sample_means, sample_stds = get_sample_stat(scores, idxs)
-        sample_stds+=1e-5
-        if self.mean and self.std:
-            scores = (scores-sample_means)/sample_stds
-        elif self.mean:
-            scores = scores-sample_means
-        elif self.std:
-            scores = (scores-sample_means)/sample_stds+self.mean
-        return scores
-
-class AllWhitenNorm(Norm):
-    def __init__(self, norm: Norm, mean: bool, std: bool):
-        self.norm = norm
-        self.mean = mean
-        self.std = std
-
-
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        world_size = dist.get_world_size()
-        # all_gather scores
-        all_scores = [torch.zeros_like(scores) for _ in range(world_size)]
-        dist.all_gather(all_scores, scores)
-        all_scores = torch.cat(all_scores)
-        
-        # all whiten
-        mean, std = get_all_stat(scores)
-        if not torch.all(torch.isnan(scores)):
-            if self.mean and self.std:
-                scores = (scores - mean) / (std+1e-5)
-            elif self.mean:
-                scores = scores - mean
-            elif self.std:
-                scores = (scores - mean) / (std+1e-5) + mean
-        return scores
-
-class Fill0Norm(Norm):
-    def __init__(self, norm):
-        self.norm = norm
-
-
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-        scores[torch.isnan(scores)] = 0.0
-        return scores
-
-
-class RecordNorm(Norm):
-    def __init__(self, norm: Norm, result_dir: str):
-        self.norm = norm
-        self.path = f"{result_dir}/scores/{dist.get_rank()}.csv"
-        self.is_empty = True
-    
-    def __call__(self, raw_scores, errors, idxs):
-        scores = self.norm(raw_scores, errors, idxs)
-
-        if self.is_empty:
-            B = len(scores)
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path, 'w') as f:
-                f.write(','.join(['raw']*B+['normamized']*B)+'\n')
-                f.write(','.join([str(i%B) for i in range(B*2)])+'\n')
-            self.is_empty = False
-        with open(self.path, 'a') as f:
-            f.write(','.join(str(s) for s in raw_scores.tolist())+',')
-            f.write(','.join(str(s) for s in scores.tolist())+'\n')
-
-        return scores
-
