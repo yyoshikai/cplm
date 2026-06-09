@@ -1,18 +1,21 @@
+import os
 import itertools as itr
 from time import time
 from collections.abc import Generator, Callable
 from logging import getLogger
+from typing import Literal
 import numpy as np, pandas as pd
 import torch
 from tqdm import tqdm
 from rdkit import Chem
 from rdkit.Chem.rdDetermineBonds import DetermineBonds
+from openbabel import openbabel as ob
 from ..utils import should_show
 from ..utils.path import make_pardir, mwrite, WORKDIR
 from ..model import Streamer, WrapperStreamer
 from ..data.protein import AtomRepr
 from ..data.tokenizer import FloatTokenizer, StringTokenizer2, VocEncoder
-from ..chem import array_to_conf, element_symbols
+from ..chem import array_to_conf, element_symbols, obmol2rdmol
 from ..data.molecule import MAX_VALENCE
 
 class NoTokenRangeStreamer(WrapperStreamer):
@@ -66,6 +69,18 @@ def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, v
                 f.write(f"{i_atom},{coords[0]},{coords[1]},{coords[2]}\n")
         coordss.append(coords)
     return np.array(coordss), pos, None
+
+def obsmi2rdmol(smi: str) -> Chem.Mol|None:
+    # From experiments/260609_ob_streamer/source.ipynb
+    obc = ob.OBConversion()
+    obc.SetInFormat('smi')
+    mol = ob.OBMol()
+    r = obc.ReadString(mol, smi)
+    if not r:
+        return None
+    return obmol2rdmol(mol, sanitize=False)
+
+
 
 class GeneratorStreamer(Streamer):
     def __init__(self):
@@ -223,11 +238,12 @@ class LigandStreamer(Streamer):
         raise NotImplementedError
 
 class SmilesLigandStreamer(GeneratorStreamer, LigandStreamer):
-    def __init__(self, coord_range: float, voc_encoder: VocEncoder, lig_h: AtomRepr, smiles_voc_dir: str, center: np.ndarray|None=None):
+    def __init__(self, coord_range: float, voc_encoder: VocEncoder, lig_h: AtomRepr, smiles_voc_dir: str, lig_cls: Literal['rdkit', 'ob'], center: np.ndarray|None=None):
         self.voc_encoder = voc_encoder
         self.coord_range = coord_range
         smi_tokenizer = StringTokenizer2(smiles_voc_dir)
         smi_vocs = list(smi_tokenizer.vocs())+['[XYZ]']
+        self.lig_cls = lig_cls
         self.smi_token_range = sorted(self.voc_encoder.encode(smi_vocs))
         self.center = center
         self._mol = None
@@ -244,42 +260,49 @@ class SmilesLigandStreamer(GeneratorStreamer, LigandStreamer):
         # smiles
         smi_tokens = []
         while True:
-            tokens = yield True, next(pos_iter), self.smi_token_range
-            assert len(tokens) == 1
-            token = tokens[0]
+            token, = yield True, next(pos_iter), self.smi_token_range
             if token == self.voc_encoder.voc2i['[XYZ]']: break
             smi_tokens.append(token)
         smi = ''.join(self.voc_encoder.decode(smi_tokens))
-        param = Chem.SmilesParserParams()
-        param.removeHs = False
-        self._mol = Chem.MolFromSmiles(smi, param)
-        # conformer
-        if self._mol is not None:
-            smi_out = Chem.MolToSmiles(self._mol, canonical=False)
-            if smi_out != smi:
-                self._error = 'SMILES_MISMATCH'
+        
+        if self.lig_cls == 'rdkit':
+            
+            param = Chem.SmilesParserParams()
+            param.removeHs = False
+            self._mol = Chem.MolFromSmiles(smi, param)
+            if self._mol is not None:
+                smi_out = Chem.MolToSmiles(self._mol, canonical=False)
+                if smi_out != smi:
+                    self._error = 'SMILES_MISMATCH'
+                    self._mol = None
             else:
-                n_atom = self._mol.GetNumAtoms()
-                coord, pos, self._error = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, False, self.center)
-                if coord is not None:
-                    self._mol.AddConformer(array_to_conf(coord))
-        else:
-            self._error = 'SMILES'
+                self._error = 'SMILES'
+        elif self.lig_cls == 'ob':
+            self._mol = obsmi2rdmol(smi)
+            if self._mol is None:
+                self._mol = None
+                self._error = 'SMILES'
+        
+        if self._mol is not None:
+            n_atom = self._mol.GetNumAtoms()
+            coord, pos, self._error = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, False, self.center)
+            self._mol.AddConformer(array_to_conf(coord))
         yield False, next(pos_iter), [self.voc_encoder.voc2i['[END]']]
 
     def ligand(self):
-        return self._mol
+        return self._mol if self._error is None else None
     def error(self):
         return self._error
 
 class SmileCoordsStreamer(GeneratorStreamer, LigandStreamer):
-    def __init__(self, coord_range: float, voc_encoder: VocEncoder, lig_h: AtomRepr, smiles_voc_dir: str, center: np.ndarray|None=None):
+    def __init__(self, coord_range: float, voc_encoder: VocEncoder, lig_h: AtomRepr, smiles_voc_dir: str, lig_cls: Literal['rdkit', 'ob'], center: np.ndarray|None=None):
         self.coord_range = coord_range
         self.voc_encoder = voc_encoder
         self.smiles_voc_dir = smiles_voc_dir
+        assert os.path.exists(f"{WORKDIR}/cplm/src/data/vocs/{self.smiles_voc_dir}")
         self.center = center
-        self._smi = None
         self._mol = None
+        self.lig_cls = lig_cls
         self._error = 'PARSE_NOT_ENDED'
         if lig_h not in ['all', 'none']:
             raise NotImplementedError
@@ -305,8 +328,8 @@ class SmileCoordsStreamer(GeneratorStreamer, LigandStreamer):
         smi_tokens = []
         coordss = []
         while True:
-            token = yield True, pos, smi_token_range
-            voc = self.voc_encoder.i2voc[token[0]]
+            token, = yield True, pos, smi_token_range
+            voc = self.voc_encoder.i2voc[token]
             pos += 1
             if voc not in smi_vocs:
                 self._error = 'COORD_IN_SMILES'
@@ -329,21 +352,33 @@ class SmileCoordsStreamer(GeneratorStreamer, LigandStreamer):
         if self.center is not None:
             coords += self.center
         smi = ''.join(smi_tokens)
-        self._smi = smi
-        param = Chem.SmilesParserParams()
-        param.removeHs = False
-        self._mol = Chem.MolFromSmiles(smi, param)
-        # conformer
-        if self._mol is not None:
-            smi_out = Chem.MolToSmiles(self._mol, canonical=False)
-            if smi_out != smi:
-                self._error = 'SMILES_MISMATCH'
-                self._mol = None
+        if self._error != 'PARSE_NOT_ENDED':
+            yield False, pos, [self.voc_encoder.voc2i['[END]']]
+            return
+        
+        if self.lig_cls == 'rdkit':
+            param = Chem.SmilesParserParams()
+            param.removeHs = False
+            self._mol = Chem.MolFromSmiles(smi, param)
+            if self._mol is not None:
+                smi_out = Chem.MolToSmiles(self._mol, canonical=False)
+                if smi_out != smi:
+                    self._error = 'SMILES_MISMATCH'
+                    self._mol = None
+                else:
+                    self._order = eval(self._mol.GetProp('_smilesAtomOutputOrder'))
+                    self._mol.AddConformer(array_to_conf(coordss))
             else:
-                self._order = eval(self._mol.GetProp('_smilesAtomOutputOrder'))
-                self._mol.AddConformer(array_to_conf(coordss))
+                self._error = 'SMILES'
         else:
-            self._error = 'SMILES'
+            self._mol = obsmi2rdmol(smi)
+            if self._mol is None:
+                self._error = 'SMILES'
+            self._order = list(range(self._mol.GetNumAtoms()))
+            self._mol.RemoveConformer(0)
+            self._mol.AddConformer(array_to_conf(coordss), assignId=True)
+        if self._mol is not None:
+            self._error = None
         yield False, pos, [self.voc_encoder.voc2i['[END]']]
 
     def ligand(self):
@@ -554,13 +589,14 @@ def get_ligand_streamer(
         voc_encoder: VocEncoder,
         lig_h: AtomRepr, 
         smiles_voc_dir: str,
+        lig_cls: Literal['rdkit', 'ob'], 
         center: np.ndarray|None=None
 ) -> LigandStreamer:
     kwargs = dict(coord_range=coord_range, voc_encoder=voc_encoder, lig_h=lig_h, center=center)
     if format == 'smiles_coords':
-        return SmilesLigandStreamer(**kwargs, smiles_voc_dir=smiles_voc_dir)
+        return SmilesLigandStreamer(**kwargs, smiles_voc_dir=smiles_voc_dir, lig_cls=lig_cls)
     elif format == 'smile_coords':
-        return SmileCoordsStreamer(**kwargs, smiles_voc_dir=smiles_voc_dir)
+        return SmileCoordsStreamer(**kwargs, smiles_voc_dir=smiles_voc_dir, lig_cls=lig_cls)
     elif format in ['atoms_coords', 'ordered_atoms_coords']:
         atom_order = format == 'ordered_atoms_coords'
         return AtomsCoordsLigandStreamer(**kwargs, atom_order=atom_order)

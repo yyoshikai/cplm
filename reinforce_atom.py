@@ -3,6 +3,7 @@ import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 from logging import getLogger
+from typing import Literal
 import numpy as np, pandas as pd
 import torch
 import torch.nn as nn
@@ -33,7 +34,8 @@ from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_st
 from src.train.reinforce_atom import ReinforceTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
-def get_atom_score(lig_rdmol: Chem.Mol, rec_pdb: str):
+def get_atom_score(target: str,lig_rdmol: Chem.Mol, rec_pdb: str):
+    assert target == 'vina'
     free_energy, E_inter, E_intra = eval_vina_atom(lig_rdmol, rec_pdb)
     return -free_energy, -E_inter, -E_intra
 
@@ -168,6 +170,7 @@ class Generator:
             smiles_voc_dir: str,
             cpu: int,
             num_score_workers: int,
+            lig_cls: Literal['rdkit', 'ob'], 
             target: str,
             device: torch.device,
             valid_reward: float):
@@ -179,6 +182,7 @@ class Generator:
         self.lig_format = lig_format
         self.smiles_voc_dir = smiles_voc_dir
         self.num_score_workers = num_score_workers
+        self.lig_cls = lig_cls
         self.cpu = cpu
         self.target = target
         self.device = device
@@ -320,6 +324,7 @@ def main():
     parser = ArgumentParser()
     ## score
     parser.add_argument('--max-new-token', type=int, default=1000)
+    parser.add_argument('--target', choices=['vina'], default='vina')
     ### score scale & normalization
     parser.add_argument('--min-valid-score', type=float, default=-math.inf)
     parser.add_argument('--gen-error-score', type=float, default=math.nan)
@@ -469,7 +474,7 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, device, args.valid_reward)
+    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)

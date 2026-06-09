@@ -3,6 +3,7 @@ import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 from logging import getLogger
+from typing import Literal
 import numpy as np, pandas as pd
 import torch
 import torch.nn as nn
@@ -152,6 +153,7 @@ class Generator:
             cpu: int,
             num_score_workers: int,
             target: str,
+            lig_cls: Literal['rdkit', 'ob'], 
             device: torch.device,):
         self.voc_encoder = voc_encoder
         self.result_dir = result_dir
@@ -163,6 +165,7 @@ class Generator:
         self.num_score_workers = num_score_workers
         self.cpu = cpu
         self.target = target
+        self.lig_cls = lig_cls
         self.device = device
 
     def generate(
@@ -185,7 +188,7 @@ class Generator:
             position_streamers: list[PositionSaveStreamer] = []
             streamers = []
             for idx, pdb in enumerate(pdbs):
-                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, self.lig_h, self.smiles_voc_dir)
+                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, self.lig_h, self.smiles_voc_dir, self.lig_cls)
                 out_dir = f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
                 if do_save:
                     streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf.sdf")
@@ -295,7 +298,6 @@ def save_and_disable_memory_history(path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.cuda.memory._dump_snapshot(path)
     torch.cuda.memory._record_memory_history(None)
-
 
 @record
 def main():
@@ -452,7 +454,7 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, args.target, device)
+    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, args.target, fargs.lig_cls, device)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)

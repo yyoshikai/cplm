@@ -77,7 +77,7 @@ if __name__ == '__main__':
                 idx, rec_pdb, prompt_token, position = item
                 pdb_path = f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb"
                 mwrite(pdb_path, rec_pdb)
-                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, fargs.lig_h, fargs.smiles_voc_dir)
+                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, fargs.lig_h, fargs.lig_cls, fargs.smiles_voc_dir)
                 if args.no_token_range:
                     streamer = NoTokenRangeStreamer(streamer, voc_encoder.voc_size)
                 streamer = SaveLigandStreamer(streamer)
