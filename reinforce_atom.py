@@ -47,7 +47,7 @@ class GetScoreStreamer(WrapperStreamer):
         super().__init__(streamer)
         self.ligand_streamer = ligand_streamer
         self.e = e
-        self.kwargs = dict(target=target, rec_pdb=rec_pdb, out_dir=out_dir, cpu=cpu, print_prepare=print_prepare)
+        self.kwargs = dict(target=target, rec_pdb=rec_pdb)
         self.future = None
         self.out = np.nan
         self.target = target
@@ -208,7 +208,7 @@ class Generator:
             position_streamers: list[PositionSaveStreamer] = []
             streamers = []
             for idx, pdb in enumerate(pdbs):
-                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, self.lig_h, self.smiles_voc_dir)
+                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, self.lig_h, self.smiles_voc_dir, self.lig_cls)
                 out_dir = f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
                 if do_save:
                     streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf.sdf")

@@ -306,20 +306,6 @@ def main():
     ## score
     parser.add_argument('--target', choices=['min_vina', 'vina', 'mw_max', 'logp', 'qvina', 'dummy'], required=True)
     parser.add_argument('--max-new-token', type=int, default=1000)
-    ### score scale & normalization
-    parser.add_argument('--min-valid-score', type=float, default=-math.inf)
-    parser.add_argument('--gen-error-score', type=float, default=math.nan)
-    parser.add_argument('--vina-error-score', type=float, default=math.nan)
-    parser.add_argument('--gen-error-sample-deviation', type=float, default=math.nan)
-    parser.add_argument('--vina-error-sample-deviation', type=float, default=math.nan)
-    parser.add_argument('--sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--all-whiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--gen-error-white-score', type=float, default=math.nan)
-    parser.add_argument('--vina-error-white-score', type=float, default=math.nan)
-    parser.add_argument('--sample-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--all-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--adv-all-whiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--adv-sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline', 'dpo', 'grpo', 'dapo'], required=True)
     ## Trainer
     ### PPO
@@ -459,18 +445,6 @@ def main():
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)
     generator = ErrorRecordGenerator(generator, result_dir)
-    norm = EmptyNorm()
-    if math.isfinite(args.min_valid_score):
-        norm = ClampNorm(norm, args.min_valid_score)
-    norm = FillNorm(norm, args.gen_error_score, args.vina_error_score)
-    norm = SampleDevFillNorm(norm, args.gen_error_sample_deviation, args.vina_error_sample_deviation)
-    norm = SampleWhitenNorm(norm, 'mean' in args.sample_whiten, 'std' in args.sample_whiten)
-    norm = AllWhitenNorm(norm, 'mean' in args.all_whiten, 'std' in args.all_whiten)
-    norm = FillNorm(norm, args.gen_error_white_score, args.vina_error_white_score)
-    norm = SampleWhitenNorm(norm, 'mean' in args.sample_rewhiten, 'std' in args.sample_rewhiten)
-    norm = AllWhitenNorm(norm, 'mean' in args.all_rewhiten, 'std' in args.all_rewhiten)
-    norm = Fill0Norm(norm)
-    norm = RecordNorm(norm, result_dir)
     
     log_optimizer = 'optimizer' in args.check
     if args.trainer in ['reinforce', 'reinforce_no_baseline']:
@@ -504,7 +478,6 @@ def main():
             output = tokens[1:]
             position = pad_sequence(position, padding_value=0).to(device)
             weight = pad_sequence(weight, padding_value=0.0).to(device)
-            scores = norm(torch.tensor(scores, device=device), errors, idxs)
 
             # Forward Get prob & reward loss
             train_looper.put('train')

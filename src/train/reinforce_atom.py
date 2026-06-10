@@ -56,7 +56,11 @@ def get_velocity(
             advantage = [scores[b][1:] - values[b] for b in range(B)]
             velocity = [torch.cumsum(adv[::-1])[::-1] for adv in advantage]
     else:
-        velocity = [torch.cumsum(score[:1:-1])[::-1] for score in scores]
+        try:
+            velocity = [torch.cumsum(score[:1:-1])[::-1] for score in scores]
+        except Exception as e:
+            print([type(score) for score in scores], flush=True)
+            raise e
     velocity = pad_sequence(velocity) # [L, B]
 
     # sample-wise whiten

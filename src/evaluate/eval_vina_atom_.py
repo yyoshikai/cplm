@@ -68,7 +68,7 @@ METALS = {
     'W', 'RE', 'OS', 'IR', 'PT', 'AU', 'HG', 'TL', 'PB', 'BI', 'U'
 }
 
-def get_xs_type(atom):
+def get_xs_type(mol, atom):
     """
     Assigns the XS atom type to an RDKit atom object.
     Matches the logic in model::assign_types() in src/lib/model.cpp (lines 409-453).
@@ -103,14 +103,14 @@ def get_xs_type(atom):
                 if nbr.GetSymbol().upper() == 'C':
                     for gnbr in nbr.GetNeighbors():
                         if gnbr.GetSymbol().upper() in ('O', 'S'):
-                            bond = nbr.GetBondBetweenAtoms(gnbr.GetIdx())
+                            bond = mol.GetBondBetweenAtoms(nbr.GetIdx(), gnbr.GetIdx())
                             if bond and bond.GetBondType() == Chem.BondType.DOUBLE:
                                 acceptor = False
                                 break
                 elif nbr.GetSymbol().upper() == 'S':
                     for gnbr in nbr.GetNeighbors():
                         if gnbr.GetSymbol().upper() == 'O':
-                            bond = nbr.GetBondBetweenAtoms(gnbr.GetIdx())
+                            bond = mol.GetBondBetweenAtoms(nbr.GetIdx(), gnbr.GetIdx())
                             if bond and bond.GetBondType() == Chem.BondType.DOUBLE:
                                 acceptor = False
                                 break
@@ -243,7 +243,7 @@ def curl(e, v=1000.0):
 # Connectivity and Torsion Analysis
 # =====================================================================
 
-def is_amide_bond(bond):
+def is_amide_bond(mol, bond):
     a1 = bond.GetBeginAtom()
     a2 = bond.GetEndAtom()
     if {a1.GetSymbol().upper(), a2.GetSymbol().upper()} == {'C', 'N'}:
@@ -251,7 +251,7 @@ def is_amide_bond(bond):
         # Check if carbon is bonded to double-bonded oxygen
         for nbr in c_atom.GetNeighbors():
             if nbr.GetSymbol().upper() == 'O':
-                b = c_atom.GetBondBetweenAtoms(nbr.GetIdx())
+                b = mol.GetBondBetweenAtoms(c_atom.GetIdx(), nbr.GetIdx())
                 if b and b.GetBondType() == Chem.BondType.DOUBLE:
                     return True
     return False
@@ -280,7 +280,7 @@ def get_rotatable_bonds(mol):
         
         # Exclude terminal rotors (like -CH3, -NH2, -OH)
         if n1 > 1 and n2 > 1:
-            if is_amide_bond(bond):
+            if is_amide_bond(mol, bond):
                 continue
             rot_bonds.append(bond)
     return rot_bonds
@@ -396,7 +396,7 @@ def eval_vina_atom(molecule, protein):
     lig_conf = mol.GetConformer()
     for atom in mol.GetAtoms():
         idx = atom.GetIdx()
-        t = get_xs_type(atom)
+        t = get_xs_type(mol, atom)
         lig_atom_mask.append(t is not None)
         if t is not None:
             pos = lig_conf.GetAtomPosition(idx)
@@ -412,7 +412,7 @@ def eval_vina_atom(molecule, protein):
     rec_conf = rec_mol.GetConformer()
     for atom in rec_mol.GetAtoms():
         idx = atom.GetIdx()
-        t = get_xs_type(atom)
+        t = get_xs_type(rec_mol, atom)
         if t is not None:
             pos = rec_conf.GetAtomPosition(idx)
             rec_atoms.append({
@@ -490,7 +490,7 @@ def eval_vina_atom(molecule, protein):
     E_inter_all = np.zeros(n_atom_all, dtype=float)
     E_intra_all = np.zeros((n_atom_all, n_atom_all), dtype=float)
     E_inter_all[lig_atom_mask] = E_inter
-    E_intra_all[lig_atom_mask, lig_atom_mask] = E_intra
+    E_intra_all[lig_atom_mask][:,lig_atom_mask] = E_intra
 
     free_energy = E_inter.sum()
 
