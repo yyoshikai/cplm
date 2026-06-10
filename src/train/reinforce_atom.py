@@ -13,20 +13,20 @@ from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from src.utils import IterateRecorder, wraps
 from src.utils.path import cleardir
-from src.utils.ddp import reduce_float, all_gather
-from src.train.collator import solve_increasing_fn_left
 from src.data.tokenizer import VocEncoder
 from src.model import Model
 from src.train import get_optimizer_scheduler, get_process_ranks
 from src.train.looper import Looper
 from .reinforce import ReinforceModel, get_all_stat, get_sample_stat, all_gather_counter, scale_loss, get_mbatch_size
+from src.utils.ddp import reduce_float
+
 
 def get_velocity(
         model: ReinforceModel, 
         input: Tensor, 
         position: Tensor, 
         weight: Tensor, 
-        scores: list[Tensor], 
+        scores: list[Tensor|None], 
         idxs: Tensor, 
         sample_whiten: list[Literal['mean', 'std']], 
         all_whiten: list[Literal['mean', 'std']], 
@@ -43,8 +43,22 @@ def get_velocity(
     velocity: Tensor(float)[L, B]
     
     """
-    model
     L, B = input.shape
+
+    # sample-wise whiten
+    idx2n = defaultdict(float)
+    idx2s = defaultdict(float)
+    idx2s2 = defaultdict(float)
+    for idx, score, w in zip(idxs, scores, weight.T):
+        if score is None: continue
+
+        idx2n[idx] = idx_weight.sum().item()
+        idx2s[idx] = (idx_score*idx_weight).sum().item()
+        idx2s2[idx] = (idx_score**2*idx_weight).sum().item()
+    idx2n = all_gather_counter(idx2n)
+    idx2s = all_gather_counter(idx2s)
+    idx2s2 = all_gather_counter(idx2s2)
+    
     velocity = []
     if model.baseline:
         values = []
@@ -54,10 +68,10 @@ def get_velocity(
                 _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
                 values += list(values_m.T)
             advantage = [scores[b][1:] - values[b] for b in range(B)]
-            velocity = [torch.cumsum(adv[::-1])[::-1] for adv in advantage]
+            velocity = [torch.cumsum(adv.flip(0), 0).flip(0) for adv in advantage]
     else:
         try:
-            velocity = [torch.cumsum(score[:1:-1])[::-1] for score in scores]
+            velocity = [torch.cumsum(score[:1].flip(0), 0).flip(0) for score in scores]
         except Exception as e:
             print([type(score) for score in scores], flush=True)
             raise e
@@ -123,7 +137,6 @@ class Trainer:
         raise NotImplementedError
     def step_info(self) -> dict[str, Any]:
         raise NotImplementedError
-
 
 class ReinforceTrainer(Trainer):
     def __init__(self, model: Model, baseline: bool, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, adv_sample_whiten, adv_all_whiten, loss_scale, kl_factor: float, value_factor: float, train_looper: Looper, clip_grad_value: float|None, clip_grad_norm: float, result_dir: str):
@@ -353,3 +366,88 @@ class SaveStepTrainer(WrapTrainer):
         self.step_recorder.record(**self.step_info())
         if self.step == self.max_opt:
             self.step_recorder.flush()
+
+
+class Norm:
+    def __call__(self, scores: list[Tensor|None], idxs: Tensor, weights: list[Tensor]) -> list[Tensor|None]:
+        raise NotImplementedError
+
+class Norms:
+    def __init__(self, norms: list[Norm]):
+        self.norms = norms
+    @wraps(Norm.__call__)
+    def __call__(self, scores, idxs, weights):
+        for norm in self.norms:
+            scores = norm(scores, idxs, weights)
+
+class ClampNorm:
+    def __init__(self, *, min: float|None=None, max: float|None=None):
+        self.min = min
+        self.max = max
+    @wraps(Norm.__call__)
+    def __call__(self, scores, idxs, weights):
+        return [
+            torch.clamp(score, min=self.min, max=self.max) if score is not None else None
+            for score in scores
+        ]
+
+class FillNorm(Norm):
+    def __init__(self, error_score: float):
+        self.error_score = error_score
+    @wraps(Norm.__call__)
+    def __call__(self, scores, idxs, weights):
+        return [
+            score if score is not None else torch.full_like(weight, fill_value=self.error_score)
+            for score, weight in zip(scores, weights)
+        ]
+
+def get_sample_stat(scores: list[Tensor], idxs: list[Tensor], weights: list[Tensor]):
+    idx2w = defaultdict(float)
+    idx2s = defaultdict(float)
+    idx2s2 = defaultdict(float)        
+    for score, idx, weight in zip(scores, idxs, weights):
+        if score is None: continue
+        idx2w[idx] += weight.sum().item()
+        idx2s[idx] += (score*weight).sum().item()
+        idx2s2[idx] += (score**2*weight).sum().item()
+    idx2w, idx2s, idx2s2 = map(all_gather_counter, (idx2w, idx2s, idx2s2))
+    idx2mean = {idx: idx2s[idx] / w for idx, w in idx2w.items()}
+    idx2std = {idx: math.sqrt(idx2s2[idx] / w - idx2mean[idx]**2) for idx, w in idx2w.items()}
+    return idx2mean, idx2std
+
+class SampleWhitenNorm(Norm):
+    def __init__(self, mean: bool, std: bool):
+        self.mean = mean
+        self.std = std
+    @wraps(Norm.__call__)
+    def __call__(self, scores, idxs, weights):
+        if not self.mean and self.std:
+            return scores
+
+        idx2mean, idx2std = get_sample_stat(scores, idxs, weights)
+        new_scores = []
+        for score, idx in zip(scores, idxs):
+            if score is not None:
+                mean = idx2mean[idx]
+                std = idx2std[idx]
+                if self.mean and self.std:
+                    score = (score - mean) / std
+                elif self.mean:
+                    score = score - mean
+                elif self.std:
+                    score = (score - mean) / std + mean
+            new_scores.append(score)
+        return new_scores
+    
+    class AllWhitenNorm(Norm):
+        def __init__(self, mean: bool, std: bool):
+            self.mean = mean
+            self.std = std
+        def __call__(self, scores, idxs, weights):
+            if not self.mean and self.std:
+                return scores
+            s = sum((score*weight).sum() for score, weight in zip(scores, weights) if score is not None)
+            s2 = sum((score**2*weight).sum() for score, weight in zip(scores, weights) if score is not None)
+            w = sum(weight.sum() for score, weight in zip(scores, weights) if score is not None)
+            s, s2, w = map(reduce_float, (s, s2, w))
+

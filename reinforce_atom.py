@@ -49,7 +49,7 @@ class GetScoreStreamer(WrapperStreamer):
         self.e = e
         self.kwargs = dict(target=target, rec_pdb=rec_pdb)
         self.future = None
-        self.out = np.nan
+        self.out = None
         self.target = target
         self.prompt_size = None
         self.gen_size = 0
@@ -68,35 +68,37 @@ class GetScoreStreamer(WrapperStreamer):
         if self.future is not None:
             out = self.future.result()
             atom_poss, coord_poss = self.ligand_streamer.atom_poss()
-            if self.target == 'vina_atom':
-                _, score_inter, score_intra = out # [Na,], [Na, Na]
-                reward = torch.zeros(self.prompt_size+self.gen_size)
+            atom_poss = torch.tensor(atom_poss)
+            coord_poss = torch.tensor(coord_poss)
+            _, score_inter, score_intra = out # [Na,], [Na, Na]
+            score_inter = torch.tensor(score_inter, dtype=torch.float)
+            score_intra = torch.tensor(score_intra, dtype=torch.float)
+            reward = torch.zeros(self.prompt_size+self.gen_size, dtype=torch.float)
+            try:
                 reward[atom_poss] += score_inter * 0.5
-                reward[coord_poss] += score_inter * 0.5
+            except Exception as e:
+                print(f"{type(score_inter)}, {type(score_intra)}, {type(reward)}, {score_inter.dtype}, {score_intra.dtype}, {reward.dtype}", flush=True)
+                raise e
+            reward[coord_poss] += score_inter * 0.5
 
-                atom_order = torch.argsort(atom_poss)
-                coord_order = torch.argsort(coord_poss)
-                assert torch.all(atom_order == coord_order)
-                order = atom_order
-                score_intra = score_intra[order][:,order]
-                score_intra = (score_intra+score_intra.T).triu().sum(dim=0)
-                reward[atom_poss[order]] += score_intra * 0.5
-                reward[coord_poss[order]] += score_intra * 0.5
-                reward[-1] += self.valid_reward
-            else:
-                reward = torch.zeros(self.prompt_size+self.gen_size)
-                reward[-1] = self.out
+            atom_order = torch.argsort(atom_poss)
+            coord_order = torch.argsort(coord_poss)
+            assert torch.all(atom_order == coord_order)
+            order = atom_order
+            score_intra = score_intra[order][:,order]
+            score_intra = (score_intra+score_intra.T).triu().sum(dim=0)
+            reward[atom_poss[order]] += score_intra * 0.5
+            reward[coord_poss[order]] += score_intra * 0.5
+            reward[-1] += self.valid_reward
         else:
-            reward = torch.zeros(self.prompt_size+self.gen_size)
-        return reward
+            reward = None
+        self.out = reward
 
 
     def error(self):
         ligand_error = self.ligand_streamer.error()
         if ligand_error is not None:
             return ligand_error
-        elif np.isnan(self.out):
-            return 'VINA'
         else:
             return None
 
@@ -248,6 +250,7 @@ class Generator:
         
         errors = [streamer.error() for streamer in score_streamers]
         scores = [streamer.out for streamer in score_streamers]
+        scores = [score.to(self.device) if score is not None else None for score in scores]
         return tokens, position, weight, scores, errors
 
 class BatchSplitGenerator(Generator):
@@ -326,19 +329,6 @@ def main():
     parser.add_argument('--max-new-token', type=int, default=1000)
     parser.add_argument('--target', choices=['vina'], default='vina')
     ### score scale & normalization
-    parser.add_argument('--min-valid-score', type=float, default=-math.inf)
-    parser.add_argument('--gen-error-score', type=float, default=math.nan)
-    parser.add_argument('--vina-error-score', type=float, default=math.nan)
-    parser.add_argument('--gen-error-sample-deviation', type=float, default=math.nan)
-    parser.add_argument('--vina-error-sample-deviation', type=float, default=math.nan)
-    parser.add_argument('--sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--all-whiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--gen-error-white-score', type=float, default=math.nan)
-    parser.add_argument('--vina-error-white-score', type=float, default=math.nan)
-    parser.add_argument('--sample-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--all-rewhiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--adv-all-whiten', choices=['mean', 'std'], nargs='*', default=[])
-    parser.add_argument('--adv-sample-whiten', choices=['mean', 'std'], nargs='*', default=[])
     parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline'], required=True)
     parser.add_argument('--valid-reward', type=float, required=True)
     ## Trainer
