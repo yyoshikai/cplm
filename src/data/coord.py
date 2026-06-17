@@ -4,9 +4,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from rdkit import Chem
-from rdkit.Geometry import Point3D
-from openbabel.openbabel import OBMol, OBMolAtomIter
-from ..chem import get_coord_from_mol, set_coord, Pocket
+from openbabel.openbabel import OBMol
+from ..chem import get_coords, set_coords, Pocket
 from .data import WrapDataset, WrapTupleDataset, get_rng
 
 class Scaler:
@@ -56,7 +55,7 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
     
     def __getitem__(self, idx: int) -> tuple[Chem.Mol|Pocket|OBMol]:
         items = [data[idx] for data in self.datas]
-        coords = [get_coord_from_mol(item) for item in items]
+        coords = [get_coords(item) for item in items]
         rng = get_rng(self.base_seed, idx)
 
         # normalize
@@ -80,7 +79,7 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
         
         # set coord
         for item, coord in zip(items, coords):
-            set_coord(item, coord)
+            set_coords(item, coord)
         if self.normalize_coord:
             items.append(center)
         if self.random_rotate:
@@ -102,7 +101,7 @@ class AlignCenterDataset(WrapTupleDataset[tuple[Chem.Mol|Pocket|OBMol,...]]):
 
     def __getitem__(self, idx):
         items = [data[idx] for data in self.datas]
-        coords = [get_coord_from_mol(item) for item in items]
+        coords = [get_coords(item) for item in items]
         rng = get_rng(self.base_seed, idx)
 
         if coords[0].size > 0:
@@ -116,7 +115,7 @@ class AlignCenterDataset(WrapTupleDataset[tuple[Chem.Mol|Pocket|OBMol,...]]):
             coords = [coord if i == 0 else np.matmul(coord, matrix) for i, coord in enumerate(coords)]
         
         for item, coord in zip(items, coords):
-            set_coord(item, coord)
+            set_coords(item, coord)
         return tuple(items)
         
 

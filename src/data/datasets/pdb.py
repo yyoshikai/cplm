@@ -34,22 +34,6 @@ class PDBDataset(Dataset[OBMol|Chem.Mol|str]):
     def __len__(self):
         return len(self.pdbid_data)
 
-# 誰も使ってない
-class PDBUniMolDataset(Subset[OBMol|Chem.Mol|str]):
-    def __init__(self, split: Literal['train', 'valid'], cls: Literal['ob', 'rdkit', 'text', 'id'], pdb_dir: str=DEFAULT_PDB_DIR):
-        # Whole data
-        whole_data = PDBDataset("unimol_valid_count_order_pdbids", cls, pdb_dir)
-
-        # Get index
-        if split == 'train':
-            indices = range(DEFAULT_VALID_SIZE, len(whole_data))
-        elif split == 'valid':
-            indices = range(DEFAULT_VALID_SIZE)
-        else:
-            raise ValueError
-        
-        super().__init__(whole_data, indices)
-
 class PDBUniMolRandomDataset(Subset[OBMol|Chem.Mol|str]):
     logger = getLogger(f"{__module__}.{__qualname__}")
     def __init__(self, 

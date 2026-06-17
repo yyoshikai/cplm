@@ -16,8 +16,10 @@ from ..data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetData
 from ..data.datasets.crossdocked import CDDataset, CDProteinDataset
 from ..data.datasets.pdb import PDBUniMolRandomDataset
 from ..data.protein import SelectDataset, PocketTokenizeDataset
-from ..data.molecule import RemoveIsotopeDataset, SetHydrogenDataset, SmilesOrderDataset, MolTokenizeDataset, RandomScoreDataset, RandomClassDataset, AtomsDataset, CoordsDataset, RemainValencesDataset
+from ..data.molecule import RemoveIsotopeDataset, SetHydrogenDataset, RandomScoreDataset, RandomClassDataset
+from ..data.mol_tokenizer import MolTokenizerDataset
 from ..data.coord import CoordTransformDataset, AlignCenterDataset
+
 
 def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
     logs = []
@@ -76,13 +78,8 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             mol = SetHydrogenDataset(mol, pargs.h != 'none')
             if not pargs.pre_coord:
                 mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-            mol = CacheDataset(mol)
 
-            smi, orders = SmilesOrderDataset(mol, pargs.order, args.seed+d_seed).untuple()
-            atoms = AtomsDataset(mol)
-            coords = CoordsDataset(mol)
-            valences = RemainValencesDataset(mol, orders)
-            tokens = MolTokenizeDataset(atoms, coords, smi, orders, valences, format=pargs.format, coord_range=args.coord_range, smiles_voc_dir=args.smiles_voc_dir, heavy=pargs.heavy, h=pargs.h)
+            tokens, _orders = MolTokenizerDataset(mol, pargs.format, pargs.order, args.smiles_voc_dir).untuple()
             start = '[LIGAND]' if dtype == 'lig' else '[POCKET]'
             sentence = [start, tokens, '[END]']
 
@@ -204,11 +201,7 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     if args.protein:
         protein = SelectDataset(protein, 'ion' in args.pocket_hetatm, 'ligand' in args.pocket_hetatm, 'water' in args.pocket_hetatm)
         protein = SetHydrogenDataset(protein, args.pocket_h != 'none')
-        smi, orders = SmilesOrderDataset(protein, args.pocket_order, args.seed).untuple()
-        atoms = AtomsDataset(protein)
-        coords = CoordsDataset(protein)
-        valences = RemainValencesDataset(protein, orders)
-        protein_tokens = MolTokenizeDataset(atoms, coords, smi, orders, valences, args.pocket_format, args.coord_range, args.smiles_voc_dir, args.pocket_heavy, args.pocket_h)
+        protein_tokens, orders = MolTokenizerDataset(protein, args.pocket_format, args.pocket_order, args.smiles_voc_dir)
     else:
         protein_tokens = PocketTokenizeDataset(protein, heavy=args.pocket_heavy, h=args.pocket_h, format=args.pocket_format, coord_range=args.coord_range)
     sentence += ['[POCKET]', protein_tokens, '[END]']
@@ -233,13 +226,9 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
     sentence.append('[LIGAND]')
     weights.append(args.lig_smiles_weight)
     lig = SetHydrogenDataset(lig, args.lig_h != 'none')
-    smi, orders = SmilesOrderDataset(lig, args.lig_order, args.seed).untuple()
-
+    
     if add_ligand:
-        atoms = AtomsDataset(lig)
-        coords = CoordsDataset(lig)
-        valences = RemainValencesDataset(lig, orders)
-        lig_tokens = MolTokenizeDataset(atoms, coords, smi, orders, valences, args.lig_format, args.coord_range, args.smiles_voc_dir, 'all', args.lig_h)
+        lig_tokens, lig_orders = MolTokenizerDataset(lig, args.lig_format, args.lig_order, args.smiles_voc_dir)
         sentence += [lig_tokens, '[END]']
         weights += [args.lig_coord_weight, 0.0]
     sentence = SentenceDataset(*sentence)

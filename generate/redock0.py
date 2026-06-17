@@ -7,7 +7,6 @@ import yaml, math, logging
 import numpy as np
 from argparse import Namespace, ArgumentParser
 from rdkit import Chem
-from openbabel.openbabel import OBMol
 from src.utils import setdefault
 from src.utils.path import make_pardir, mwrite
 from src.data import StackDataset, index_dataset

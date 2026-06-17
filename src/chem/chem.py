@@ -21,53 +21,6 @@ class Pocket:
 
 logger = getLogger(__name__)
 
-def rdmol2obmol(rdmol: Chem.Mol) -> OBMol:
-    sdf = Chem.MolToMolBlock(rdmol) # hydrogens remain
-    obc = OBConversion()
-    obc.SetInFormat('sdf')
-    obmol = OBMol()
-    obc.ReadString(obmol, sdf)
-    return obmol
-
-def obmol2rdmol(obmol: OBMol, sanitize: bool=True) -> Chem.Mol:
-    """
-    MolFromMolBlockだとPropが無視される。
-    
-    """
-    obc = OBConversion()
-    obc.SetOutFormat('sdf')
-    sdf = obc.WriteString(obmol)
-    ms = Chem.SDMolSupplier()
-    ms.SetData(sdf, removeHs=False, sanitize=sanitize)
-    return next(ms)
-
-def pdb2obmol(pdb: str) -> OBMol:
-    obc = OBConversion()
-    obc.SetInFormat('pdb')
-    obmol = OBMol()
-    obc.ReadString(obmol, pdb)
-    return obmol
-
-def sdf2obmol(sdf: str) -> OBMol:
-    obc = OBConversion()
-    obc.SetInFormat('sdf')
-    obmol = OBMol()
-    obc.ReadString(obmol, sdf)
-    return obmol
-
-def obmol2pdb(obmol: OBMol) -> str:
-    obc = OBConversion()
-    obc.SetOutFormat('pdb')
-    return obc.WriteString(obmol)
-
-def sdf_path2obmol(sdf_path: str) -> OBMol:
-    with open(sdf_path) as f:
-        return sdf2obmol(f.read())
-    
-def pdb_path2obmol(pdb_path: str) -> OBMol:
-    with open(pdb_path) as f:
-        return pdb2obmol(f.read())
-
 def set_conf(conf: Conformer, coord: np.ndarray):
     for i in range(len(coord)):
         conf.SetAtomPosition(i, Point3D(*coord[i].tolist()))
@@ -77,7 +30,7 @@ def array_to_conf(coord: np.ndarray) -> Conformer:
     set_conf(conf, coord)
     return conf
 
-def get_coord_from_mol(mol: OBMol|Chem.Mol|Pocket) -> np.ndarray:
+def get_coords(mol: OBMol|Chem.Mol|Pocket) -> np.ndarray:
     if isinstance(mol, OBMol):
         coord = mol.GetCoordinates()
         return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
@@ -87,17 +40,46 @@ def get_coord_from_mol(mol: OBMol|Chem.Mol|Pocket) -> np.ndarray:
         return mol.coord
     else:
         raise ValueError(f"Unknown {type(mol)=}")
-    
-def set_coord(mol: OBMol|Chem.Mol|Pocket, coord: np.ndarray) -> None:
+
+def get_atoms(mol: Chem.Mol|ob.OBMol) -> list[str]:
+    """
+    Calpha炭素はCA
+    それ以外は元素記号 (2文字目は小文字 Mg等)
+    """
+    if isinstance(mol, ob.OBMol):
+        atoms = []
+        for atom in ob.OBMolAtomIter(mol):
+            res = atom.GetResidue()
+            if res is not None and res.GetAtomID(atom) == ' CA ':
+                atom = 'CA'
+            else:
+                atom = ELEMENT_SYMBOLS[atom.GetAtomicNum()-1]
+            atoms.append(atom)
+    elif isinstance(mol, Chem.Mol):
+        atoms = []
+        for atom in mol.GetAtoms():
+            rinfo = atom.GetPDBResidueInfo()
+            if rinfo is not None and rinfo.GetName() == ' CA ':
+                atom = 'CA'
+            else:
+                atom = atom.GetSymbol()
+            atoms.append(atom)
+    else:
+        raise ValueError
+    return atoms
+
+def set_coords(mol: OBMol|Chem.Mol|Pocket, coords: np.ndarray) -> None:
     if isinstance(mol, Chem.Mol):
-        # confへの代入のみで元の分子も変更されることを確認 @tests/test.ipynb
-        set_conf(mol.GetConformer(), coord)
+        if mol.GetNumConformers() > 0:
+            # confへの代入のみで元の分子も変更されることを確認 @tests/test.ipynb
+            set_conf(mol.GetConformer(), coords)
+        else:
+            mol.AddConformer(array_to_conf(coords))
     elif isinstance(mol, Pocket):
-        mol.coord = coord
+        mol.coord = coords
     else:
         for i, atom in enumerate(ob.OBMolAtomIter(mol)):
-            atom.SetVector(coord[i,0], coord[i,1], coord[i,2])
-
+            atom.SetVector(coords[i].tolist())
 
 def _randomize(mol: Chem.Mol, rng: np.random.Generator):
     for i in range(100): # ランダムに失敗する場合がある

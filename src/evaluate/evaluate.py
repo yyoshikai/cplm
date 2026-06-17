@@ -11,7 +11,7 @@ from openbabel.openbabel import OBMol, OBConversion
 from ..prepare_receptor4 import main as prepare_receptor4_func
 from ..utils import silence_print
 from ..utils.path import make_pardir, WORKDIR
-from ..chem import sdf2obmol, pdb2obmol, rdmol2obmol, get_coord_from_mol
+from ..chem import sdf2obmol, pdb2obmol, rdmol2obmol, get_coords
 logger = getLogger(__name__)
 
 T = TypeVar('T')
@@ -36,7 +36,7 @@ def eval_vina(ligand: OBMol|str, rec: OBMol|str, rec_pdbqt_path: str) -> tuple[f
         obc.AddOption('c', obc.OUTOPTIONS)
         ligand.AddHydrogens()
         ligand_str = obc.WriteString(ligand)
-        lig_center = get_coord_from_mol(ligand).mean(axis=0)
+        lig_center = get_coords(ligand).mean(axis=0)
 
         make_pardir(rec_pdbqt_path)
         if isinstance(rec, str):

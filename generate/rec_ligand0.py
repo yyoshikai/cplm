@@ -58,8 +58,8 @@ if __name__ == '__main__':
     with open(f"{out_dir}/args.yaml", 'w') as f:
         yaml.dump(vars(args), f)
 
-    added_vocs = StringTokenizer2(fargs.smiles_voc_dir).vocs()
-    _voc_encoder, _raw, rec_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
+    added_vocs = StringTokenizer2(f"src/data/vocs/{fargs.smiles_voc_dir}").vocs()
+    _voc_encoder, _raw, rec_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=False, random_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
     rec_pdb_data = Mol2PDBDataset(rec_data)
 
     idx_data, prompt_token_data = index_dataset(prompt_token_data)
@@ -72,12 +72,12 @@ if __name__ == '__main__':
     get_token_position_fn = lambda item: (item[2], item[3])
 
     with cf.ProcessPoolExecutor() as e:
-        if fargs.format == 'smiles_coords':
+        if fargs.lig_format == 'smiles_coords':
             def streamer_fn(item, i_trial, voc_encoder: VocEncoder):
                 idx, rec_pdb, prompt_token, position = item
                 pdb_path = f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb"
                 mwrite(pdb_path, rec_pdb)
-                streamer = get_ligand_streamer(fargs.format, fargs.coord_range, voc_encoder, fargs.lig_h, fargs.lig_cls, fargs.smiles_voc_dir)
+                streamer = get_ligand_streamer(fargs.lig_format, fargs.coord_range, voc_encoder, fargs.lig_h, fargs.lig_cls, fargs.smiles_voc_dir)
                 if args.no_token_range:
                     streamer = NoTokenRangeStreamer(streamer, voc_encoder.voc_size)
                 streamer = SaveLigandStreamer(streamer)

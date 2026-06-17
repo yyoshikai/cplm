@@ -17,7 +17,7 @@ from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
-from src.utils import get_git_hash, wraps, filter_long
+from src.utils import get_git_hash, wraps, filter_long, traceback_warning
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
 from src.chem import rdmol2obmol, pdb2obmol
@@ -26,11 +26,11 @@ from src.data.protein import AtomRepr
 from src.data.tokenizer import VocEncoder
 from src.data.molecule import Mol2PDBDataset
 from src.model import Model, Streamer
+from src.generate.streamer import WrapperStreamer, LigandStreamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
 from src.train import set_env, get_model, get_process_ranks
 from src.train.collator import solve_increasing_fn_left
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
-from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
 from src.train.reinforce import ReinforceTrainer, DPOTrainer, GRPOTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
 from src.train.reinforce import EmptyNorm, ClampNorm, FillNorm, SampleDevFillNorm, SampleWhitenNorm, AllWhitenNorm, RecordNorm, Fill0Norm
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
@@ -372,7 +372,7 @@ def main():
     parser.add_argument('--all-autocast', action='store_true')
     parser.add_argument('--fix-pocket', action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
-    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu'])
+    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu', 'warning'])
     parser.add_argument('--record-memory-history-step', type=int, default=0)
     args = parser.parse_args()
     ## set default args
@@ -385,7 +385,6 @@ def main():
     else:
         assert args.gpu_size_gb is None
         args.gpu_size = None
-    args.sdp_kernel = 'FLASH'
     logs = []
 
     # get finetune info
@@ -424,6 +423,8 @@ def main():
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
     if args.record_memory_history_step > 0:
         torch.cuda.memory._record_memory_history(max_entries=100000)
+    if 'warning' in args.check:
+        traceback_warning()
 
     # model
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"

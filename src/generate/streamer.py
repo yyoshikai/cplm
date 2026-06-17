@@ -1,5 +1,4 @@
-import os
-import itertools as itr
+import re
 from time import time
 from collections.abc import Generator, Callable
 from logging import getLogger
@@ -8,15 +7,11 @@ import numpy as np, pandas as pd
 import torch
 from tqdm import tqdm
 from rdkit import Chem
-from rdkit.Chem.rdDetermineBonds import DetermineBonds
-from openbabel import openbabel as ob
 from ..utils import should_show
-from ..utils.path import make_pardir, mwrite, WORKDIR
+from ..utils.path import make_pardir, mwrite
 from ..model import Streamer, WrapperStreamer
-from ..data.protein import AtomRepr
-from ..data.tokenizer import FloatTokenizer, StringTokenizer2, VocEncoder
-from ..chem import array_to_conf, element_symbols, obmol2rdmol
-from ..data.molecule import MAX_VALENCE
+from ..data.tokenizer import VocEncoder
+from ..data.mol_tokenizer import MolTokenizer, encode_token_stream, pos_offset_stream
 
 class NoTokenRangeStreamer(WrapperStreamer):
     def __init__(self, streamer: Streamer, voc_size):
@@ -25,71 +20,6 @@ class NoTokenRangeStreamer(WrapperStreamer):
     def put(self, tokens: list[int]) -> tuple[bool, int, list[int]]:
         is_remain, position, token_range = self.streamer.put(tokens)
         return is_remain, position, self.token_range
-
-def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, voc_encoder: VocEncoder, coord_range: float, atom_order: bool, center: np.ndarray|None) -> Generator[tuple[bool, list[int], list[int]], list[int], tuple[np.ndarray|None, int, str|None]]:
-    """
-    Returns
-    -------
-    coordss: np.ndarray|None of 
-        Shape: (n_atom, 3)
-    pos: int
-        next position
-    error: str|None
-        None if no error
-    """
-
-    coord_tokenizer = FloatTokenizer('', -coord_range, coord_range)
-    int_token_range = sorted(voc_encoder.encode(coord_tokenizer.int_vocs()))
-    frac_token_range = sorted(voc_encoder.encode(coord_tokenizer.frac_vocs()))
-
-    pos = start_position
-    if new_coord_path is not None:
-        make_pardir(new_coord_path)
-        with open(new_coord_path, 'w') as f:
-            f.write("idx,x,y,z\n")
-    coordss = []
-    for i_atom in range(n_atom):
-        coords = []
-        for dim in range(3):
-            int_token = yield True, pos, int_token_range
-            frac_token = yield True, pos+1, frac_token_range
-            pos += 2
-            coord_str = ''.join(voc_encoder.decode(int_token+frac_token))
-            try:
-                coord = float(coord_str)
-            except Exception:
-                return None, pos, 'COORD_NOT_FLOAT'
-            if center is not None:
-                coord += center[dim]
-            coords.append(coord)
-        if atom_order:
-            pos += 1
-        if new_coord_path is not None:
-            with open(new_coord_path, 'a') as f:
-                f.write(f"{i_atom},{coords[0]},{coords[1]},{coords[2]}\n")
-        coordss.append(coords)
-    return np.array(coordss), pos, None
-
-def obsmi2rdmol(smi: str) -> Chem.Mol|None:
-    # From experiments/260609_ob_streamer/source.ipynb
-    obc = ob.OBConversion()
-    obc.SetInFormat('smi')
-    mol = ob.OBMol()
-    r = obc.ReadString(mol, smi)
-    if not r:
-        return None
-    return obmol2rdmol(mol, sanitize=False)
-
-
-
-class GeneratorStreamer(Streamer):
-    def __init__(self):
-        self.put_gen = self.put_generator()
-        next(self.put_gen)
-    def put_generator(self) -> Generator[tuple[bool, list[int], list[int]], list[int], None]:
-        raise NotImplementedError
-    def put(self, tokens: list[int]):
-        return self.put_gen.send(tokens)
 
 # Verbosity
 class TokenWriteStreamer(WrapperStreamer):
@@ -123,7 +53,7 @@ class TokenWriteStreamer(WrapperStreamer):
             f.write(f"{position},")
         self.is_prompt = False
         return is_remain, position, token_range
-    
+
 class RangeWriteStreamer(WrapperStreamer):
     def __init__(self, streamer: Streamer, voc_encoder: VocEncoder, range_path: str):
         super().__init__(streamer)
@@ -221,11 +151,58 @@ class DummyStreamer(Streamer):
 
 
 # Ligands
+MOL_ERRORS = {
+    (ValueError, r"could not convert string to float: '.+'"): 'COORD_NOT_FLOAT', 
+    (ValueError, r"SMILES is invalid\."): 'SMILES', 
+    (ValueError, r"SMILES mismatch\."): 'SMILES_MISMATCH',
+
+}
+
 class LigandStreamer(Streamer):
+    logger = getLogger()
+
+    def __init__(self, mol_tokenizer: MolTokenizer, voc_encoder: VocEncoder, end_token: str, cls: Literal['rdkit', 'ob']):
+        self.mol_tokenizer = mol_tokenizer
+        self.voc_encoder = voc_encoder
+        self.is_init = True
+        self.end_token = end_token
+        self.cls = cls
+
+        self._ligand = None
+        self._error = 'PARSE_NOT_ENDED'
+
+    def put(self, tokens: list[int]) -> tuple[bool, int, list[int]]:
+        if self.is_init:
+            pos_offset = len(tokens)
+            stream = self.mol_tokenizer.decode_stream(self.end_token, self.cls)
+            stream = pos_offset_stream(stream, pos_offset)
+            self.stream = encode_token_stream(stream)
+            token_range, position = next(self.stream)
+            self.is_init = False
+            return True, position, token_range
+        else:
+            assert len(tokens) == 1
+            try:
+                token_range, position = self.stream.send(tokens[0])
+                return True, position, token_range
+            except StopIteration as e:
+                self._ligand, self._atom_poss, self._coord_posss = e.value
+                self._error = None
+                return False, None, None
+            except Exception as e:
+                for (etype, epattern), ename in MOL_ERRORS.items():
+                    if isinstance(e, etype) and re.match(epattern, e.args[0]):
+                        self._error = ename
+                        break
+                else:
+                    self.logger.warning(f"Unknown error: {type(e).__name__}{e.args}")
+                    self._error = 'UNK_ERROR'
+                return False, None, None
+
     def ligand(self) -> Chem.Mol|None:
-        raise NotImplementedError
+        return self._ligand
     def error(self) -> str|None:
-        raise NotImplementedError
+        return self._error
     def atom_poss(self) -> tuple[list[int], list[int]]:
         """
         Returns
@@ -235,377 +212,8 @@ class LigandStreamer(Streamer):
         coord_poss:
             同じく。座標について
         """
-        raise NotImplementedError
+        return self._atom_poss, self._coord_posss
 
-class SmilesLigandStreamer(GeneratorStreamer, LigandStreamer):
-    def __init__(self, coord_range: float, voc_encoder: VocEncoder, lig_h: AtomRepr, smiles_voc_dir: str, lig_cls: Literal['rdkit', 'ob'], center: np.ndarray|None=None):
-        self.voc_encoder = voc_encoder
-        self.coord_range = coord_range
-        smi_tokenizer = StringTokenizer2(smiles_voc_dir)
-        smi_vocs = list(smi_tokenizer.vocs())+['[XYZ]']
-        self.lig_cls = lig_cls
-        self.smi_token_range = sorted(self.voc_encoder.encode(smi_vocs))
-        self.center = center
-        self._mol = None
-        self._error = 'PARSE_NOT_ENDED'
-        if lig_h not in ['all', 'none']:
-            raise NotImplementedError
-        super().__init__()
-
-    def put_generator(self):
-        prompt_tokens = yield
-        prompt_tokens = self.voc_encoder.decode(prompt_tokens)
-        assert prompt_tokens[-1] == '[LIGAND]'
-        pos_iter = itr.count(len(prompt_tokens))
-        # smiles
-        smi_tokens = []
-        while True:
-            token, = yield True, next(pos_iter), self.smi_token_range
-            if token == self.voc_encoder.voc2i['[XYZ]']: break
-            smi_tokens.append(token)
-        smi = ''.join(self.voc_encoder.decode(smi_tokens))
-        
-        if self.lig_cls == 'rdkit':
-            
-            param = Chem.SmilesParserParams()
-            param.removeHs = False
-            self._mol = Chem.MolFromSmiles(smi, param)
-            if self._mol is not None:
-                smi_out = Chem.MolToSmiles(self._mol, canonical=False)
-                if smi_out != smi:
-                    self._error = 'SMILES_MISMATCH'
-                    self._mol = None
-            else:
-                self._error = 'SMILES'
-        elif self.lig_cls == 'ob':
-            self._mol = obsmi2rdmol(smi)
-            if self._mol is None:
-                self._mol = None
-                self._error = 'SMILES'
-        
-        if self._mol is not None:
-            n_atom = self._mol.GetNumAtoms()
-            coord, pos, self._error = yield from coord_streamer(n_atom, next(pos_iter), None, self.voc_encoder, self.coord_range, False, self.center)
-            self._mol.AddConformer(array_to_conf(coord))
-        yield False, next(pos_iter), [self.voc_encoder.voc2i['[END]']]
-
-    def ligand(self):
-        return self._mol if self._error is None else None
-    def error(self):
-        return self._error
-
-class SmileCoordsStreamer(GeneratorStreamer, LigandStreamer):
-    def __init__(self, coord_range: float, voc_encoder: VocEncoder, lig_h: AtomRepr, smiles_voc_dir: str, lig_cls: Literal['rdkit', 'ob'], center: np.ndarray|None=None):
-        self.coord_range = coord_range
-        self.voc_encoder = voc_encoder
-        self.smiles_voc_dir = smiles_voc_dir
-        assert os.path.exists(f"{WORKDIR}/cplm/src/data/vocs/{self.smiles_voc_dir}")
-        self.center = center
-        self._mol = None
-        self.lig_cls = lig_cls
-        self._error = 'PARSE_NOT_ENDED'
-        if lig_h not in ['all', 'none']:
-            raise NotImplementedError
-        self._atom_poss = []
-        self._coord_poss = []
-        self._order = None
-        super().__init__()
-
-    def put_generator(self):
-        # Initialize
-        smi_tokenizer = StringTokenizer2(f"{WORKDIR}/cplm/src/data/vocs/{self.smiles_voc_dir}")
-        smi_vocs = list(smi_tokenizer.vocs())+['[END]']
-        smi_token_range = sorted(self.voc_encoder.encode(smi_vocs))
-        with open(f"{WORKDIR}/cplm/src/data/vocs/{self.smiles_voc_dir}/non_atom_tokens.txt") as f:
-            non_atom_vocs = set(f.read().splitlines())
-
-        prompt_tokens = yield
-        prompt_tokens = self.voc_encoder.decode(prompt_tokens)
-        assert prompt_tokens[-1] == '[LIGAND]'
-        pos = len(prompt_tokens)
-
-        # smiles
-        smi_tokens = []
-        coordss = []
-        while True:
-            token, = yield True, pos, smi_token_range
-            voc = self.voc_encoder.i2voc[token]
-            pos += 1
-            if voc not in smi_vocs:
-                self._error = 'COORD_IN_SMILES'
-                break
-            elif voc == '[END]':
-                break
-            else:
-                smi_tokens.append(voc)
-                if voc in non_atom_vocs:
-                    continue
-                else:
-                    self._atom_poss.append(pos-1)
-                    coords, pos, coord_error = yield from coord_streamer(1, pos, None, self.voc_encoder, self.coord_range, False, None)
-                    if coord_error is not None:
-                        self._error = coord_error
-                        break
-                    self._coord_poss.append(pos-1)
-                    coordss.append(coords)
-        coordss = np.concatenate(coordss, axis=0)
-        if self.center is not None:
-            coords += self.center
-        smi = ''.join(smi_tokens)
-        if self._error != 'PARSE_NOT_ENDED':
-            yield False, pos, [self.voc_encoder.voc2i['[END]']]
-            return
-        
-        if self.lig_cls == 'rdkit':
-            param = Chem.SmilesParserParams()
-            param.removeHs = False
-            self._mol = Chem.MolFromSmiles(smi, param)
-            if self._mol is not None:
-                smi_out = Chem.MolToSmiles(self._mol, canonical=False)
-                if smi_out != smi:
-                    self._error = 'SMILES_MISMATCH'
-                    self._mol = None
-                else:
-                    self._order = eval(self._mol.GetProp('_smilesAtomOutputOrder'))
-                    self._mol.AddConformer(array_to_conf(coordss))
-            else:
-                self._error = 'SMILES'
-        else:
-            self._mol = obsmi2rdmol(smi)
-            if self._mol is None:
-                self._error = 'SMILES'
-            self._order = list(range(self._mol.GetNumAtoms()))
-            self._mol.RemoveConformer(0)
-            self._mol.AddConformer(array_to_conf(coordss), assignId=True)
-        if self._mol is not None:
-            self._error = None
-        yield False, pos, [self.voc_encoder.voc2i['[END]']]
-
-    def ligand(self):
-        return self._mol
-    def error(self):
-        return self._error
-    def atom_poss(self):
-        if self._mol is None:
-            return None
-        aorder = np.argsort(self._order)
-        atom_poss = [self._atom_poss[ao] for ao in aorder]
-        coord_poss = [self._coord_poss[ao] for ao in aorder]
-        return atom_poss, coord_poss
-
-class AtomsCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
-    logger = getLogger(f"{__module__}.{__qualname__}")
-
-    def __init__(self, coord_range: float, voc_encoder: VocEncoder, atom_order: bool, lig_h: AtomRepr, center: np.ndarray|None = None):
-        self.voc_encoder = voc_encoder
-        self.coord_range = coord_range
-        self.atom_token_range = sorted(self.voc_encoder.encode(element_symbols()+['[XYZ]']))
-        self.atom_order = atom_order
-        self.n_generated_atom = None
-        self._mol = None
-        if lig_h not in ['all', 'none']:
-            raise NotImplementedError
-        if center is not None:
-            raise NotImplementedError
-        self.center = center
-        self._error = 'PARSE_NOT_ENDED'
-        self.n_prompt_token: int = None
-
-        super().__init__()
-    def put_generator(self):
-        prompt_tokens = yield
-        prompt_tokens = self.voc_encoder.decode(prompt_tokens)
-        n_prompt_token = len(prompt_tokens)
-        self.n_prompt_token = n_prompt_token
-        assert prompt_tokens[-1] == '[LIGAND]'
-
-        atoms = []
-        while True:
-            n_atom = len(atoms)
-            pos = n_prompt_token+n_atom*7 if self.atom_order else n_prompt_token+n_atom
-            tokens = yield True, pos, self.atom_token_range
-            token = tokens[0]
-            if token == self.voc_encoder.voc2i['[XYZ]']: break
-            self._atom_poss.append(n_prompt_token+n_atom)
-            if token not in self.atom_token_range:
-                yield False, n_prompt_token+n_atom+1, [self.voc_encoder.voc2i['[END]']]
-                return
-            atoms.append(self.voc_encoder.i2voc[token])
-        self.n_generated_atom = len(atoms)
-
-        start_point = n_prompt_token+1 if self.atom_order else n_prompt_token+n_atom+1
-        coords, pos, error = yield from coord_streamer(self.n_generated_atom, start_point, None, self.voc_encoder, self.coord_range, self.atom_order, self.center)
-        if error is not None:
-            self._error = error
-        else:
-            assert coords is not None
-            self._mol = Chem.RWMol()
-            for symbol in atoms:
-                self._mol.AddAtom(Chem.Atom(symbol))
-            try:
-                self._mol.AddConformer(array_to_conf(coords))
-            except Exception as e:
-                self.logger.info(f"Error at AddConformer: {type(e).__name__}{e.args}")
-                self._error = 'ADD_CONFORMER'
-                self._mol = None
-                yield False, pos, [self.voc_encoder.voc2i['[END]']]
-                return
-            self.logger.info(f"atoms={atoms}")
-            try:
-                DetermineBonds(self._mol)
-            except Exception as e:
-                self.logger.warning(f"Error while making atom: {e.args[0]}")
-                self._error = 'DETERMINE_BOND_ORDERS'
-                self._mol = None
-                yield False, pos, [self.voc_encoder.voc2i['[END]']]
-                return
-            self._error = None
-        yield False, pos, [self.voc_encoder.voc2i['[END]']]
-
-    def ligand(self):
-        return self._mol
-    def error(self):
-        return self._error
-    def atom_poss(self):
-        atom_poss = (np.arange(self.n_generated_atom, dtype=int)+self.n_prompt_token).tolist()
-        coord_poss = (np.arange(self.n_generated_atom, dtype=int)*6+(self.n_prompt_token+5)).tolist()
-        return atom_poss, coord_poss
-    
-class AtomCoordsLigandStreamer(GeneratorStreamer, LigandStreamer):
-    logger = getLogger(f"{__module__}.{__qualname__}")
-
-    def __init__(self, coord_range: float, voc_encoder: VocEncoder, lig_h: AtomRepr, valence: bool, center: np.ndarray|None=None):
-        self.voc_encoder = voc_encoder
-        self.coord_range = coord_range
-        self.valence = valence
-        self.n_generated_atom = None
-        self._mol = None
-        self.center = center
-        self._error = 'PARSE_NOT_ENDED'
-        if lig_h not in ['all', 'none']:
-            raise NotImplementedError
-        self.n_prompt_token = None
-        self.n_generated_atom = None
-
-
-        super().__init__()
-
-    def put_generator(self):
-        prompt_tokens = yield
-        prompt_tokens = self.voc_encoder.decode(prompt_tokens)
-        n_prompt_token = len(prompt_tokens)
-        self.n_prompt_token = n_prompt_token
-        assert prompt_tokens[-1] == '[LIGAND]'
-
-
-        coord_tokenizer = FloatTokenizer('', -self.coord_range, self.coord_range)
-        atom_tokens = set(self.voc_encoder.encode(element_symbols()+['[END]']))
-        int_tokens = set(self.voc_encoder.encode(coord_tokenizer.int_vocs()))
-        frac_tokens = set(self.voc_encoder.encode(coord_tokenizer.frac_vocs()))
-        valence_tokens = set(self.voc_encoder.encode([str(i) for i in range(MAX_VALENCE)]))
-
-        atom_token_range = sorted(atom_tokens)
-        int_token_range = sorted(int_tokens)
-        frac_token_range = sorted(frac_tokens)
-        valence_token_range = sorted(valence_tokens)
-
-
-        atoms = []
-        coordss = []
-        pos = n_prompt_token
-        end_token = self.voc_encoder.voc2i['[END]']
-        while True:
-            atom_token = yield True, pos, atom_token_range
-            assert len(atom_token) == 1
-            atom_token = atom_token[0]
-            pos += 1
-            if self.valence:
-                valence_token = yield True, pos, valence_token_range
-                valence_token = valence_token[0]
-                if valence_token not in valence_tokens:
-                    self._error = 'VALENCE'
-                    break
-                pos += 1
-
-            if atom_token == end_token:
-                self._mol = Chem.RWMol()
-                for atom in atoms:
-                    self._mol.AddAtom(Chem.Atom(atom))
-                try:
-                    self._mol.AddConformer(array_to_conf(np.array(coordss)))
-                except Exception as e:
-                    self.logger.info(f"Error at AddConformer: {type(e).__name__}{e.args}")
-                    self._error = 'ADD_CONFORMER'
-                    self._mol = None
-                    break
-                try:
-                    DetermineBonds(self._mol)
-                except Exception as e:
-                    self.logger.info(f"Error at DetermineBondOrders: {type(e)}{e.args}")
-                    self._error = 'DETERMINE_BOND_ORDERS'
-                    self._mol = None
-                    break
-                self._error = None
-                break
-            elif atom_token not in atom_tokens:
-                self._error = 'ATOM'
-                break
-            else:
-                atoms.append(self.voc_encoder.i2voc[atom_token])
-                coords = []
-                for dim in range(3):
-                    int_token = yield True, pos, int_token_range
-                    frac_token = yield True, pos+1, frac_token_range
-                    pos += 2
-                    coord_str = ''.join(self.voc_encoder.decode(int_token+frac_token))
-                    try:
-                        coord = float(coord_str)
-                    except Exception:
-                        self._error = 'COORD_NOT_FLOAT'
-                        yield False, pos, [end_token]
-                        return
-                    if self.center is not None:
-                        coord += self.center[dim]
-                    coords.append(coord)
-                coordss.append(coords)
-        yield False, pos, [end_token]
-        return 
-    def ligand(self):
-        return self._mol
-    def error(self):
-        return self._error
-    def atom_poss(self):
-        if self.valence:
-            atom_poss = (np.arange(self.n_generated_atom)*8+self.n_prompt_token).tolist()
-            coord_poss = (np.arange(self.n_generated_atom)*8+self.n_prompt_token+7).tolist()
-        else:
-            atom_poss = (np.arange(self.n_generated_atom)*7+self.n_prompt_token).tolist()
-            coord_poss = (np.arange(self.n_generated_atom)*7+self.n_prompt_token+6).tolist()
-        return atom_poss, coord_poss
-
-def get_ligand_streamer(
-        format: str, 
-        coord_range: float, 
-        voc_encoder: VocEncoder,
-        lig_h: AtomRepr, 
-        smiles_voc_dir: str,
-        lig_cls: Literal['rdkit', 'ob'], 
-        center: np.ndarray|None=None
-) -> LigandStreamer:
-    kwargs = dict(coord_range=coord_range, voc_encoder=voc_encoder, lig_h=lig_h, center=center)
-    if format == 'smiles_coords':
-        return SmilesLigandStreamer(**kwargs, smiles_voc_dir=smiles_voc_dir, lig_cls=lig_cls)
-    elif format == 'smile_coords':
-        return SmileCoordsStreamer(**kwargs, smiles_voc_dir=smiles_voc_dir, lig_cls=lig_cls)
-    elif format in ['atoms_coords', 'ordered_atoms_coords']:
-        atom_order = format == 'ordered_atoms_coords'
-        return AtomsCoordsLigandStreamer(**kwargs, atom_order=atom_order)
-    elif format in ['atom_coords', 'atom_valence_coords']:
-        valence = format == 'atom_valence_coords'
-        return AtomCoordsLigandStreamer(**kwargs, valence=valence)
-    else:
-        raise ValueError(f"Unknown {format=}")
-    
 class SaveLigandStreamer(WrapperStreamer):
     def __init__(self, streamer: LigandStreamer, new_sdf_path: str):
         super().__init__(streamer)

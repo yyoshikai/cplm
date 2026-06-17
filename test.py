@@ -16,6 +16,6 @@ device = torch.device('cpu')
 model, voc_encoder = get_model(args, None, f"{sdir}/models/0.pth", device)
 
 for l in range(-3, 1):
-    f = lambda bsz: model.get_gpuuse(bsz, l, bf16=True, kernel=args.sdp_kernel)-args.gpu_size
+    f = lambda bsz: model.get_gpuuse(bsz, l, bf16=True, kernel='FLASH')-args.gpu_size
     b = solve_increasing_fn_left(f, 16)
     print(f"{l}: {b}")

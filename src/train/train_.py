@@ -87,14 +87,6 @@ def _sync_result_dir(result_dir, subdirs):
     if result_dir is None:
         raise ValueError(f"{result_dir} is not empty.")
 
-def _set_sdp_kernel(sdp_kernel: str|None):
-    if sdp_kernel is not None:
-        assert sdp_kernel in ['FLASH', 'CUDNN', 'MATH', 'EFFICIENT', 'ALL'] # 全て無効にするとエラーになる
-        torch.backends.cuda.enable_flash_sdp(sdp_kernel in ['FLASH', 'ALL'])
-        torch.backends.cuda.enable_cudnn_sdp(sdp_kernel in ['CUDNN', 'ALL'])
-        torch.backends.cuda.enable_math_sdp(sdp_kernel in ['MATH', 'ALL'])
-        torch.backends.cuda.enable_mem_efficient_sdp(sdp_kernel in ['EFFICIENT', 'ALL'])
-
 def get_max_opt(result_dir: str) -> int:
     logger = getLogger('get_last_opt')
     paths = sorted(glob(f"{result_dir}/models/*.pth"))
@@ -173,7 +165,6 @@ def add_train_args(parser: ArgumentParser):
     parser.add_argument("--end-limit", type=int, help='Unit is hour')
     ## hardware
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
     parser.add_argument("--gpu-size-gb", type=float, required=True)
     ## test
     parser.add_argument("--weight-decay-all", action='store_true')
@@ -210,7 +201,6 @@ def add_pretrain_args(parser: ArgumentParser):
     ## tf
     parser.add_argument('--d-model', type=int, default=768)
     ## compatibility
-    parser.add_argument("--model-bfloat16", action='store_true')
     parser.add_argument("--smiles-voc-dir", default='smiles3')
     parser.add_argument("--lig-pre-coord", action='store_true')
     parser.add_argument("--pocket-pre-coord", action='store_true')
@@ -297,7 +287,7 @@ def update_args(args: Namespace) -> Namespace:
 
     if not hasattr(args, 'lig_order'):
         setattr(args, 'lig_order', 'ran' if args.lig_randomize else 'can')
-        delattr(args, 'ilg_randomize')
+        delattr(args, 'lig_randomize')
 
     # 260417 pre_coord
     setdefault(args, 'lig_pre_coord', False)
@@ -372,8 +362,6 @@ def get_model(args: Namespace, voc_encoder: VocEncoder|None, init_state_path: st
         assert r == 0
         model = TransformerModel(args.n_layer or 12, args.d_model, n_head, 4, 0.0, 'gelu', True, voc_encoder.i2voc, voc_encoder.pad_token, args.pos_buffer_len)
     model.to(device)
-    if args.model_bfloat16:
-        model.to(torch.bfloat16)
     if init_state_path is not None:
         model.load_state_dict(state)
     if return_voc_encoder:
@@ -456,11 +444,10 @@ def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_unk
         set_deterministic()
 
     # scaled dot product attention kernel
-    _set_sdp_kernel(args.sdp_kernel)
-    logger.debug(f"{torch.backends.cuda.cudnn_sdp_enabled()=}")
-    logger.debug(f"{torch.backends.cuda.flash_sdp_enabled()=}")
-    logger.debug(f"{torch.backends.cuda.math_sdp_enabled()=}")
-    logger.debug(f"{torch.backends.cuda.mem_efficient_sdp_enabled()=}")
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_cudnn_sdp(False)
+    torch.backends.cuda.enable_math_sdp(False)
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
     logger.debug(f"{os.environ.get('TORCH_CUDNN_SDPA_ENABLED')=}")
 
     ## Log args
@@ -518,10 +505,10 @@ def get_optimizer_scheduler(model: nn.Module, max_opt: int,
 def validate(datas: list[Dataset], data_names: list[str], voc_encoder: VocEncoder, 
         model: DistributedDataParallel, criterion: nn.Module, 
         result_dir: str, opt: int,
-        num_workers: int, is_starting: bool, sdp_kernel: str, gpu_size: float, check_data_dist: bool
+        num_workers: int, is_starting: bool, gpu_size: float, check_data_dist: bool
     ) -> tuple[list[float], list[float], Tensor, Tensor]:
     
-    get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel=sdp_kernel)
+    get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel='FLASH')
 
     logger = getLogger('validate')
     rank = dist.get_rank()
@@ -636,7 +623,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
         train_loader = None
     
     ## collated data loader
-    get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel=args.sdp_kernel)
+    get_gpuuse = partial(model.module.get_gpuuse, bf16=True, kernel='FLASH')
     train_loader = DDPStringCollateLoader(train_loader, partial(collate, pad_token=voc_encoder.pad_token), get_gpuuse, 
             args.gpu_size, device, 100000, DATA_RANK['train'], 
             f"{result_dir}/data/train_large_items.csv", train_looper if 'data_loading' in args.check else None, 
@@ -689,7 +676,7 @@ def train(tname: str, args: Namespace, train_datas: list[Dataset[tuple[Tensor, T
             train_looper.put('evaluation')
             opt_looper.put('evaluation')
             if args.schedule_free: optimizer.eval()
-            process_weights, process_losses, total_weights, total_losses = validate(valid_datas, data_names, voc_encoder, model, criterion, result_dir, opt, args.num_workers, len(val2mean_loss) <= 1, args.sdp_kernel, args.gpu_size, check_data_dist, )
+            process_weights, process_losses, total_weights, total_losses = validate(valid_datas, data_names, voc_encoder, model, criterion, result_dir, opt, args.num_workers, len(val2mean_loss) <= 1, args.gpu_size, check_data_dist, )
             mean_losses = total_losses / total_weights
             estimated_train_weights = total_weights * valid2train_r
             mean_loss = ((mean_losses*estimated_train_weights).sum() / estimated_train_weights.sum()).item()

@@ -15,7 +15,6 @@ from src.utils.logger import get_logger, add_file_handler
 parser = ArgumentParser()
 parser.add_argument('--studyname', required=True)
 parser.add_argument('--num-workers', type=int, default=0)
-parser.add_argument("--sdp-kernel", choices=['FLASH', 'EFFICIENT'], default='FLASH')
 parser.add_argument("--gpu-size-gb", type=float, required=True)
 parser.add_argument("--val-sample", type=float)
 args = parser.parse_args()
@@ -55,7 +54,7 @@ for opt in opts:
     model = DistributedDataParallel(net_model)
     model.eval()
 
-    _, _, total_weights, total_losses = validate(datas, data_names, voc_encoder, model, criterion, args.num_workers, False, args.sdp_kernel, args.gpu_size, f"[{opt}]", False)
+    _, _, total_weights, total_losses = validate(datas, data_names, voc_encoder, model, criterion, args.num_workers, False, args.gpu_size, f"[{opt}]", False)
     assert len(total_weights) == 1
     loss = total_losses[0].item() / total_weights[0].item()
 
