@@ -182,13 +182,12 @@ def add_pretrain_args(parser: ArgumentParser):
     """
     # bool系は何も指定しない場合BindGPTの設定になるようにしている
     # pocket-heavy-coordはデフォルトで入れるようにした。
-    parser.add_argument('--lig-h', choices=['none', 'atom', 'all'], default='all')
-    parser.add_argument('--lig-order', default='ran')
+    parser.add_argument('--lig-h', action='store_true')
+    parser.add_argument('--lig-order', default='ran', choices=['ran', 'can'])
     parser.add_argument("--lig-format", choices=['smiles_coords', 'smile_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
     parser.add_argument("--lig-cls", choices=['rdkit', 'ob'], required=True)
 
     parser.add_argument("--pocket-h", choices=['none', 'atom', 'all'], default='none')
-    parser.add_argument('--pocket-heavy', choices=['none', 'atom', 'all'], default='all')
     parser.add_argument("--pocket-order", choices=['residue', 'can', 'ran'], default='residue')
     parser.add_argument("--pocket-format", choices=['atoms_coords', 'ordered_atoms_coords', 'atom_valence_coords', 'atom_coords', 'smiles_coords', 'smile_coords'], default='atoms_coords')
     parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion'], nargs='*')
@@ -292,8 +291,18 @@ def update_args(args: Namespace) -> Namespace:
     # 260417 pre_coord
     setdefault(args, 'lig_pre_coord', False)
     setdefault(args, 'pocket_pre_coord', True)
-
     setdefault(args, 'pocket_max_n_token', math.inf)
+
+    # 260617 heavy は常に 'all', h は 'none'>False, all>True, atomsは実装しない
+    if hasattr(args, 'pocket_heavy'):
+        assert args.pocket_heavy == 'all'
+        delattr(args, 'pocket_heavy')
+    if isinstance(args.lig_h, str):
+        assert args.lig_h in ['all', 'none']
+        args.lig_h = True if args.lig_h == 'all' else False
+    if isinstance(args.pocket_h, str):
+        assert args.pocket_h in ['all', 'none']
+        args.pocket_h = True if args.pocket_h == 'all' else False
 
     return args
 

@@ -34,10 +34,7 @@ class PocketStructureStreamer(Streamer):
             token_range, pos = next(self.stream)
             return True, pos, token_range
         else:
-            
-
-
-
+            pass
 
     def put_generator(self):
         prompt_tokens = yield

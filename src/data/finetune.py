@@ -16,34 +16,19 @@ from ..utils.logger import add_file_handler, get_logger
 from ..utils.rdkit import ignore_rdkit_warning
 from ..utils.utils import CompressedArray
 
-
 class CDDataset(Dataset):
     logger = get_logger(f"{__module__}.{__qualname__}")
-    def __init__(self, save_dir: str, seed:int=0,
+    def __init__(self, save_dir: str, pocket_h: bool, mol_h: bool, seed:int=0,
             coord_center: str='ligand', random_rotate: bool=True,
-            pocket_atom_heavy: bool=True, pocket_atom_h: bool=False,
-            pocket_coord_heavy: bool=False, pocket_coord_h: bool=False,
-            mol_atom_h: bool=False, mol_coord_h: bool=True, out_filename: bool=False):
-        """
-        train.py: 
-            mol: atom_h=True, coord_h=True, 
-            pocket: atom_heavy: bool = True, atom_h: bool = False,
-                coord_heavy: bool=False, coord_h: bool = False
-        BindGPTも↑と同じ。
-        """
+            out_filename: bool=False):
         self.lmdb_dataset = PickleLMDBDataset(f"{save_dir}/main.lmdb", idx_to_key='str')
 
         self.rstate = np.random.RandomState(seed)
         self.coord_center = coord_center
         assert self.coord_center in ['ligand', 'pocket', 'none']
         self.random_rotate = random_rotate
-        self.pocket_atom_heavy = pocket_atom_heavy
-        self.pocket_atom_h = pocket_atom_h
-        self.pocket_coord_heavy = pocket_coord_heavy
-        self.pocket_coord_h = pocket_coord_h
-        self.mol_atom_h = mol_atom_h
-        self.mol_coord_h = mol_coord_h
-        assert not ((not self.mol_atom_h) and self.mol_coord_h), 'Not supported.'
+        self.pocket_h = pocket_h
+        self.mol_h = mol_h
         self.out_filename = out_filename
         if self.out_filename:
             self.logger.info("Loading filenames.csv.gz ... ")
@@ -63,7 +48,7 @@ class CDDataset(Dataset):
         score = float(data['score'])
         
         ## remove hydrogen 250828 pretrain用のデータと合わせるためrandomizeと逆にした。
-        if not self.mol_atom_h:
+        if not self.mol_h:
             lig_mol = Chem.RemoveHs(lig_mol)
 
         ## randomize
@@ -75,27 +60,16 @@ class CDDataset(Dataset):
         lig_smi = Chem.MolToSmiles(lig_mol, canonical=False)
         conf_pos = lig_mol.GetConformer().GetPositions()
         atom_idxs = np.array(lig_mol.GetProp('_smilesAtomOutputOrder', autoConvert=True))
-        if self.mol_atom_h and not self.mol_coord_h:
-            atom_idxs = [idx for idx in atom_idxs if lig_mol.GetAtomWithIdx(idx).GetSymbol() != 'H']
-            lig_coord = conf_pos[atom_idxs]
-        else:
-            lig_coord = conf_pos[atom_idxs]
+        lig_coord = conf_pos[atom_idxs]
 
         # pocket
         pocket_atoms, pocket_coord = data['pocket_atoms'], data['pocket_coordinate']
 
         ## calc mask
-        is_ca = pocket_atoms == 'CA'
-        is_h = slice_str(pocket_atoms, 1) == 'H'
-        is_heavy = (~is_ca)&(~is_h)
-        atom_mask = is_ca.copy()
-        if self.pocket_atom_heavy: atom_mask |= is_heavy
-        if self.pocket_atom_h: atom_mask |= is_h
-        pocket_atoms = pocket_atoms[atom_mask]
-        coord_mask = is_ca.copy()
-        if self.pocket_coord_heavy: coord_mask |= is_heavy
-        if self.pocket_coord_h: coord_mask |= is_h
-        pocket_coord = pocket_coord[coord_mask]
+        if not self.pocket_h:
+            atom_mask = slice_str(pocket_atoms, 1) != 'H'
+            pocket_atoms = pocket_atoms[atom_mask]
+            pocket_coord = pocket_coord[atom_mask]
 
         # normalize coords
         ## centerize

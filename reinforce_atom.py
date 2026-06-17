@@ -1,4 +1,4 @@
-import os, yaml, math, random
+import os, yaml
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
@@ -20,9 +20,9 @@ from src.utils import get_git_hash, wraps, filter_long, traceback_warning
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
 from src.evaluate import eval_vina_atom
-from src.data.protein import AtomRepr
 from src.data.tokenizer import VocEncoder
 from src.data.molecule import Mol2PDBDataset
+from src.data.mol_tokenizer import MolTokenizer, get_mol_tokenizer
 from src.model import Model, Streamer
 from src.train import set_env, get_model, get_process_ranks
 from src.train.collator import solve_increasing_fn_left
@@ -170,12 +170,9 @@ class ReinforceDataIter:
 class Generator:
     def __init__(self, 
             voc_encoder: VocEncoder,
+            mol_tokenizer: MolTokenizer,
             result_dir: str, 
             max_new_token: int,
-            coord_range: int,
-            lig_h: AtomRepr,
-            lig_format: str,
-            smiles_voc_dir: str,
             cpu: int,
             num_score_workers: int,
             lig_cls: Literal['rdkit', 'ob'], 
@@ -183,12 +180,9 @@ class Generator:
             device: torch.device,
             valid_reward: float):
         self.voc_encoder = voc_encoder
+        self.mol_tokenizer = mol_tokenizer
         self.result_dir = result_dir
         self.max_new_token = max_new_token
-        self.coord_range = coord_range
-        self.lig_h = lig_h
-        self.lig_format = lig_format
-        self.smiles_voc_dir = smiles_voc_dir
         self.num_score_workers = num_score_workers
         self.lig_cls = lig_cls
         self.cpu = cpu
@@ -216,7 +210,7 @@ class Generator:
             position_streamers: list[PositionSaveStreamer] = []
             streamers = []
             for idx, pdb in enumerate(pdbs):
-                streamer = ligand_streamer = LigandStreamer(self.lig_format, self.coord_range, self.voc_encoder, self.lig_h, self.smiles_voc_dir, self.lig_cls)
+                streamer = ligand_streamer = LigandStreamer(self.mol_tokenizer, self.voc_encoder, '[END]', self.lig_cls)
                 out_dir = f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
                 if do_save:
                     streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf.sdf")
@@ -476,7 +470,8 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward)
+    mol_tokenizer = get_mol_tokenizer(fargs.lig_format, fargs.lig_order)
+    generator = Generator(voc_encoder, mol_tokenizer, result_dir, args.max_new_token, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)
