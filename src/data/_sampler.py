@@ -18,6 +18,8 @@ class InfiniteRandomSampler(Sampler):
             self.logger.info('Calculating sample order...')
             order = torch.randperm(len(self.dataset), generator=self.generator).tolist()
             self.logger.info('calculated.')
+            # self.logger.warning("Skipping to 72 for debug!!!")
             yield from order
+            # yield from order[::72]
             self.epoch += 1
             self.logger.info(f"{self.epoch} epoch finished.")

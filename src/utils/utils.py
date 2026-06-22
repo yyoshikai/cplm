@@ -245,7 +245,6 @@ class IterateRecorder:
         self.data_size = 0
         self.flushed = True
 
-
 def solve_increasing_fn_left(func: Callable[[int], float], start_sup: int) -> int:
 
     min = 0

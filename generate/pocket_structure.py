@@ -8,24 +8,32 @@ from src.utils import slice_str
 from src.data import CacheDataset, index_dataset
 from src.data.datasets.unimol import UniMolPocketDataset
 from src.data.protein import PocketTokenizeDataset, AtomRepr
-from src.chem import Pocket
 from src.data.tokenizer import SentenceDataset, VocEncoder, TokenSplitDataset
+from src.model import Streamer
 from src.generate import generate
-from src.generate.streamer import coord_streamer, GeneratorStreamer, TokenWriteStreamer, TimeLogStreamer, RangeWriteStreamer
+from src.generate.streamer import TokenWriteStreamer, TimeLogStreamer, RangeWriteStreamer
+from src.data.mol_tokenizer import coord_stream, add_range_pos_stream, encode_token_stream, pos_offset_stream
 
 
-class PocketStructureStreamer(GeneratorStreamer):
-    def __init__(self, new_coord_path: str, pocket: Pocket, coord_range: float, voc_encoder: VocEncoder, no_token_range: bool, format, pocket_h: AtomRepr):
+class PocketStructureStreamer(Streamer):
+    def __init__(self, voc_encoder: VocEncoder, no_token_range: bool, format):
         super().__init__()
         self.voc_encoder = voc_encoder
         self.pocket = pocket
-        self.new_coord_path = new_coord_path
-
-        self.coord_range = coord_range
         self.no_token_range = no_token_range
         self.format = format
         assert format in ['atoms_coords', 'ordered_atoms_coords', 'atom_coords']
-        self.pocket_h = pocket_h
+        self.stream = None
+
+    def put(self, tokens):
+        if self.stream is None: # init
+            stream = add_range_pos_stream(coord_stream())
+            stream = pos_offset_stream(stream, len(tokens))
+            self.stream = encode_token_stream(stream, self.voc_encoder)
+            token_range, pos = next(self.stream)
+            return True, pos, token_range
+        else:
+            pass
 
     def put_generator(self):
         prompt_tokens = yield

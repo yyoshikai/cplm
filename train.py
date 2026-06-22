@@ -1,5 +1,5 @@
 import argparse
-from src.data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset
+from src.data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset
 from src.data.datasets.pdb import PDBUniMolRandomDataset
 from src.train.data import get_train_data
 from src.train import train, add_pretrain_args, add_train_args, set_default_args
@@ -10,7 +10,7 @@ parser = argparse.ArgumentParser()
 add_pretrain_args(parser)
 add_train_args(parser)
 ## dataset
-for cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset, UniMolPocketDataset, PDBUniMolRandomDataset]:
+for cls in [UniMolLigandDataset, UniMolLigandNoMolNetDataset, PDBUniMolRandomDataset]:
     dname = cls.__name__.removesuffix('Dataset')
     parser.add_argument(f'--{dname}', type=int, default=0)
     parser.add_argument(f'--{dname}-val-sample', type=float, default=1.0)

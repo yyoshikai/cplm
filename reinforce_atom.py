@@ -1,10 +1,11 @@
-import os, yaml, math, random
+import os, yaml, warnings
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 from logging import getLogger
 from typing import Literal
-import numpy as np, pandas as pd
+warnings.filterwarnings("ignore", category=SyntaxWarning, message=r'".+" is an invalid escape sequence\. Such sequences will not work in the future\. Did you mean ".+"\? A raw string is also an option.')
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -14,24 +15,22 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.distributed.elastic.multiprocessing.errors import record
 from rdkit import Chem
-from rdkit.Chem import rdMolDescriptors
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
-from src.utils import get_git_hash, wraps, filter_long
+from src.utils import get_git_hash, wraps, filter_long, traceback_warning
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
-from src.chem import rdmol2obmol, pdb2obmol
 from src.evaluate import eval_vina_atom
-from src.data.protein import AtomRepr
 from src.data.tokenizer import VocEncoder
 from src.data.molecule import Mol2PDBDataset
+from src.data.mol_tokenizer import MolTokenizer, get_mol_tokenizer
 from src.model import Model, Streamer
 from src.train import set_env, get_model, get_process_ranks
 from src.train.collator import solve_increasing_fn_left
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
-from src.generate.streamer import WrapperStreamer, LigandStreamer, get_ligand_streamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
-from src.train.reinforce_atom import ReinforceTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer
+from src.streamer import WrapperStreamer, LigandStreamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
+from src.train.reinforce_atom import ReinforceTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer, Norms, FillNorm, SampleWhitenNorm
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 def get_atom_score(target: str,lig_rdmol: Chem.Mol, rec_pdb: str):
@@ -43,6 +42,7 @@ def get_atom_score(target: str,lig_rdmol: Chem.Mol, rec_pdb: str):
 error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}
 
 class GetScoreStreamer(WrapperStreamer):
+    logger = getLogger(__qualname__)
     def __init__(self, streamer: Streamer, ligand_streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool, valid_reward: float):
         super().__init__(streamer)
         self.ligand_streamer = ligand_streamer
@@ -69,27 +69,27 @@ class GetScoreStreamer(WrapperStreamer):
             out = self.future.result()
             atom_poss, coord_poss = self.ligand_streamer.atom_poss()
             atom_poss = torch.tensor(atom_poss)
-            coord_poss = torch.tensor(coord_poss)
+            coord_poss = torch.tensor(coord_poss) # [Na, 6]
             _, score_inter, score_intra = out # [Na,], [Na, Na]
             score_inter = torch.tensor(score_inter, dtype=torch.float)
             score_intra = torch.tensor(score_intra, dtype=torch.float)
-            reward = torch.zeros(self.prompt_size+self.gen_size, dtype=torch.float)
-            try:
-                reward[atom_poss] += score_inter * 0.5
-            except Exception as e:
-                print(f"{type(score_inter)}, {type(score_intra)}, {type(reward)}, {score_inter.dtype}, {score_intra.dtype}, {reward.dtype}", flush=True)
-                raise e
-            reward[coord_poss] += score_inter * 0.5
+
+            reward = torch.zeros(self.gen_size, dtype=torch.float)
+            reward[atom_poss] += score_inter * 0.5
+            reward[coord_poss] += score_inter.unsqueeze(-1) * 0.5 / 6
+
 
             atom_order = torch.argsort(atom_poss)
-            coord_order = torch.argsort(coord_poss)
+            coord_order = torch.argsort(coord_poss[:,0])
             assert torch.all(atom_order == coord_order)
             order = atom_order
             score_intra = score_intra[order][:,order]
             score_intra = (score_intra+score_intra.T).triu().sum(dim=0)
             reward[atom_poss[order]] += score_intra * 0.5
-            reward[coord_poss[order]] += score_intra * 0.5
+            reward[coord_poss[order]] += score_intra.unsqueeze(-1) * 0.5 / 6
             reward[-1] += self.valid_reward
+            # self.prompt_size+
+            reward = torch.cat([torch.zeros(self.prompt_size), reward])
         else:
             reward = None
         self.out = reward
@@ -164,12 +164,9 @@ class ReinforceDataIter:
 class Generator:
     def __init__(self, 
             voc_encoder: VocEncoder,
+            mol_tokenizer: MolTokenizer,
             result_dir: str, 
             max_new_token: int,
-            coord_range: int,
-            lig_h: AtomRepr,
-            lig_format: str,
-            smiles_voc_dir: str,
             cpu: int,
             num_score_workers: int,
             lig_cls: Literal['rdkit', 'ob'], 
@@ -177,12 +174,9 @@ class Generator:
             device: torch.device,
             valid_reward: float):
         self.voc_encoder = voc_encoder
+        self.mol_tokenizer = mol_tokenizer
         self.result_dir = result_dir
         self.max_new_token = max_new_token
-        self.coord_range = coord_range
-        self.lig_h = lig_h
-        self.lig_format = lig_format
-        self.smiles_voc_dir = smiles_voc_dir
         self.num_score_workers = num_score_workers
         self.lig_cls = lig_cls
         self.cpu = cpu
@@ -201,6 +195,8 @@ class Generator:
 
             pdbs: list[str],
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, list[float], list[str|None]]:
+        assert all(len(pos) == len(ptoken) for pos, ptoken in zip(positions, prompt_tokens))
+
         rank = dist.get_rank()
 
         model.eval()
@@ -210,7 +206,7 @@ class Generator:
             position_streamers: list[PositionSaveStreamer] = []
             streamers = []
             for idx, pdb in enumerate(pdbs):
-                streamer = ligand_streamer = get_ligand_streamer(self.lig_format, self.coord_range, self.voc_encoder, self.lig_h, self.smiles_voc_dir, self.lig_cls)
+                streamer = ligand_streamer = LigandStreamer(self.mol_tokenizer, self.voc_encoder, '[END]', self.lig_cls)
                 out_dir = f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
                 if do_save:
                     streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf.sdf")
@@ -244,10 +240,10 @@ class Generator:
             w[prompt_size-1:] = 1.0
             weight.append(w)
         position = [
-            torch.tensor(position+position_streamer.new_positions)[:-2] for position, position_streamer
+            torch.tensor(position+position_streamer.new_positions)[:-1] for position, position_streamer
             in zip(positions, position_streamers)
         ] # [L, B]
-        
+
         errors = [streamer.error() for streamer in score_streamers]
         scores = [streamer.out for streamer in score_streamers]
         scores = [score.to(self.device) if score is not None else None for score in scores]
@@ -329,8 +325,11 @@ def main():
     parser.add_argument('--max-new-token', type=int, default=1000)
     parser.add_argument('--target', choices=['vina'], default='vina')
     ### score scale & normalization
-    parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline'], required=True)
-    parser.add_argument('--valid-reward', type=float, required=True)
+    parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline', 'reward'], required=True)
+    parser.add_argument('--valid-reward', type=float, default=0.0)
+    parser.add_argument('--sample-whiten', nargs='*', choices=['mean', 'std'], default=['mean', 'std'])
+    parser.add_argument('--adv-sample-whiten', nargs='*', choices=['mean', 'std'], default=['mean', 'std'])
+    parser.add_argument('--error-score', type=float, default=0.0)
     ## Trainer
     ### PPO
     parser.add_argument('--n-ppo-step', type=int, default=5)
@@ -381,7 +380,8 @@ def main():
     parser.add_argument('--all-autocast', action='store_true')
     parser.add_argument('--fix-pocket', action='store_true')
     parser.add_argument("--weight-decay-all", action='store_true')
-    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu'])
+    parser.add_argument('--check', nargs='*', default=[], choices=['data_dist', 'optimizer', 'tokens', 'gpu', 'warning'])
+    # warning: 警告のtracebackを表示
     parser.add_argument('--record-memory-history-step', type=int, default=0)
     args = parser.parse_args()
     ## set default args
@@ -433,6 +433,8 @@ def main():
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
     if args.record_memory_history_step > 0:
         torch.cuda.memory._record_memory_history(max_entries=100000)
+    if 'warning' in args.check:
+        traceback_warning()
 
     # model
     init_state_path = f"{finetune_dir}/models/{args.finetune_opt}.pth"
@@ -464,25 +466,31 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    generator = Generator(voc_encoder, result_dir, args.max_new_token, fargs.coord_range, fargs.lig_h, fargs.lig_format, fargs.smiles_voc_dir, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward)
+    mol_tokenizer = get_mol_tokenizer(fargs.lig_format, fargs.lig_order, fargs.smiles_voc_dir, fargs.lig_h)
+    generator = Generator(voc_encoder, mol_tokenizer, result_dir, args.max_new_token, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)
     generator = ErrorRecordGenerator(generator, result_dir)
     
     log_optimizer = 'optimizer' in args.check
-    baseline = args.trainer == 'reinforce'
-    trainer = ReinforceTrainer(model_, baseline, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.adv_all_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)
+    trainer = ReinforceTrainer(model_, args.trainer, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)
     trainer = GetMemoryTrainer(trainer, device)
     trainer = SaveBatchTrainer(trainer, result_dir, do_save_steps, voc_encoder)
     trainer = SaveStepTrainer(trainer, result_dir, args.record_opt, args.max_opt)
+
+    norm = Norms([
+        SampleWhitenNorm('mean' in args.sample_whiten, 'std' in args.sample_whiten), 
+        FillNorm(args.error_score), 
+    ])
+
+
     # save at step 0
     trainer.save(result_dir)
 
     train_looper.start_loops()
     try:
         for step in range(args.max_opt):
-            is_starting = step < 3
             do_save = step in do_save_steps
 
             train_looper.put('get_batch')
@@ -490,8 +498,10 @@ def main():
 
             train_looper.put('generate')
             tokens, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
-            if is_starting:
-                logger.info(f"step {step} raw scores={scores}")
+            scores = [score[1:] for score in scores]
+            weight = [w.to(device) for w in weight]
+            scores = norm(scores, idxs, weight)
+            
             tokens = pad_sequence(tokens, padding_value=voc_encoder.pad_token).to(device)
             input = tokens[:-1]
             output = tokens[1:]

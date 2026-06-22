@@ -8,10 +8,10 @@ class Streamer:
         -------
         is_remain: bool
             If True, next token must be generated. If False, self.put() must not be called any more.
-        position: int
-            next position
-        token_range: list[int]
-            Next token range.
+        position: int|None
+            next position. None if is_remain is False
+        token_range: list[int]|None
+            Next token range. None if is_remain is False
         """
         raise NotImplementedError
     def estimated_n_token(self):

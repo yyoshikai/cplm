@@ -27,8 +27,6 @@ def generate(out_dir: str, targs: Namespace, init_state_path: str, prompt_data: 
 
     # Environment
     set_random_seed(seed)
-    if os.path.exists(out_dir):
-        raise FileExistsError(f"{out_dir=} already exists.")
     os.makedirs(out_dir, exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
