@@ -17,54 +17,8 @@ from src.data.tokenizer import VocEncoder
 from src.model import Model
 from src.train import get_optimizer_scheduler, get_process_ranks
 from src.train.looper import Looper
-from .reinforce import ReinforceModel, get_all_stat, get_sample_stat, all_gather_counter, scale_loss, get_mbatch_size
+from .reinforce import ReinforceModel, get_sample_stat, all_gather_counter, scale_loss, get_mbatch_size
 from src.utils.ddp import reduce_float
-
-
-def get_velocity(
-        model: ReinforceModel, 
-        input: Tensor, 
-        position: Tensor, 
-        weight: Tensor, 
-        scores: list[Tensor|None], 
-        idxs: Tensor, 
-        sample_whiten: 'SampleWhitenNorm',
-        mbatch_size: int
-) -> Tensor:
-    """
-    Parameters
-    ----------
-    input, position, weight: Tensor(float)[L, B]
-    scores: list[Tensor(float)[L+1,]]
-
-    Returns
-    -------
-    velocity: Tensor(float)[L, B]
-    
-    """
-    L, B = input.shape
-    
-    velocity = []
-    if model.baseline:
-        values = []
-        with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-            for mbatch_start in range(0, B, mbatch_size):
-                mslice = slice(mbatch_start, mbatch_start+mbatch_size)
-                _, values_m = model(input[:,mslice], position[:,mslice]) # [L,B]
-                values += list(values_m.T)
-            advantage = [scores[b] - values[b] for b in range(B)]
-            velocity = [torch.cumsum(adv.flip(0), 0).flip(0) for adv in advantage]
-    else:
-        try:
-            velocity = [torch.cumsum(score.flip(0), 0).flip(0) for score in scores]
-        except Exception as e:
-            print([type(score) for score in scores], flush=True)
-            raise e
-    weights = [w[:len(v)] for v, w in zip(velocity, weight.T)]
-    velocity = sample_whiten(velocity, idxs, weights)
-    velocity = pad_sequence(velocity) # [L, B]
-
-    return velocity
 
 class Trainer:
     def train(self, input: Tensor, output: Tensor, position: Tensor, weight: Tensor, scores: Tensor, errors: list[str], idxs: Tensor):
@@ -79,7 +33,7 @@ class Trainer:
         raise NotImplementedError
 
 class ReinforceTrainer(Trainer):
-    def __init__(self, model: Model, baseline: bool, max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, adv_sample_whiten, loss_scale, kl_factor: float, value_factor: float, train_looper: Looper, clip_grad_value: float|None, clip_grad_norm: float, result_dir: str):
+    def __init__(self, model: Model, trainer: Literal['reinforce', 'reinforce_no_baseline', 'reward'], max_opt, weight_decay_all, weight_decay, schedule_free, scheduler, lr, warmup_ratio, log_optimizer, mbatch_size, gpu_size, adv_sample_whiten, loss_scale, kl_factor: float, value_factor: float, train_looper: Looper, clip_grad_value: float|None, clip_grad_norm: float, result_dir: str):
         self.step = 0
         self._batch_info = {}
         self._step_info = {}
@@ -89,7 +43,8 @@ class ReinforceTrainer(Trainer):
         _, self.save_rank, _ = get_process_ranks()
 
         self.init_model = copy.deepcopy(model)
-        self.reinforce_model = ReinforceModel(model, baseline)
+        self.trainer = trainer
+        self.reinforce_model = ReinforceModel(model, trainer == 'reinforce')
         self.reinforce_model.to(device)
         self.model = DistributedDataParallel(self.reinforce_model)
 
@@ -113,7 +68,25 @@ class ReinforceTrainer(Trainer):
         L, B = input.shape
         mbatch_size = get_mbatch_size(self.mbatch_size, L, self.gpu_size, self.reinforce_model.model)
         self.train_looper.put('velocity')
-        velocity = get_velocity(self.reinforce_model, input, position, weight, scores, idxs, self.adv_sample_whiten, mbatch_size)
+
+        velocity = []
+        if self.trainer == 'reinforce':
+            values = []
+            with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+                for mbatch_start in range(0, B, mbatch_size):
+                    mslice = slice(mbatch_start, mbatch_start+mbatch_size)
+                    _, values_m = self.model(input[:,mslice], position[:,mslice]) # [L,B]
+                    values += list(values_m.T)
+                advantage = [scores[b] - values[b][:len(scores[b])] for b in range(B)]
+                velocity = [torch.cumsum(adv.flip(0), 0).flip(0) for adv in advantage]
+        elif self.trainer == 'reinforce_no_baseline':
+            velocity = [torch.cumsum(score.flip(0), 0).flip(0) for score in scores]
+        else:
+            velocity = scores
+        weights = [w[:len(v)] for v, w in zip(velocity, weight.T)]
+        velocity = self.adv_sample_whiten(velocity, idxs, weights)
+        velocity = pad_sequence(velocity) # [L, B]
+        scores = pad_sequence(scores)
 
         self.train_looper.put('forward_backward')
         self.model.train()
@@ -133,7 +106,6 @@ class ReinforceTrainer(Trainer):
                 output_m = output[:, mslice]
                 position_m = position[:,mslice]
                 weight_m = weight[:, mslice]
-                rewards_m = scores[mslice]
                 with torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                     with torch.inference_mode():
                         init_logits = self.init_model(input_m, position_m) # [L, B, N]
@@ -153,6 +125,7 @@ class ReinforceTrainer(Trainer):
                     kl_loss_m = scale_loss(kl_loss_m, weight_m, self.loss_scale) * self.kl_factor
 
                     if self.reinforce_model.baseline:
+                        rewards_m = scores[:, mslice]
                         value_loss_m = (rewards_m-values_m)**2*0.5
                         value_loss_m = scale_loss(value_loss_m, weight_m, self.loss_scale) * self.value_factor
                     else:
@@ -179,7 +152,7 @@ class ReinforceTrainer(Trainer):
             'log_prob': (torch.cat(log_probs, dim=1) / math.log(10)).float().cpu(), 
             'velocity': velocity.float().cpu(),
             'value': torch.cat(values, dim=1).float().cpu(), 
-            'score': pad_sequence(scores).float().cpu()
+            'score': scores.float().cpu()
         }
         self._step_info = dict(
             lr=self.scheduler.get_last_lr()[0], 
@@ -358,8 +331,10 @@ class SampleWhitenNorm(Norm):
     def __init__(self, mean: bool, std: bool):
         self.mean = mean
         self.std = std
-    @wraps(Norm.__call__)
+
     def __call__(self, scores, idxs, weights):
+
+
         if not self.mean and self.std:
             return scores
 
@@ -368,7 +343,7 @@ class SampleWhitenNorm(Norm):
         for score, idx in zip(scores, idxs.tolist()):
             if score is not None:
                 mean = idx2mean[idx]
-                std = idx2std[idx]
+                std = idx2std[idx]+1e-5
                 if self.mean and self.std:
                     score = (score - mean) / std
                 elif self.mean:
@@ -376,17 +351,18 @@ class SampleWhitenNorm(Norm):
                 elif self.std:
                     score = (score - mean) / std + mean
             new_scores.append(score)
+
         return new_scores
     
-    class AllWhitenNorm(Norm):
-        def __init__(self, mean: bool, std: bool):
-            self.mean = mean
-            self.std = std
-        def __call__(self, scores, idxs, weights):
-            if not self.mean and self.std:
-                return scores
-            s = sum((score*weight).sum() for score, weight in zip(scores, weights) if score is not None)
-            s2 = sum((score**2*weight).sum() for score, weight in zip(scores, weights) if score is not None)
-            w = sum(weight.sum() for score, weight in zip(scores, weights) if score is not None)
-            s, s2, w = map(reduce_float, (s, s2, w))
-            raise NotImplementedError
+class AllWhitenNorm(Norm):
+    def __init__(self, mean: bool, std: bool):
+        self.mean = mean
+        self.std = std
+    def __call__(self, scores, idxs, weights):
+        if not self.mean and self.std:
+            return scores
+        s = sum((score*weight).sum() for score, weight in zip(scores, weights) if score is not None)
+        s2 = sum((score**2*weight).sum() for score, weight in zip(scores, weights) if score is not None)
+        w = sum(weight.sum() for score, weight in zip(scores, weights) if score is not None)
+        s, s2, w = map(reduce_float, (s, s2, w))
+        raise NotImplementedError

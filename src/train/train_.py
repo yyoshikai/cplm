@@ -180,8 +180,6 @@ def add_pretrain_args(parser: ArgumentParser):
     """
     finetune時にpretrain時のものを使うもの (変えてはいけないもの)
     """
-    # bool系は何も指定しない場合BindGPTの設定になるようにしている
-    # pocket-heavy-coordはデフォルトで入れるようにした。
     parser.add_argument('--lig-h', action='store_true')
     parser.add_argument('--lig-order', default='ran', choices=['ran', 'can'])
     parser.add_argument("--lig-format", choices=['smiles_coords', 'smile_coords', 'atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords'], default='smiles_coords')
@@ -193,7 +191,6 @@ def add_pretrain_args(parser: ArgumentParser):
     parser.add_argument("--pocket-hetatm", choices=['ion', 'ligand', 'water'], default=['ion'], nargs='*')
     parser.add_argument("--pocket-cls", choices=['rdkit', 'ob'], required=True)
     parser.add_argument("--pocket-max-n-token", type=int, required=True)
-    parser.add_argument("--coord-range", type=int, default=250)
     # model
     parser.add_argument('--mamba', action='store_true')
     parser.add_argument('--n-layer', type=int) # MambaとTFでdefaultが違う可能性があるので定めない。
@@ -244,22 +241,6 @@ def update_args(args: Namespace) -> Namespace:
     # 260312 d_model, n_layer
     setdefault(args, 'n_layer', None)
     setdefault(args, 'd_model', 768)
-
-    # 260313 atom_reprs
-    atom_reprs = {
-        (True, True): 'all', 
-        (True, False): 'atom', 
-        (False, False): 'none'
-    }
-    if not hasattr(args, 'lig_h'):
-        args.lig_h = atom_reprs[not args.no_lig_h_atom, not args.no_lig_h_coord]
-    if not hasattr(args, 'pocket_h'):
-        args.pocket_h = atom_reprs[args.pocket_h_atom, args.pocket_h_coord]
-    if not hasattr(args, 'pocket_heavy'):
-        args.pocket_heavy = atom_reprs[not args.no_pocket_heavy_atom, not args.no_pocket_heavy_coord]
-    for name in ['no_lig_h_atom', 'no_lig_h_coord', 'pocket_h_atom', 'pocket_h_coord', 'no_pocket_heavy_coord', 'no_pocket_heavy_atom']:
-        if hasattr(args, name):
-            delattr(args, name)
     
     # 260314 pocket_order
     setdefault(args, 'pocket_order', 'residue')
@@ -292,17 +273,49 @@ def update_args(args: Namespace) -> Namespace:
     setdefault(args, 'lig_pre_coord', False)
     setdefault(args, 'pocket_pre_coord', True)
     setdefault(args, 'pocket_max_n_token', math.inf)
-
+    
     # 260617 heavy は常に 'all', h は 'none'>False, all>True, atomsは実装しない
+    # 260313 atom_reprs からも引き継ぎ
+    ## lig h
+    if hasattr(args, 'no_lig_h_atom'):
+        assert args.no_lig_h_atom == args.no_lig_h_coord
+        args.lig_h = not args.no_lig_h_atom
+        delattr(args, 'no_lig_h_atom')
+        delattr(args, 'no_lig_h_coord')
+    elif isinstance(args.lig_h, str):
+        assert args.lig_h in ['all', 'none']
+        args.lig_h = True if args.lig_h == 'all' else False
+    ## pocket h
+    if hasattr(args, 'pocket_h_atom'):
+        assert args.pocket_h_atom == args.pocket_h_coord
+        args.pocket_h = args.pocket_h_atom
+        delattr(args, 'pocket_h_atom')
+        delattr(args, 'pocket_h_coord')
+    elif isinstance(args.pocket_h, str):
+        assert args.pocket_h in ['all', 'none']
+        args.pocket_h = True if args.pocket_h == 'all' else False
+    ## pocket heavy
+    if hasattr(args, 'no_pocket_heavy_atom'):
+        assert not args.no_pocket_heavy_atom and not args.no_pocket_heavy_coord
+        delattr(args, 'no_pocket_heavy_atom')
+        delattr(args, 'no_pocket_heavy_coord')
     if hasattr(args, 'pocket_heavy'):
         assert args.pocket_heavy == 'all'
         delattr(args, 'pocket_heavy')
-    if isinstance(args.lig_h, str):
-        assert args.lig_h in ['all', 'none']
-        args.lig_h = True if args.lig_h == 'all' else False
-    if isinstance(args.pocket_h, str):
-        assert args.pocket_h in ['all', 'none']
-        args.pocket_h = True if args.pocket_h == 'all' else False
+
+    # 260617 Pocket関連の dataset を削除
+    if hasattr(args, 'UniMolPocket'):
+        assert args.UniMolPocket == 0
+        delattr(args, 'UniMolPocket')
+        delattr(args, 'UniMolPocket_val_sample')
+    if hasattr(args, 'protein'):
+        assert args.protein is True
+        delattr(args, 'protein')
+
+    # 260617 coord_range を 250 で固定
+    if hasattr(args, 'coord_range'):
+        assert args.coord_range == 250
+        delattr(args, 'coord_range')
 
     return args
 

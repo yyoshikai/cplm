@@ -2,6 +2,7 @@ from torch.utils.data import Dataset
 from rdkit import Chem
 from openbabel import openbabel as ob
 from .data import WrapDataset, get_rng
+from ..chem import set_hydrogen
 
 class RemoveIsotopeDataset(WrapDataset[ob.OBMol|Chem.Mol]):
     def __init__(self, mol_data: Dataset[ob.OBMol|Chem.Mol]):
@@ -24,19 +25,7 @@ class SetHydrogenDataset(WrapDataset[ob.OBMol|Chem.Mol]):
         super().__init__(dataset)
         self.h = h
     def __getitem__(self, idx):
-        mol = self.dataset[idx]
-        if isinstance(mol, ob.OBMol):
-            if self.h:
-                success = mol.AddHydrogens()
-            else:
-                success = mol.DeleteHydrogens()
-            assert success
-        else:
-            if self.h:
-                mol = Chem.AddHs(mol, addCoords=True)
-            else:
-                mol = Chem.RemoveHs(mol)
-        return mol
+        return set_hydrogen(self.dataset[idx], self.h)
 
 class Mol2PDBDataset(WrapDataset[str]):
     def __init__(self, dataset: Dataset[ob.OBMol|Chem.Mol]):

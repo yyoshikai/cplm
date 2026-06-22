@@ -7,11 +7,12 @@ import numpy as np, pandas as pd
 import torch
 from tqdm import tqdm
 from rdkit import Chem
-from ..utils import should_show
-from ..utils.path import make_pardir, mwrite
-from ..model import Streamer, WrapperStreamer
-from ..data.tokenizer import VocEncoder
-from ..data.mol_tokenizer import MolTokenizer, encode_token_stream, pos_offset_stream
+from openbabel import openbabel as ob
+from .utils import should_show
+from .utils.path import make_pardir, mwrite
+from .model import Streamer, WrapperStreamer
+from .data.tokenizer import VocEncoder
+from .data.mol_tokenizer import MolTokenizer, encode_token_stream, pos_offset_stream
 
 class NoTokenRangeStreamer(WrapperStreamer):
     def __init__(self, streamer: Streamer, voc_size):
@@ -87,7 +88,8 @@ class PositionSaveStreamer(WrapperStreamer):
         self.new_positions = []
     def put(self, tokens: list[int]):
         is_remain, position, token_range = self.streamer.put(tokens)
-        self.new_positions.append(position)
+        if is_remain:
+            self.new_positions.append(position)
         return is_remain, position, token_range
 
 class TimeLogStreamer(WrapperStreamer):
@@ -176,7 +178,7 @@ class LigandStreamer(Streamer):
             pos_offset = len(tokens)
             stream = self.mol_tokenizer.decode_stream(self.end_token, self.cls)
             stream = pos_offset_stream(stream, pos_offset)
-            self.stream = encode_token_stream(stream)
+            self.stream = encode_token_stream(stream, self.voc_encoder)
             token_range, position = next(self.stream)
             self.is_init = False
             return True, position, token_range
@@ -186,7 +188,15 @@ class LigandStreamer(Streamer):
                 token_range, position = self.stream.send(tokens[0])
                 return True, position, token_range
             except StopIteration as e:
-                self._ligand, self._atom_poss, self._coord_posss = e.value
+                ligand, self._atom_poss, self._coord_posss = e.value
+                if isinstance(ligand, ob.OBMol):
+                    obc = ob.OBConversion()
+                    obc.SetOutFormat('sdf')
+                    ligand = obc.WriteString(ligand)
+                elif isinstance(ligand, Chem.Mol):
+                    ligand = Chem.MolToMolBlock(ligand)
+                self._ligand = ligand
+                
                 self._error = None
                 return False, None, None
             except Exception as e:
@@ -199,7 +209,7 @@ class LigandStreamer(Streamer):
                     self._error = 'UNK_ERROR'
                 return False, None, None
 
-    def ligand(self) -> Chem.Mol|None:
+    def ligand(self) -> str|None:
         return self._ligand
     def error(self) -> str|None:
         return self._error
@@ -223,8 +233,8 @@ class SaveLigandStreamer(WrapperStreamer):
     def put(self, tokens: list[int]):
         output = self.streamer.put(tokens)
         mol = self.streamer.ligand()
-        if mol is not None and mol.GetNumConformers() > 0:
-            make_pardir(self.new_sdf_path)
-            with Chem.SDWriter(self.new_sdf_path) as w:
-                w.write(mol)
+        if mol is not None:
+            with open(self.new_sdf_path, 'w') as f:
+                f.write(mol)
+
         return output

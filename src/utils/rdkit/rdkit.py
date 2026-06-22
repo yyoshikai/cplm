@@ -9,8 +9,8 @@ def ignore_rdkit_warning():
     RDLogger.DisableLog("rdApp.*")
 
 def set_rdkit_logger():
-    rdkit_logger = logging.getLogger('rdkit')
     rdBase.LogToPythonLogger()
+    rdkit_logger = logging.getLogger('rdkit')
     for handler in rdkit_logger.handlers: 
         rdkit_logger.removeHandler(handler)
     return rdkit_logger

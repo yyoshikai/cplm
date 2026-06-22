@@ -1,4 +1,4 @@
-import os, gzip, pickle
+import os, gzip, pickle, math
 from typing import Literal
 from logging import getLogger
 import numpy as np
@@ -39,42 +39,41 @@ class PDBUniMolRandomDataset(Subset[OBMol|Chem.Mol|str]):
     def __init__(self, 
             split: Literal['train', 'valid'], 
             cls: Literal['ob', 'rdkit', 'text', 'id'], 
-            h: Literal['all', 'atom', 'none'], 
+            h: bool, 
             max_n_token: int,
             ion: bool, ligand: bool, water: bool, 
             pdb_dir: str=DEFAULT_PDB_DIR, 
     ):
         mol_data = PDBDataset("unimol_random_order_pdbids", cls, pdb_dir)
-        
-        # path = f"{pdb_dir}/natom_masks/{max_n_token}_{int(ion)}_{int(ligand)}_{int(water)}"
-        self.logger.info("Making mask index...")
-        env, txn = load_lmdb(f"{pdb_dir}/natom.lmdb")
 
-        ntokens = []
-        for i in range(len(mol_data)):
-            pdbid = mol_data.pdbid_data[i]
-            ns = pickle.loads(txn.get(pdbid.encode()))
-            natom = (ns['amino']
-                + ns['ion'] if ion else 0
-                + ns['ligand'] if ligand else 0
-                + ns['water'] if water else 0
-            )
-            ntoken = natom*7
-            if h != 'none':
-                natom_h = (ns['amino_h']
-                    + ns['ion_h'] if ion else 0
-                    + ns['ligand_h'] if ligand else 0
-                    + ns['water_h'] if water else 0
+        if (max_n_token is None) or (max_n_token == math.inf):
+            idxs = np.arange(len(mol_data))
+        else:
+            # path = f"{pdb_dir}/natom_masks/{max_n_token}_{int(ion)}_{int(ligand)}_{int(water)}"
+            self.logger.info("Making mask index...")
+            env, txn = load_lmdb(f"{pdb_dir}/natom.lmdb")
+            ntokens = []
+            for i in range(len(mol_data)):
+                pdbid = mol_data.pdbid_data[i]
+                ns = pickle.loads(txn.get(pdbid.encode()))
+                natom = (ns['amino']
+                    + ns['ion'] if ion else 0
+                    + ns['ligand'] if ligand else 0
+                    + ns['water'] if water else 0
                 )
-                if h == 'all':
+                ntoken = natom*7
+                if h:
+                    natom_h = (ns['amino_h']
+                        + ns['ion_h'] if ion else 0
+                        + ns['ligand_h'] if ligand else 0
+                        + ns['water_h'] if water else 0
+                    )
                     ntoken += natom_h*7
-                elif h == 'atom':
-                    ntoken += natom_h
-            ntokens.append(ntoken)
+                ntokens.append(ntoken)
 
-        idxs = np.where(np.array(ntokens) <= max_n_token)[0]
-        self.logger.info("mask index made.")
-        self.logger.info(f"Masked data size={len(idxs)}/{len(mol_data)}")
+            idxs = np.where(np.array(ntokens) <= max_n_token)[0]
+            self.logger.info("mask index made.")
+            self.logger.info(f"Masked data size={len(idxs)}/{len(mol_data)}")
 
         if split == 'train':
             idxs = idxs[DEFAULT_VALID_SIZE:]

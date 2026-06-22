@@ -1,23 +1,14 @@
-import re
+import re, math
 from ctypes import c_double
-from dataclasses import dataclass
 from logging import getLogger
 from typing import Literal
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import Conformer
+from rdkit.Chem.rdDetermineBonds import DetermineBonds
 from rdkit.Geometry import Point3D
 from openbabel.openbabel import OBMol, OBConversion
 from openbabel import openbabel as ob
-
-@dataclass
-class Pocket:
-    atoms: np.ndarray
-    coord: np.ndarray
-
-    def __post_init__(self):
-        assert len(self.atoms) == len(self.coord)
-        assert self.coord.ndim == 2 and self.coord.shape[1] == 3
 
 logger = getLogger(__name__)
 
@@ -30,14 +21,16 @@ def array_to_conf(coord: np.ndarray) -> Conformer:
     set_conf(conf, coord)
     return conf
 
-def get_coords(mol: OBMol|Chem.Mol|Pocket) -> np.ndarray:
+def get_coords(mol: OBMol|Chem.Mol) -> np.ndarray:
     if isinstance(mol, OBMol):
+        assert mol.NumConformers() >= 1, "No conformer in mol"
         coord = mol.GetCoordinates()
-        return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
+        if coord is not None:
+            return np.array((c_double * (mol.NumAtoms()*3)).from_address(int(coord))).reshape(-1, 3)
+        else: # atoms_coords_to_mol を使って生成した分子はGetCoordinatesが None になる。現状こうするしかなさそう
+            return np.array([[atom.GetX(), atom.GetY(), atom.GetZ()] for atom in ob.OBMolAtomIter(mol)])
     elif isinstance(mol, Chem.Mol):
         return mol.GetConformer().GetPositions()
-    elif isinstance(mol, Pocket):
-        return mol.coord
     else:
         raise ValueError(f"Unknown {type(mol)=}")
 
@@ -68,18 +61,79 @@ def get_atoms(mol: Chem.Mol|ob.OBMol) -> list[str]:
         raise ValueError
     return atoms
 
-def set_coords(mol: OBMol|Chem.Mol|Pocket, coords: np.ndarray) -> None:
+def set_hydrogen(mol: Chem.Mol|ob.OBMol, h: bool) -> Chem.Mol|ob.OBMol:
+    if isinstance(mol, ob.OBMol):
+        if h:
+            success = mol.AddHydrogens()
+        else:
+            success = mol.DeleteHydrogens()
+        assert success
+    else:
+        if h:
+            mol = Chem.AddHs(mol, addCoords=True)
+        else:
+            mol = Chem.RemoveHs(mol)
+    return mol
+
+def set_coords(mol: OBMol|Chem.Mol, coords: np.ndarray) -> None:
     if isinstance(mol, Chem.Mol):
         if mol.GetNumConformers() > 0:
             # confへの代入のみで元の分子も変更されることを確認 @tests/test.ipynb
             set_conf(mol.GetConformer(), coords)
         else:
             mol.AddConformer(array_to_conf(coords))
-    elif isinstance(mol, Pocket):
-        mol.coord = coords
     else:
         for i, atom in enumerate(ob.OBMolAtomIter(mol)):
-            atom.SetVector(coords[i].tolist())
+            atom.SetVector(*coords[i].tolist())
+
+
+def atoms_coords_to_mol(atoms: list[str], coords: np.ndarray, cls: Literal['rdkit', 'ob']) -> Chem.Mol|ob.OBMol:
+    """
+    get_atoms, get_coords の結果をそのまま戻すようにする
+    原子順もそのままに保つ。
+
+    260619 rdkitで, 原子価の設定されていない 原子があるとエラーになるっぽい。解決法未定
+    原子価の設定されていない原子:
+        pt = Chem.GetPeriodicTable()
+        print(pt.GetDefaultValence(Chem.Atom(atom).GetAtomicNum()))
+    としたとき, -1 となるやつ
+    """
+    assert coords.shape == (len(atoms), 3)
+    if cls == 'rdkit':
+        mol = Chem.RWMol()
+        pt = Chem.GetPeriodicTable()
+        for atom in atoms:
+            atom = Chem.Atom('C' if atom == 'CA' else atom)
+            mol.AddAtom(atom)
+        mol.AddConformer(array_to_conf(coords))
+        DetermineBonds(mol)
+    else:
+        mol = ob.OBMol()
+        for i in range(len(atoms)):
+            symbol = 'C' if atoms[i] == 'CA' else atoms[i]
+            atom = mol.NewAtom()
+            atom.SetAtomicNum(ELEMENT_SYMBOLS.index(symbol)+1)
+            atom.SetVector(*coords[i].tolist())
+        mol.ConnectTheDots()
+        mol.AddConformer(mol.GetCoordinates())
+        mol.PerceiveBondOrders()
+        
+        # ImplicitAtomを定義
+        pt = Chem.GetPeriodicTable()
+        atom: ob.OBAtom
+        for i, atom in enumerate(ob.OBMolAtomIter(mol)):
+            # 電荷があると、元素によって価電子数が増えたり減ったりするっぽく、面倒なので省略。というか, xyzから作ったなら電荷はないはず
+            assert atom.GetFormalCharge() == 0
+            exp_valence = atom.GetExplicitValence()
+            valence_list = pt.GetValenceList(atom.GetAtomicNum())
+            valence = min([v for v in valence_list if v >= exp_valence]+[math.inf])
+            if valence == math.inf and -1 not in valence_list:
+                logger.warning(f"Explicit valence = {exp_valence} exceeds maximum valence = {max(valence_list)}")
+            if valence < math.inf:
+                atom.SetImplicitHCount(valence-exp_valence)
+    return mol
+
+
 
 def _randomize(mol: Chem.Mol, rng: np.random.Generator):
     for i in range(100): # ランダムに失敗する場合がある
@@ -107,15 +161,6 @@ def set_atom_order(mol: Chem.Mol, random: bool, rng: np.random.Generator) -> Che
         can = Chem.MolToSmiles(mol, canonical=True)
     mol = Chem.RenumberAtoms(mol, eval(mol.GetProp('_smilesAtomOutputOrder')))
     return mol
-
-def mol_from_atoms_coords(atoms: list[str], coords: np.ndarray) -> tuple[Chem.Mol|None, str|None]:
-    """
-    原子の元素記号と座標からChem.Molを作成
-    
-    Returns:
-        Chem.Mol|None: 分子、エラーの場合None
-        str|None: エラーの場合その内容、エラーでない場合None
-    """
 
 def read_pdb_path(path: str, out_cls: Literal['ob', 'rdkit', 'text']):
     if out_cls == 'ob':

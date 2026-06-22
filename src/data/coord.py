@@ -1,44 +1,15 @@
-import os
 from logging import getLogger
 import numpy as np
-import torch
 from torch.utils.data import Dataset
 from rdkit import Chem
 from openbabel.openbabel import OBMol
-from ..chem import get_coords, set_coords, Pocket
-from .data import WrapDataset, WrapTupleDataset, get_rng
-
-class Scaler:
-    def __init__(self, from_a: float, from_b: float, to_a: float, to_b: float):
-        self.from_a = from_a
-        self.from_b = from_b
-        self.to_a = to_a
-        self.to_b = to_b
-        assert self.from_b - self.from_a > 0
-        assert self.to_b > self.to_a
-    def scale(self, from_v: float|np.ndarray|torch.Tensor):
-        return (from_v-self.from_a) / (self.from_b-self.from_a) \
-            * (self.to_b - self.to_a) + self.to_a
-    
-    def rescale(self, to_v: float|np.ndarray|torch.Tensor):
-        return (to_v-self.to_a) / (self.to_b-self.to_a) \
-            * (self.from_b - self.from_a) + self.from_a
-    def __str__(self):
-        return f"Scaler([{self.from_a}, {self.from_b}]->[{self.to_a}, {self.to_b}])"
-
-
-class RescaleDataset(WrapDataset[float]):
-    unk_logger = getLogger(f'unk.{__module__}.{__qualname__}')
-    def __init__(self, dataset: Dataset[float], from_a: float, from_b: float, to_a: float, to_b: float):
-        super().__init__(dataset)
-        self.scaler = Scaler(from_a, from_b, to_a, to_b)
-    def __getitem__(self, idx: int):
-        return self.scaler.scale(self.dataset[idx])
+from ..chem import get_coords, set_coords
+from .data import WrapTupleDataset, get_rng
 
 class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
     logger = getLogger(f'{__module__}.{__qualname__}')
-    def __init__(self, base_data: Dataset[Chem.Mol|Pocket|OBMol], *datas: 
-                tuple[Dataset[Chem.Mol|Pocket|OBMol]], base_seed: 
+    def __init__(self, base_data: Dataset[Chem.Mol|OBMol], *datas: 
+                tuple[Dataset[Chem.Mol|OBMol]], base_seed: 
                 int=0, normalize_coord=False, random_rotate=False, 
                 coord_noise_std=0.0):
         self.normalize_coord = normalize_coord
@@ -53,7 +24,7 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
             + (1 if self.random_rotate else 0)
         super().__init__(base_data, tuple_size)
     
-    def __getitem__(self, idx: int) -> tuple[Chem.Mol|Pocket|OBMol]:
+    def __getitem__(self, idx: int) -> tuple[Chem.Mol|OBMol]:
         items = [data[idx] for data in self.datas]
         coords = [get_coords(item) for item in items]
         rng = get_rng(self.base_seed, idx)
@@ -86,9 +57,9 @@ class CoordTransformDataset(WrapTupleDataset[np.ndarray]):
             items.append(matrix)
         return tuple(items)
 
-class AlignCenterDataset(WrapTupleDataset[tuple[Chem.Mol|Pocket|OBMol,...]]):
-    def __init__(self, base_data: Dataset[Chem.Mol|Pocket|OBMol], *datas: 
-                tuple[Dataset[Chem.Mol|Pocket|OBMol]], base_seed: int, random_rotate_other: bool):
+class AlignCenterDataset(WrapTupleDataset[tuple[Chem.Mol|OBMol,...]]):
+    def __init__(self, base_data: Dataset[Chem.Mol|OBMol], *datas: 
+                tuple[Dataset[Chem.Mol|OBMol]], base_seed: int, random_rotate_other: bool):
         """
         random_rotate_other: rotate only datas by one rotation matrix
         

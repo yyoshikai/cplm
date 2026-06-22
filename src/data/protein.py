@@ -1,16 +1,13 @@
 import io
 import itertools as itr
 from typing import Literal
-import numpy as np
 from openbabel.openbabel import OBMol
 from rdkit import Chem
 from Bio import PDB
 from Bio.PDB.Residue import Residue
 from torch.utils.data import Dataset
 from .data import WrapDataset
-from ..utils import slice_str
-from ..chem import obmol2pdb, pdb2obmol, Pocket
-from .tokenizer import FloatTokenizer, ProteinAtomTokenizer
+from ..chem import obmol2pdb, pdb2obmol
 
 AtomRepr = Literal['none', 'atom', 'all']
 
@@ -19,15 +16,6 @@ non_metals = [
     'Si', 'P', 'S', 'Cl', 'Ar', 'As', 'Se', 'Br', 'Kr',
     'Te', 'I', 'Xe', 'At', 'Rn'
 ]
-
-
-def pocket2pdb(pocket: Pocket, out_path: str):
-    with open(out_path, 'w') as f:
-        for ia in range(len(pocket.atoms)):
-            atom = pocket.atoms[ia][0]
-            coord = pocket.coord[ia]
-            if atom == 'H': continue
-            f.write(f"ATOM  {ia:5}  {atom:<3} UNK A   1    {coord[0]:8.03f}{coord[1]:8.03f}{coord[1]:8.03f}  1.00 40.00           {atom[0]}  \n")
 
 class _ProteinProcessSelect(PDB.Select):
     def __init__(self, ion: bool, ligand: bool, water: bool, amino: bool=True):
@@ -93,83 +81,3 @@ class SelectDataset(WrapDataset[OBMol|Chem.Mol]):
                 rw_mol.RemoveAtom(idx)
             mol = rw_mol.GetMol()
         return mol
-
-class ProteinTokenizer:
-    def __init__(self, *, heavy: AtomRepr, h: AtomRepr, format, coord_range):
-        self.heavy = heavy
-        self.h = h
-        self.format = format
-        self.atom_tokenizer = ProteinAtomTokenizer()
-        self.coord_tokenizer = FloatTokenizer('protein', -coord_range, coord_range)
-        assert self.heavy in ['all', 'atom', 'none']
-        assert self.h in ['all', 'atom', 'none']
-
-    def __call__(self, atoms: np.ndarray, coords: np.ndarray):
-        # calc mask
-        is_ca = atoms == 'CA'
-        is_h = slice_str(atoms, 1) == 'H'
-        is_heavy = (~is_ca)&(~is_h)
-
-        # atoms 
-        atom_mask = is_ca | (is_heavy if self.heavy in ['all', 'atom'] else False) | (is_h if self.h in ['all', 'atom'] else False)
-
-        # coord
-        coord_mask = is_ca | (is_heavy if self.heavy == 'all' else False) | (is_h if self.h == 'all' else False)
-                    
-
-        if self.format == 'atom_coords':
-            tokens = []
-            for i in range(len(atoms)):
-                if atom_mask[i]: 
-                    tokens += self.atom_tokenizer.tokenize([atoms[i]])
-                if coord_mask[i]:
-                    tokens += self.coord_tokenizer.tokenize_array(coords[i])
-            order = list(range(len(tokens)))
-        elif self.format == 'ordered_atoms_coords':
-            atom_tokens = []
-            coord_tokens = []
-            atom_order = []
-            coord_order = []
-            x = 0
-            for i in range(len(atoms)):
-                if atom_mask[i]:
-                    atom_token = self.atom_tokenizer.tokenize([atoms[i]])
-                    atom_tokens += atom_token
-                    atom_order += list(range(x, x+len(atom_token)))
-                    x += len(atom_token)
-                if coord_mask[i]:
-                    coord_token = self.coord_tokenizer.tokenize_array(coords[i])
-                    coord_tokens += coord_token
-                    coord_order += list(range(x, x+len(coord_token)))
-                    x += len(coord_token)
-            tokens = atom_tokens+['[XYZ]']+coord_tokens
-            order = atom_order+[x]+coord_order
-        elif self.format == 'atoms_coords':
-            tokens = self.atom_tokenizer.tokenize(atoms[atom_mask]) \
-                +['[XYZ]']+self.coord_tokenizer.tokenize_array(coords[coord_mask].ravel())
-            order = list(range(len(tokens)))
-        else:
-            raise ValueError(f"Unknown {self.format=}")
-        return tokens, order
-    
-    def vocs(self) -> set[str]:
-        return self.atom_tokenizer.vocs() | self.coord_tokenizer.vocs() \
-                | (set() if self.format == 'atom_coords' else {'[XYZ]'})
-
-# 水素は含んでいても含んでいなくてもよいが, atomとcoordでそろえること。
-class PocketTokenizeDataset(WrapDataset[tuple[list[str], list[int]]]):
-    def __init__(self, pocket_data: Dataset[Pocket], *,
-            heavy: AtomRepr, h: AtomRepr, 
-            format: Literal['atoms_coords', 'atom_coords', 'ordered_atoms_coords'], coord_range: int):
-        super().__init__(pocket_data)
-        self.pocket_data = pocket_data
-        self.protein_tokenizer = ProteinTokenizer(heavy=heavy, h=h, format=format, coord_range=coord_range)
-        assert h == 'none', f"h must be none for pocket."
-
-    def __getitem__(self, idx: int):
-        protein = self.pocket_data[idx]
-        assert len(protein.atoms) == len(protein.coord)
-        return self.protein_tokenizer(protein.atoms, protein.coord)
-    
-    def vocs(self) -> set[str]:
-        return self.protein_tokenizer.vocs()

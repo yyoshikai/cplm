@@ -7,7 +7,7 @@ from rdkit import Chem
 from openbabel import openbabel as ob
 from ..lmdb import PickleLMDBDataset
 from ..data import Subset
-from ...chem import array_to_conf, Pocket
+from ...chem import array_to_conf
 WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
@@ -79,20 +79,5 @@ class UniMolLigandNoMolNetDataset(Subset[Chem.Mol]):
         dataset = UniMolLigandDataset(split, sample_save_dir, unimol_dir)
         indices = np.load(f"{unimol_dir}/ligands_mask/remove_molnet_test/large/{split}_idxs.npy")
         super().__init__(dataset, indices)
-    def __str__(self):
-        return type(self).__name__
-
-class UniMolPocketDataset(Dataset[Pocket]):
-    def __init__(self, split: Literal['train', 'valid'], unimol_dir=DEFAULT_UNIMOL_DIR):
-        self.dataset = PickleLMDBDataset(f"{unimol_dir}/pockets/{split}.lmdb", idx_to_key='str')
-    
-    def __getitem__(self, idx) -> Pocket:
-        data = self.dataset[idx]
-        atoms = np.array(data['atoms'])
-        coord =  data.pop('coordinates')[0] # * np.array([0, 1, 2])
-        return Pocket(atoms=atoms, coord=coord)
-
-    def __len__(self):
-        return len(self.dataset)
     def __str__(self):
         return type(self).__name__

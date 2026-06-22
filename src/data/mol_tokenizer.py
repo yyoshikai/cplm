@@ -1,21 +1,26 @@
+import math
+from copy import copy, deepcopy
 from collections.abc import Generator
 from typing import Literal, Any
+from logging import getLogger
 import numpy as np
 from torch.utils.data import Dataset
 from rdkit import Chem
-from rdkit.Chem.rdDetermineBonds import DetermineBonds
 from openbabel import openbabel as ob
 
 from ..utils.path import WORKDIR
-from ..chem import Pocket, get_atoms, get_coords, ELEMENT_SYMBOLS, array_to_conf, set_coords
+from ..chem import get_atoms, get_coords, ELEMENT_SYMBOLS, set_coords, atoms_coords_to_mol
 from .data import WrapTupleDataset
 from .tokenizer import StringTokenizer2, FloatTokenizer, VocEncoder
+
+logger = getLogger(__name__)
 
 def get_smi_orders(mol: Chem.Mol|ob.OBMol, random: bool) -> tuple[str, list[int]]:
     if isinstance(mol, ob.OBMol):
         obc = ob.OBConversion()
         obc.SetOutFormat('smi')
-        obc.AddOption('h', obc.OUTOPTIONS)
+        obc.AddOption('h', obc.OUTOPTIONS) # Output explicit hydrogens as such
+        obc.AddOption('n', obc.OUTOPTIONS) # no molecule name (これをつけないと ...sdf みたいなのが付加される)
         if random:
             obc.AddOption('C', obc.OUTOPTIONS) # randomize
         obc.AddOption('O', obc.OUTOPTIONS) # save output atom order
@@ -101,72 +106,10 @@ def smi_to_mol_orders_inv(smi: str, cls: Literal['rdkit', 'ob']) -> tuple[Chem.M
         obc.SetInFormat('smi')
         r = obc.ReadString(mol, smi)
         if not r:
-            raise ValueError('SMILES is invalid.')
+            raise ValueError(f'SMILES is invalid: {smi}')
         orders = np.arange(mol.NumAtoms())
     orders_inv = np.argsort(orders)
     return mol, orders_inv
-
-def coord_streamer(n_atom: int, start_position: int, new_coord_path: str|None, coord_range: float, atom_order: bool, center: np.ndarray|None) -> Generator[tuple[bool, list[int], list[int]], list[int], tuple[np.ndarray|None, int, str|None]]:
-    """
-    Returns
-    -------
-    coordss: np.ndarray|None of 
-        Shape: (n_atom, 3)
-    pos: int
-        next position
-    error: str|None
-        None if no error
-    """
-
-    coord_tokenizer = FloatTokenizer('', -coord_range, coord_range)
-    int_token_range = sorted(voc_encoder.encode(coord_tokenizer.int_vocs()))
-    frac_token_range = sorted(voc_encoder.encode(coord_tokenizer.frac_vocs()))
-
-    pos = start_position
-    if new_coord_path is not None:
-        make_pardir(new_coord_path)
-        with open(new_coord_path, 'w') as f:
-            f.write("idx,x,y,z\n")
-    coordss = []
-    for i_atom in range(n_atom):
-        coords = []
-        for dim in range(3):
-            int_token = yield True, pos, int_token_range
-            frac_token = yield True, pos+1, frac_token_range
-            pos += 2
-            coord_str = ''.join(voc_encoder.decode(int_token+frac_token))
-            try:
-                coord = float(coord_str)
-            except Exception:
-                return None, pos, 'COORD_NOT_FLOAT'
-            if center is not None:
-                coord += center[dim]
-            coords.append(coord)
-        if atom_order:
-            pos += 1
-        if new_coord_path is not None:
-            with open(new_coord_path, 'a') as f:
-                f.write(f"{i_atom},{coords[0]},{coords[1]},{coords[2]}\n")
-        coordss.append(coords)
-    return np.array(coordss), pos, None
-
-def atoms_coords_to_mol(atoms: list[str], coords: np.ndarray, cls: Literal['rdkit', 'ob']) -> Chem.Mol|ob.OBMol:
-    """
-    get_atoms, get_coords の結果をそのまま戻すようにする
-    原子順もそのままに保つ。
-    """
-    if cls == 'rdkit':
-        mol = Chem.RWMol()
-        for atom in atoms:
-            symbol = 'C' if atom == 'CA' else atom
-            mol.AddAtom(Chem.Atom(symbol))
-        mol.AddConformer(array_to_conf(coords))
-        DetermineBonds(mol)
-    else:
-        mol = ob.OBMol()
-        for atom in atoms:
-            symbol = 'C' if atom == 'CA' else atom
-    return mol
 
 def coord_stream(n_atom: int) \
         -> Generator[set[str], str, np.ndarray]:
@@ -184,17 +127,6 @@ def coord_stream(n_atom: int) \
             coords.append(coord)
         coordss.append(coords)
     return np.array(coordss)
-
-def add_range_pos_stream(stream: Generator[set[str], str, np.ndarray]):
-    pos = -1
-    token_range = next(stream)
-    while True:
-        token = yield token_range, pos
-        pos += 1
-        try:
-            token_range = stream.send(token)
-        except StopIteration as e:
-            return e.value
 
 def fix_token_range_stream(stream: Generator[tuple[set[str], int], str, Any], token_range: set[str]|list[int]) \
         -> Generator[tuple[set[str]|list[int], int], str, Any]:
@@ -235,14 +167,14 @@ def encode_token_stream(stream: Generator[tuple[set[str], int], str, Any], voc_e
 
 def wrap_decode_stream(add_end_token: bool, add_range_pos: bool):
     def wrapper(stream_func):
-        def wrapped_decode_stream(end_token: str, cls: Literal['rdkit', 'ob']):
+        def wrapped_decode_stream(self, end_token: str, cls: Literal['rdkit', 'ob']):
             if add_end_token:
-                gen = stream_func(cls)
+                gen = stream_func(self, cls)
             else:
-                gen = stream_func(end_token, cls)
+                gen = stream_func(self, end_token, cls)
 
             out = next(gen)
-            pos = -1
+            pos = 0
             poss = set()
             while True:
                 if add_range_pos:
@@ -255,14 +187,14 @@ def wrap_decode_stream(add_end_token: bool, add_range_pos: bool):
                 except StopIteration as e:
                     if add_end_token:
                         pos = min(set(range(len(poss)+1)) - poss)
-                        token = gen.send(({end_token}, pos))
+                        yield {end_token}, pos
                     return e.value
         return wrapped_decode_stream
     return wrapper
  
 
 class MolTokenizer:
-    def encode(self, mol: Chem.Mol|ob.OBMol|Pocket) -> tuple[list[str], list[int], list[int]]:
+    def encode(self, mol: Chem.Mol|ob.OBMol) -> tuple[list[str], list[int], list[int]]:
         """
         Returns
         -------
@@ -318,14 +250,14 @@ class AtomsCoordsTokenizer(MolTokenizer):
         atoms = get_atoms(mol)
         coords = get_coords(mol)
         orders = get_orders(mol, self.order)
-        tokens = [atoms[o] for o in orders]+['XYZ']+self.float_tokenizer.tokenize_array(coords[orders].ravel())
+        tokens = [atoms[o] for o in orders]+['[XYZ]']+self.float_tokenizer.tokenize_array(coords[orders].ravel())
         positions= list(range(len(tokens)))
         return tokens, positions, orders
     
     @wrap_decode_stream(add_end_token=True, add_range_pos=True)
     def decode_stream(self, cls) -> Generator[list[str], str, Chem.Mol|ob.OBMol]:
 
-        atom_token_range = set(ELEMENT_SYMBOLS)+{'CA', '[XYZ]'}
+        atom_token_range = set(ELEMENT_SYMBOLS) | {'CA', '[XYZ]'}
         atoms = []
         while True:
             atom_token = yield atom_token_range
@@ -360,7 +292,7 @@ class AtomCoordsTokenizer(MolTokenizer):
     
     @wrap_decode_stream(add_end_token=False, add_range_pos=True)
     def decode_stream(self, end_token: str, cls):
-        atom_token_range = set(ELEMENT_SYMBOLS)+{end_token}
+        atom_token_range = set(ELEMENT_SYMBOLS) | {'CA', end_token}
         atoms = []
         coords = []
         while True:
@@ -392,7 +324,7 @@ class OrderedAtomsCoordsTokenizer(MolTokenizer):
         atoms = get_atoms(mol)
         orders = get_orders(mol, self.order)
         coords = get_coords(mol)
-        tokens = [atoms[o] for o in orders] + ['XYZ'] + self.float_tokenizer.tokenize_array(coords[orders].ravel())
+        tokens = [atoms[o] for o in orders] + ['[XYZ]'] + self.float_tokenizer.tokenize_array(coords[orders].ravel())
         n_atom = len(atoms)
         positions = np.arange(n_atom*7, dtype=int).reshape(n_atom, 7)
         positions = positions[:,0].tolist()+[n_atom*7]+positions[:,1:].ravel().tolist()
@@ -400,31 +332,30 @@ class OrderedAtomsCoordsTokenizer(MolTokenizer):
     
     @wrap_decode_stream(add_end_token=True, add_range_pos=False)
     def decode_stream(self, cls):
-        atom_token_range = set(ELEMENT_SYMBOLS)+{'CA', '[XYZ]'}
-        pos = -1
-        next_pos = 0
+        atom_token_range = set(ELEMENT_SYMBOLS)|{'CA', '[XYZ]'}
+        pos = 0
         atoms = []
         while True:
             atom_token = yield atom_token_range, pos
+            pos += 7
             if atom_token == '[XYZ]':
                 break
             atoms.append(atom_token)
-            pos, next_pos = next_pos, next_pos+7
         
         int_token_range = self.float_tokenizer.int_vocs()
         frac_token_range = self.float_tokenizer.frac_vocs()
         coords = []
-        next_pos = 1
+        pos = 1
         for i_atom in range(len(atoms)):
             coord = []
             for dim in range(3):
                 int_token = yield int_token_range, pos
-                pos, next_pos = next_pos, next_pos+1
+                pos += 1
                 frac_token = yield frac_token_range, pos
-                pos, next_pos = next_pos, next_pos+1
+                pos += 1
                 coord.append(float(int_token+frac_token))
             coords.append(coord)
-            next_pos += 1
+            pos += 1
         coords = np.array(coords)
         mol = atoms_coords_to_mol(atoms, coords, cls)
         n_atom = len(atoms)
@@ -449,12 +380,13 @@ class AtomValenceCoordsTokenizer(MolTokenizer):
         tokens = []
         for o in orders:
             tokens += [atoms[o], str(valences[o])]+self.float_tokenizer.tokenize_array(coords[o])
-        return tokens
+        positions = list(range(len(tokens)))
+        return tokens, positions, orders
     
     @wrap_decode_stream(add_end_token=False, add_range_pos=True)
     def decode_stream(self, end_token: str, cls):
-        atom_token_range = set(ELEMENT_SYMBOLS)+{end_token}
-        valence_coord_range = {str(i) for i in range(MAX_VALENCE+1)}
+        atom_token_range = set(ELEMENT_SYMBOLS)|{'CA', end_token}
+        valence_token_range = {str(i) for i in range(MAX_VALENCE+1)}
         atoms = []
         coords = []
         while True:
@@ -463,7 +395,7 @@ class AtomValenceCoordsTokenizer(MolTokenizer):
                 break
             atom = 'C' if atom_token == 'CA' else atom_token
             atoms.append(atom)
-            _valence_token = yield valence_coord_range
+            _valence_token = yield valence_token_range
             coord = yield from coord_stream(1)
             coords.append(coord)
         coords = np.concatenate(coords, axis=0)
@@ -479,11 +411,13 @@ class AtomValenceCoordsTokenizer(MolTokenizer):
 
 
 class SmilesCoordsTokenizer(MolTokenizer):
-    def __init__(self, random: bool, smiles_voc_dir: str):
+    def __init__(self, random: bool, smiles_voc_dir: str, h: bool):
         self.random = random
         self.smi_tokenizer = StringTokenizer2(f"{WORKDIR}/cplm/src/data/vocs/{smiles_voc_dir}")
         with open(f"{WORKDIR}/cplm/src/data/vocs/{smiles_voc_dir}/non_atom_tokens.txt") as f:
-            self.non_atom_tokens = f.read().splitlines()
+            self.non_atom_tokens = set(f.read().splitlines())
+        if not h:
+            self.non_atom_tokens |= {'H', '[H]'}
         self.float_tokenizer = FloatTokenizer(type(self).__name__, -250, 250)
     
     def encode(self, mol):
@@ -495,7 +429,7 @@ class SmilesCoordsTokenizer(MolTokenizer):
     
     @wrap_decode_stream(add_end_token=True, add_range_pos=True)
     def decode_stream(self, cls):
-        smi_token_range = set(self.smi_tokenizer.vocs())+{'[XYZ]'}
+        smi_token_range = set(self.smi_tokenizer.vocs())|{'[XYZ]'}
         smi_tokens = []
         while True:
             token = yield smi_token_range
@@ -512,22 +446,27 @@ class SmilesCoordsTokenizer(MolTokenizer):
         raw_coord_posss = (np.arange(n_atom*6)+len(smi_tokens)+1).reshape(-1, 6)
         atom_poss = raw_atom_poss[orders_inv].tolist()
         coord_posss = raw_coord_posss[orders_inv].tolist()
-        mol = set_coords(mol, coords[orders_inv])
+        set_coords(mol, coords[orders_inv])
         return mol, atom_poss, coord_posss
 
     def vocs(self):
         return self.smi_tokenizer.vocs() | self.float_tokenizer.vocs() | {'[XYZ]'}
 
+
 class SmileCoordsTokenizer(MolTokenizer):
-    def __init__(self, random: bool, smiles_voc_dir: str):
+    def __init__(self, random: bool, smiles_voc_dir: str, h: bool):
         self.random = random
+        self.h = h
         self.smi_tokenizer = StringTokenizer2(f"{WORKDIR}/cplm/src/data/vocs/{smiles_voc_dir}")
         with open(f"{WORKDIR}/cplm/src/data/vocs/{smiles_voc_dir}/non_atom_tokens.txt") as f:
-            self.non_atom_tokens = f.read().splitlines()
+            self.non_atom_tokens = set(f.read().splitlines())
+        if not self.h:
+            self.non_atom_tokens |= {'[H]', 'H'}
         self.float_tokenizer = FloatTokenizer(type(self).__name__, -250, 250)
     
     def encode(self, mol):
         smi, orders = get_smi_orders(mol, self.random)
+
         coords = get_coords(mol)
         smi_tokens = self.smi_tokenizer.tokenize(smi)            
         tokens = []
@@ -542,7 +481,7 @@ class SmileCoordsTokenizer(MolTokenizer):
     
     @wrap_decode_stream(add_end_token=False, add_range_pos=True)
     def decode_stream(self, end_token, cls):
-        smi_token_range = self.smi_tokenizer.vocs()+{end_token}
+        smi_token_range = self.smi_tokenizer.vocs()|{end_token}
 
         # smiles
         smi_tokens = []
@@ -566,9 +505,9 @@ class SmileCoordsTokenizer(MolTokenizer):
         smi = ''.join(smi_tokens)
 
         mol, orders_inv = smi_to_mol_orders_inv(smi, cls)
-        atom_poss = raw_atom_poss[orders_inv].tolist()
+        atom_poss = np.array(raw_atom_poss)[orders_inv].tolist()
         coord_posss = np.stack(raw_coord_posss)[orders_inv].tolist()
-        mol = set_coords(mol, coords[orders_inv])
+        set_coords(mol, coords[orders_inv])
         return mol, atom_poss, coord_posss
 
     def vocs(self):
@@ -578,7 +517,8 @@ class SmileCoordsTokenizer(MolTokenizer):
 def get_mol_tokenizer(
     format: Literal['atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords', 'smiles_coords', 'smile_coords'], 
     order: Literal['residue', 'ran', 'can'], 
-    smiles_voc_dir: str
+    smiles_voc_dir: str, 
+    h: bool,
 ) -> MolTokenizer:
     assert order in ['residue', 'ran', 'can']
     match format:
@@ -594,16 +534,19 @@ def get_mol_tokenizer(
             assert order != 'residue'
             random = order == 'ran'
             if format == 'smiles_coords':
-                return SmilesCoordsTokenizer(random, smiles_voc_dir)
+                return SmilesCoordsTokenizer(random, smiles_voc_dir, h)
             elif format == 'smile_coords':
-                return SmileCoordsTokenizer(random, smiles_voc_dir)
+                return SmileCoordsTokenizer(random, smiles_voc_dir, h)
             else:
                 raise ValueError
 
 class MolTokenizerDataset(WrapTupleDataset[tuple[list[str], list[int], list[int]]]):
-    def __init__(self, mol_data: Dataset[Chem.Mol|ob.OBMol], format, order, smiles_voc_dir):
+    def __init__(self, mol_data: Dataset[Chem.Mol|ob.OBMol], format, order, smiles_voc_dir, h: bool):
         super().__init__(mol_data, 2)
-        self.mol_tokenizer = get_mol_tokenizer(format, order, smiles_voc_dir)
+        self.mol_tokenizer = get_mol_tokenizer(format, order, smiles_voc_dir, h)
     def __getitem__(self, idx: int):
         tokens, positions, orders = self.mol_tokenizer.encode(self.dataset[idx])
         return (tokens, positions), orders
+
+    def vocs(self):
+        return self.mol_tokenizer.vocs()

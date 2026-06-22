@@ -161,7 +161,7 @@ class SmilesTokenizer(StringTokenizer):
 class FloatTokenizer(Tokenizer):
     
 
-    def __init__(self, name, vmin: float, vmax: float, decimal: int=3):
+    def __init__(self, name, vmin: float|int, vmax: float|int, decimal: int=3):
         self.name = name
         self.decimal = decimal
         self.vmin = float(vmin)
@@ -298,6 +298,9 @@ class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
             else:
                 vocs |= word.vocs()
         return vocs
+    
+    def word_vocs(self) -> set[str]:
+        return {word for word in self.sentence if isinstance(word, str)}
     
     def __str__(self):
         return f"SentenceDataset([{', '.join(str(word) for word in self.sentence)}])"

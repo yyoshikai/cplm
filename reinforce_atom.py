@@ -1,9 +1,10 @@
-import os, yaml
+import os, yaml, warnings
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 from logging import getLogger
 from typing import Literal
+warnings.filterwarnings("ignore", category=SyntaxWarning, message=r'".+" is an invalid escape sequence\. Such sequences will not work in the future\. Did you mean ".+"\? A raw string is also an option.')
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -28,7 +29,7 @@ from src.train import set_env, get_model, get_process_ranks
 from src.train.collator import solve_increasing_fn_left
 from src.train.data import get_finetune_data
 from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
-from src.generate.streamer import WrapperStreamer, LigandStreamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
+from src.streamer import WrapperStreamer, LigandStreamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
 from src.train.reinforce_atom import ReinforceTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer, Norms, FillNorm, SampleWhitenNorm
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
@@ -68,34 +69,27 @@ class GetScoreStreamer(WrapperStreamer):
             out = self.future.result()
             atom_poss, coord_poss = self.ligand_streamer.atom_poss()
             atom_poss = torch.tensor(atom_poss)
-            coord_poss = torch.tensor(coord_poss)
+            coord_poss = torch.tensor(coord_poss) # [Na, 6]
             _, score_inter, score_intra = out # [Na,], [Na, Na]
             score_inter = torch.tensor(score_inter, dtype=torch.float)
             score_intra = torch.tensor(score_intra, dtype=torch.float)
-            self.logger.info("Test log of score!!:")
-            self.logger.info(f"{score_intra=}")
-            self.logger.info(f"{torch.sum(score_intra != 0)=}")
-            self.logger.info(f"{score_inter=}")
-            self.logger.info(f"{torch.sum(score_inter != 0)=}")
-            self.logger.info(f"{score_inter.sum()=}, {score_intra.sum()=}")
 
-            reward = torch.zeros(self.prompt_size+self.gen_size, dtype=torch.float)
-            try:
-                reward[atom_poss] += score_inter * 0.5
-            except Exception as e:
-                print(f"{type(score_inter)}, {type(score_intra)}, {type(reward)}, {score_inter.dtype}, {score_intra.dtype}, {reward.dtype}", flush=True)
-                raise e
-            reward[coord_poss] += score_inter * 0.5
+            reward = torch.zeros(self.gen_size, dtype=torch.float)
+            reward[atom_poss] += score_inter * 0.5
+            reward[coord_poss] += score_inter.unsqueeze(-1) * 0.5 / 6
+
 
             atom_order = torch.argsort(atom_poss)
-            coord_order = torch.argsort(coord_poss)
+            coord_order = torch.argsort(coord_poss[:,0])
             assert torch.all(atom_order == coord_order)
             order = atom_order
             score_intra = score_intra[order][:,order]
             score_intra = (score_intra+score_intra.T).triu().sum(dim=0)
             reward[atom_poss[order]] += score_intra * 0.5
-            reward[coord_poss[order]] += score_intra * 0.5
+            reward[coord_poss[order]] += score_intra.unsqueeze(-1) * 0.5 / 6
             reward[-1] += self.valid_reward
+            # self.prompt_size+
+            reward = torch.cat([torch.zeros(self.prompt_size), reward])
         else:
             reward = None
         self.out = reward
@@ -201,6 +195,8 @@ class Generator:
 
             pdbs: list[str],
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, list[float], list[str|None]]:
+        assert all(len(pos) == len(ptoken) for pos, ptoken in zip(positions, prompt_tokens))
+
         rank = dist.get_rank()
 
         model.eval()
@@ -244,10 +240,10 @@ class Generator:
             w[prompt_size-1:] = 1.0
             weight.append(w)
         position = [
-            torch.tensor(position+position_streamer.new_positions)[:-2] for position, position_streamer
+            torch.tensor(position+position_streamer.new_positions)[:-1] for position, position_streamer
             in zip(positions, position_streamers)
         ] # [L, B]
-        
+
         errors = [streamer.error() for streamer in score_streamers]
         scores = [streamer.out for streamer in score_streamers]
         scores = [score.to(self.device) if score is not None else None for score in scores]
@@ -329,7 +325,7 @@ def main():
     parser.add_argument('--max-new-token', type=int, default=1000)
     parser.add_argument('--target', choices=['vina'], default='vina')
     ### score scale & normalization
-    parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline'], required=True)
+    parser.add_argument('--trainer', choices=['reinforce', 'reinforce_no_baseline', 'reward'], required=True)
     parser.add_argument('--valid-reward', type=float, default=0.0)
     parser.add_argument('--sample-whiten', nargs='*', choices=['mean', 'std'], default=['mean', 'std'])
     parser.add_argument('--adv-sample-whiten', nargs='*', choices=['mean', 'std'], default=['mean', 'std'])
@@ -470,7 +466,7 @@ def main():
     ])
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
-    mol_tokenizer = get_mol_tokenizer(fargs.lig_format, fargs.lig_order)
+    mol_tokenizer = get_mol_tokenizer(fargs.lig_format, fargs.lig_order, fargs.smiles_voc_dir, fargs.lig_h)
     generator = Generator(voc_encoder, mol_tokenizer, result_dir, args.max_new_token, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
@@ -478,8 +474,7 @@ def main():
     generator = ErrorRecordGenerator(generator, result_dir)
     
     log_optimizer = 'optimizer' in args.check
-    baseline = args.trainer == 'reinforce'
-    trainer = ReinforceTrainer(model_, baseline, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)
+    trainer = ReinforceTrainer(model_, args.trainer, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)
     trainer = GetMemoryTrainer(trainer, device)
     trainer = SaveBatchTrainer(trainer, result_dir, do_save_steps, voc_encoder)
     trainer = SaveStepTrainer(trainer, result_dir, args.record_opt, args.max_opt)
@@ -496,7 +491,6 @@ def main():
     train_looper.start_loops()
     try:
         for step in range(args.max_opt):
-            is_starting = step < 3
             do_save = step in do_save_steps
 
             train_looper.put('get_batch')
