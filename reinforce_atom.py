@@ -21,7 +21,7 @@ from src.utils import get_git_hash, wraps, filter_long
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
 from src.chem import rdmol2obmol, pdb2obmol
-from src.evaluate import eval_vina, eval_qvina, eval_vina_atom
+from src.evaluate import eval_vina_atom
 from src.data.protein import AtomRepr
 from src.data.tokenizer import VocEncoder
 from src.data.molecule import Mol2PDBDataset
