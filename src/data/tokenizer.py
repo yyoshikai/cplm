@@ -10,7 +10,7 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from .data import is_main_worker, WrapDataset, TupleDataset, WrapTupleDataset
-from ..utils import should_show
+from ..fm.utils import should_show
 from ..utils.path import WORKDIR
 
 

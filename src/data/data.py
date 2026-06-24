@@ -16,7 +16,7 @@ import torch
 import torch.utils.data as torch_data
 from torch import Tensor
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
-from ..utils import should_show
+from ..fm.utils import should_show
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
