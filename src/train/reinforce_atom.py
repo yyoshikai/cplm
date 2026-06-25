@@ -322,7 +322,7 @@ def get_sample_stat(scores: list[Tensor], idxs: Tensor, weights: list[Tensor]):
         idx2w[idx] += weight.sum().item()
         idx2s[idx] += (score*weight).sum().item()
         idx2s2[idx] += (score**2*weight).sum().item()
-        idx2w, idx2s, idx2s2 = map(all_gather_counter, (idx2w, idx2s, idx2s2))
+    idx2w, idx2s, idx2s2 = map(all_gather_counter, (idx2w, idx2s, idx2s2))
     idx2mean = {idx: idx2s[idx] / w for idx, w in idx2w.items()}
     idx2std = {idx: math.sqrt(idx2s2[idx] / w - idx2mean[idx]**2) for idx, w in idx2w.items()}
     return idx2mean, idx2std
