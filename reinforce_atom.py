@@ -1,4 +1,4 @@
-import os, yaml, warnings
+import os, yaml, warnings, math
 import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
@@ -428,7 +428,7 @@ def main():
     
     # Environment
     result_dir = f"reinforce/results/{args.studyname}"
-    (logger, ), rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'])
+    (logger, proc_logger), rank, device = set_env(result_dir, args, logs, subdirs=['grads/reward', 'grads/kl', 'grads/value'], get_proc_logger=True)
     ignore_rdkit_warning()
     logger.info(f"git hash={get_git_hash()}", **NO_DUP)
     if args.record_memory_history_step > 0:
@@ -460,6 +460,7 @@ def main():
     ## records
     train_looper = Loopers([
         LogLooper(logger, 1000, 5, 'step', 'training'),
+        LogLooper(proc_logger, 1, math.inf, 'step', 'training'),
         TimeWriteLooper(f"{result_dir}/steps/times/{rank}.csv", 1000),
         TimeLogLooper(logger, 'step', 1000), 
         GPUUseLooper(logger, device, 'step', 5)
