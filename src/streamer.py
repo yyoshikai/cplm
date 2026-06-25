@@ -13,6 +13,7 @@ from .utils.path import make_pardir, mwrite
 from .model import Streamer, WrapperStreamer
 from .data.tokenizer import VocEncoder
 from .data.mol_tokenizer import MolTokenizer, encode_token_stream, pos_offset_stream
+from .chem.convert import obmol2rdmol
 
 class NoTokenRangeStreamer(WrapperStreamer):
     def __init__(self, streamer: Streamer, voc_size):
@@ -156,12 +157,13 @@ class DummyStreamer(Streamer):
 MOL_ERRORS = {
     (ValueError, r"could not convert string to float: '.+'"): 'COORD_NOT_FLOAT', 
     (ValueError, r"SMILES is invalid\."): 'SMILES', 
+    (ValueError, r"SMILES is invalid: .+"): 'SMILES', 
     (ValueError, r"SMILES mismatch\."): 'SMILES_MISMATCH',
 
 }
 
 class LigandStreamer(Streamer):
-    logger = getLogger()
+    logger = getLogger(f"{__module__}.{__qualname__}")
 
     def __init__(self, mol_tokenizer: MolTokenizer, voc_encoder: VocEncoder, end_token: str, cls: Literal['rdkit', 'ob']):
         self.mol_tokenizer = mol_tokenizer
@@ -190,11 +192,7 @@ class LigandStreamer(Streamer):
             except StopIteration as e:
                 ligand, self._atom_poss, self._coord_posss = e.value
                 if isinstance(ligand, ob.OBMol):
-                    obc = ob.OBConversion()
-                    obc.SetOutFormat('sdf')
-                    ligand = obc.WriteString(ligand)
-                elif isinstance(ligand, Chem.Mol):
-                    ligand = Chem.MolToMolBlock(ligand)
+                    ligand = obmol2rdmol(ligand, sanitize=False)
                 self._ligand = ligand
                 
                 self._error = None
@@ -235,6 +233,6 @@ class SaveLigandStreamer(WrapperStreamer):
         mol = self.streamer.ligand()
         if mol is not None:
             with open(self.new_sdf_path, 'w') as f:
-                f.write(mol)
+                f.write(Chem.MolToMolBlock(mol))
 
         return output

@@ -498,7 +498,7 @@ def main():
 
             train_looper.put('generate')
             tokens, position, weight, scores, errors = generator.generate(trainer.policy_model(), step, prompt_tokens, positions, do_save, pdbs)
-            scores = [score[1:] for score in scores]
+            scores = [score[1:] if score is not None else None for score in scores]
             weight = [w.to(device) for w in weight]
             scores = norm(scores, idxs, weight)
             
