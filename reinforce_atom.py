@@ -28,7 +28,7 @@ from src.model import Model, Streamer
 from src.train import set_env, get_model, get_process_ranks
 from src.train.collator import solve_increasing_fn_left
 from src.train.data import get_finetune_data
-from src.train.looper import Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
+from src.train.looper import Looper, Loopers, TimeWriteLooper, LogLooper, TimeLogLooper, GPUUseLooper, MemorySnapshotLooper
 from src.streamer import WrapperStreamer, LigandStreamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
 from src.train.reinforce_atom import ReinforceTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer, Norms, FillNorm, SampleWhitenNorm
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
@@ -166,6 +166,7 @@ class Generator:
             voc_encoder: VocEncoder,
             mol_tokenizer: MolTokenizer,
             result_dir: str, 
+            train_looper: Looper,
             max_new_token: int,
             cpu: int,
             num_score_workers: int,
@@ -176,6 +177,7 @@ class Generator:
         self.voc_encoder = voc_encoder
         self.mol_tokenizer = mol_tokenizer
         self.result_dir = result_dir
+        self.train_looper = train_looper
         self.max_new_token = max_new_token
         self.num_score_workers = num_score_workers
         self.lig_cls = lig_cls
@@ -201,6 +203,7 @@ class Generator:
 
         model.eval()
         with cf.ProcessPoolExecutor(self.num_score_workers) as e:
+            self.train_looper.put('generator.get_streamer')
             score_streamers: list[GetScoreStreamer]= []
             token_streamers: list[TokenSaveStreamer] = []
             position_streamers: list[PositionSaveStreamer] = []
@@ -222,11 +225,14 @@ class Generator:
                 if step < 5:
                     streamer = TimeLogStreamer(streamer, str(idx), 10.0)
                 streamers.append(streamer)
+            self.train_looper.put('generator.generate')
             with torch.inference_mode(), sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
                 model.generate2(prompt_tokens, positions, streamers, self.max_new_token)
+            self.train_looper.put('generator.result')
             for streamer in score_streamers:
                 streamer.result()
 
+        self.train_looper.put('generator.calc_tokens')
         tokens = [
             torch.tensor(token_streamer.prompt_tokens+token_streamer.new_tokens)
             for token_streamer in token_streamers
