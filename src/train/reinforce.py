@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from src.utils import IterateRecorder, wraps
+from src.utils import IterateRecorder
 from src.utils.path import cleardir
 from src.utils.ddp import reduce_float, all_gather
 from src.train.collator import solve_increasing_fn_left
@@ -63,27 +63,8 @@ def get_sample_stat(values: Tensor, idxs: Tensor) -> tuple[Tensor, Tensor]:
     return sample_means, sample_stds
 
 def all_gather_counter(c: dict) -> dict:
-
-    temps = [None]*dist.get_world_size()
-    
-
-
     cs = [None]*dist.get_world_size()
-    logger.debug(f"{c=}")
-    print(f"{c=}", flush=True)
-    c = dict(c)
-    try:
-        dist.all_gather_object(cs, c)
-    except Exception as e:
-        import sys, pickle
-        rank = dist.get_rank()
-        print(f"{rank=} {c=}", flush=True)
-        print(f"{rank=} {type(c)=}", flush=True)
-        print(f"{rank=} {sys.getsizeof(pickle.dumps(c))=}", flush=True)
-        for k, v in c.items():
-            print(f"{rank=} {k=}, {type(k)=}, {v=}, {type(v)=}", flush=True)
-        print(f"{rank=} log ended.", flush=True)
-        raise e
+    dist.all_gather_object(cs, c)
     all_c = {}
     for c in cs:
         for k, n in c.items():

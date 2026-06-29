@@ -75,9 +75,6 @@ class ReinforceTrainer(Trainer):
             with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                 for mbatch_start in range(0, B, mbatch_size):
                     mslice = slice(mbatch_start, mbatch_start+mbatch_size)
-                    # Use the unwrapped model to avoid DDP's notify_join_context ALLREDUCE
-                    # being called outside the model.join() context, which would cause
-                    # an asymmetric collective sequence with the subsequent all_gather_object.
                     _, values_m = self.reinforce_model(input[:,mslice], position[:,mslice]) # [L,B]
                     values += list(values_m.T)
                 advantage = [scores[b] - values[b][:len(scores[b])] for b in range(B)]
