@@ -474,7 +474,7 @@ def main():
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
     mol_tokenizer = get_mol_tokenizer(fargs.lig_format, fargs.lig_order, fargs.smiles_voc_dir, fargs.lig_h)
-    generator = Generator(voc_encoder, mol_tokenizer, result_dir, args.max_new_token, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward)
+    generator = Generator(voc_encoder, mol_tokenizer, result_dir, train_looper, args.max_new_token, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)

@@ -1,4 +1,5 @@
 import os, psutil, math, copy
+from logging import getLogger
 from collections import defaultdict, Counter
 from typing import Literal, Any
 from contextlib import nullcontext
@@ -10,7 +11,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from src.utils import IterateRecorder, wraps
+from src.utils import IterateRecorder
 from src.utils.path import cleardir
 from src.utils.ddp import reduce_float, all_gather
 from src.train.collator import solve_increasing_fn_left
@@ -18,6 +19,8 @@ from src.data.tokenizer import VocEncoder
 from src.model import Model
 from src.train import get_optimizer_scheduler, get_process_ranks
 from src.train.looper import Looper
+
+logger = getLogger(__name__)
 
 class ReinforceModel(nn.Module):
     def __init__(self, model: Model, baseline):

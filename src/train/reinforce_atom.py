@@ -75,7 +75,7 @@ class ReinforceTrainer(Trainer):
             with torch.inference_mode(), torch.autocast('cuda', torch.bfloat16), sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                 for mbatch_start in range(0, B, mbatch_size):
                     mslice = slice(mbatch_start, mbatch_start+mbatch_size)
-                    _, values_m = self.model(input[:,mslice], position[:,mslice]) # [L,B]
+                    _, values_m = self.reinforce_model(input[:,mslice], position[:,mslice]) # [L,B]
                     values += list(values_m.T)
                 advantage = [scores[b] - values[b][:len(scores[b])] for b in range(B)]
                 velocity = [torch.cumsum(adv.flip(0), 0).flip(0) for adv in advantage]
@@ -335,7 +335,7 @@ class SampleWhitenNorm(Norm):
     def __call__(self, scores, idxs, weights):
 
 
-        if not self.mean and self.std:
+        if not self.mean and not self.std:
             return scores
 
         idx2mean, idx2std = get_sample_stat(scores, idxs, weights)

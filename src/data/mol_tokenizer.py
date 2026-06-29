@@ -101,6 +101,12 @@ def smi_to_mol_orders_inv(smi: str, cls: Literal['rdkit', 'ob']) -> tuple[Chem.M
             raise ValueError('SMILES mismatch.')
         orders = np.array(eval(mol.GetProp('_smilesAtomOutputOrder')))
     else:
+        # Validate SMILES with RDKit to prevent OpenBabel segmentation fault on invalid strings
+        param = Chem.SmilesParserParams()
+        param.removeHs = False
+        temp_mol = Chem.MolFromSmiles(smi, param)
+        if temp_mol is None:
+            raise ValueError(f'SMILES is invalid: {smi}')
         mol = ob.OBMol()
         obc = ob.OBConversion()
         obc.SetInFormat('smi')
