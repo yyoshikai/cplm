@@ -1,0 +1,934 @@
+DeprecationWarning: 'source deactivate' is deprecated. Use 'conda deactivate'.
+[W625 21:21:39.658146308 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:29402 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:39.650188550 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:29402 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:39.663053746 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:29402 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:39.674116310 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:29402 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:39.678975960 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:29402 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:39.694321076 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:29402 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:39.709867744 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:29402 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:40.526817370 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:29402 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:40.945409602 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:45873 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:53.791298603 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:45873 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:53.795659964 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:45873 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:53.788914817 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:45873 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:53.803517939 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:45873 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:53.803546755 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:45873 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:53.805235347 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:45873 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:53.926718588 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:45873 (errno: 97 - Address family not supported by protocol).
+[W625 21:21:59.271836604 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0115]:45873 (errno: 97 - Address family not supported by protocol).
+==============================
+*** Open Babel Error  in ParseSimple
+  SMILES string contains a character '@' which is invalid
+==============================
+*** Open Babel Error  in ParseComplex
+  SMILES string contains a character '[' which is invalid
+==============================
+*** Open Babel Error  in ParseSimple
+  SMILES string contains a character '@' which is invalid
+==============================
+*** Open Babel Error  in ParseSimple
+  SMILES string contains a character '+' which is invalid
+==============================
+*** Open Babel Error  in ParseSimple
+  SMILES string contains a character '@' which is invalid
+==============================
+*** Open Babel Error  in ParseSimple
+  SMILES string contains a character '@' which is invalid
+==============================
+*** Open Babel Error  in ParseSimple
+  SMILES string contains a character '@' which is invalid
+==============================
+*** Open Babel Error  in ParseSimple
+  SMILES string contains a character 'H' which is invalid
+==============================
+*** Open Babel Error  in ParseSimple
+  SMILES string contains a character ']' which is invalid
+==============================
+*** Open Babel Error  in ParseSimple
+  SMILES string contains a character ']' which is invalid
+Fatal Python error: Segmentation fault
+
+Thread 0x00004000a955f120 (most recent call first):
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/threading.py", line 327 in wait
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/multiprocessing/queues.py", line 231 in _feed
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/threading.py", line 982 in run
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/threading.py", line 1045 in _bootstrap_inner
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/threading.py", line 1002 in _bootstrap
+
+Thread 0x00004000ab76f120 (most recent call first):
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/selectors.py", line 415 in select
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/multiprocessing/connection.py", line 948 in wait
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/concurrent/futures/process.py", line 417 in wait_result_broken_or_wakeup
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/concurrent/futures/process.py", line 344 in run
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/threading.py", line 1045 in _bootstrap_inner
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/threading.py", line 1002 in _bootstrap
+
+Thread 0x00004000ad97f120 (most recent call first):
+  <no Python frame>
+
+Current thread 0x0000400029025140 (most recent call first):
+  File "/work/gd43/a97003/cplm/src/chem/convert.py", line 19 in obmol2rdmol
+  File "/work/gd43/a97003/cplm/src/streamer.py", line 195 in put
+  File "/work/gd43/a97003/cplm/reinforce_atom.py", line 58 in put
+  File "/work/gd43/a97003/cplm/src/streamer.py", line 84 in put
+  File "/work/gd43/a97003/cplm/src/streamer.py", line 91 in put
+  File "/work/gd43/a97003/cplm/src/model/transformer.py", line 405 in <listcomp>
+  File "/work/gd43/a97003/cplm/src/model/transformer.py", line 404 in generate2
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 116 in decorate_context
+  File "/work/gd43/a97003/cplm/reinforce_atom.py", line 230 in generate
+  File "/work/gd43/a97003/cplm/reinforce_atom.py", line 268 in generate
+  File "/work/gd43/a97003/cplm/src/utils/utils.py", line 286 in inner
+  File "/work/gd43/a97003/cplm/reinforce_atom.py", line 295 in generate
+  File "/work/gd43/a97003/cplm/src/utils/utils.py", line 286 in inner
+  File "/work/gd43/a97003/cplm/reinforce_atom.py", line 309 in generate
+  File "/work/gd43/a97003/cplm/src/utils/utils.py", line 286 in inner
+  File "/work/gd43/a97003/cplm/reinforce_atom.py", line 507 in main
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355 in wrapper
+  File "/work/gd43/a97003/cplm/reinforce_atom.py", line 542 in <module>
+
+Extension modules: yaml._yaml, numpy.core._multiarray_umath, numpy.core._multiarray_tests, numpy.linalg._umath_linalg, numpy.fft._pocketfft_internal, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._mt19937, numpy.random.mtrand, numpy.random._philox, numpy.random._pcg64, numpy.random._sfc64, numpy.random._generator, pandas._libs.tslibs.ccalendar, pandas._libs.tslibs.np_datetime, pandas._libs.tslibs.dtypes, pandas._libs.tslibs.base, pandas._libs.tslibs.nattype, pandas._libs.tslibs.timezones, pandas._libs.tslibs.fields, pandas._libs.tslibs.timedeltas, pandas._libs.tslibs.tzconversion, pandas._libs.tslibs.timestamps, pandas._libs.properties, pandas._libs.tslibs.offsets, pandas._libs.tslibs.strptime, pandas._libs.tslibs.parsing, pandas._libs.tslibs.conversion, pandas._libs.tslibs.period, pandas._libs.tslibs.vectorized, pandas._libs.ops_dispatch, pandas._libs.missing, pandas._libs.hashtable, pandas._libs.algos, pandas._libs.interval, pandas._libs.lib, pandas._libs.ops, pandas._libs.hashing, pandas._libs.arrays, pandas._libs.tslib, pandas._libs.sparse, pandas._libs.internals, pandas._libs.indexing, pandas._libs.index, pandas._libs.writers, pandas._libs.join, pandas._libs.window.aggregations, pandas._libs.window.indexers, pandas._libs.reshape, pandas._libs.groupby, pandas._libs.json, pandas._libs.parsers, pandas._libs.testing, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, rdkit.rdBase, rdkit.DataStructs.cDataStructs, rdkit.Geometry.rdGeometry, rdkit.Chem.rdchem, rdkit.Chem.rdmolfiles, rdkit.Chem.rdmolops, rdkit.Chem.rdCIPLabeler, rdkit.Chem.rdinchi, rdkit.Chem.rdMolInterchange, rdkit.Chem.rdCoordGen, rdkit.ForceField.rdForceField, rdkit.Chem.rdChemicalFeatures, rdkit.Chem.rdMolChemicalFeatures, rdkit.Chem.rdChemReactions, rdkit.Chem.rdDepictor, rdkit.Chem.rdDistGeom, rdkit.Chem.rdForceFieldHelpers, rdkit.Chem.rdMolAlign, rdkit.Chem.rdMolDescriptors, rdkit.Chem.rdMolTransforms, rdkit.Chem.rdPartialCharges, rdkit.Chem.rdReducedGraphs, rdkit.Chem.rdShapeHelpers, rdkit.Chem.rdqueries, rdkit.Chem.rdMolEnumerator, rdkit.Chem.rdSLNParse, rdkit.Chem.rdFingerprintGenerator, vina._vina_wrapper, openbabel._openbabel, rdkit.Chem.rdDetermineBonds, psutil._psutil_linux, psutil._psutil_posix, _brotli, zstandard.backend_c, charset_normalizer.md, requests.packages.charset_normalizer.md, requests.packages.chardet.md, regex._regex, markupsafe._speedups, PIL._imaging, sklearn.__check_build._check_build, scipy._lib._ccallback_c, scipy.sparse._sparsetools, _csparsetools, scipy.sparse._csparsetools, scipy.linalg._fblas, scipy.linalg._flapack, scipy.linalg.cython_lapack, scipy.linalg._cythonized_array_utils, scipy.linalg._solve_toeplitz, scipy.linalg._decomp_lu_cython, scipy.linalg._matfuncs_sqrtm_triu, scipy.linalg._matfuncs_expm, scipy.linalg._linalg_pythran, scipy.linalg.cython_blas, scipy.linalg._decomp_update, scipy.sparse.linalg._dsolve._superlu, scipy.sparse.linalg._eigen.arpack._arpack, scipy.sparse.linalg._propack._spropack, scipy.sparse.linalg._propack._dpropack, scipy.sparse.linalg._propack._cpropack, scipy.sparse.linalg._propack._zpropack, scipy.sparse.csgraph._tools, scipy.sparse.csgraph._shortest_path, scipy.sparse.csgraph._traversal, scipy.sparse.csgraph._min_spanning_tree, scipy.sparse.csgraph._flow, scipy.sparse.csgraph._matching, scipy.sparse.csgraph._reordering, scipy.special._ufuncs_cxx, scipy.special._ufuncs, scipy.special._specfun, scipy.special._comb, scipy.special._ellip_harm_2, scipy.spatial._ckdtree, scipy._lib.messagestream, scipy.spatial._qhull, scipy.spatial._voronoi, scipy.spatial._distance_wrap, scipy.spatial._hausdorff, scipy.spatial.transform._rotation, scipy.optimize._group_columns, scipy.optimize._trlib._trlib, scipy.optimize._lbfgsb, _moduleTNC, scipy.optimize._moduleTNC, scipy.optimize._cobyla, scipy.optimize._slsqp, scipy.optimize._minpack, scipy.optimize._lsq.givens_elimination, scipy.optimize._zeros, scipy.optimize._cython_nnls, scipy._lib._uarray._uarray, scipy.linalg._decomp_interpolative, scipy.optimize._bglu_dense, scipy.optimize._lsap, scipy.optimize._direct, scipy.integrate._odepack, scipy.integrate._quadpack, scipy.integrate._vode, scipy.integrate._dop, scipy.integrate._lsoda, scipy.interpolate._fitpack, scipy.interpolate._dfitpack, scipy.interpolate._dierckx, scipy.interpolate._ppoly, scipy.interpolate._interpnd, scipy.interpolate._rbfinterp_pythran, scipy.interpolate._rgi_cython, scipy.interpolate._bspl, scipy.special.cython_special, scipy.stats._stats, scipy.stats._sobol, scipy.stats._qmc_cy, scipy.stats._biasedurn, scipy.stats._stats_pythran, scipy.stats._levy_stable.levyst, scipy.stats._ansari_swilk_statistics, scipy.stats._mvn, scipy.stats._rcont.rcont, scipy.ndimage._nd_image, scipy.ndimage._rank_filter_1d, _ni_label, scipy.ndimage._ni_label, sklearn.utils._isfinite, sklearn.utils.sparsefuncs_fast, sklearn.utils.murmurhash, sklearn.utils._openmp_helpers, sklearn.metrics.cluster._expected_mutual_info_fast, sklearn.preprocessing._csr_polynomial_expansion, sklearn.preprocessing._target_encoder_fast, sklearn.metrics._dist_metrics, sklearn.metrics._pairwise_distances_reduction._datasets_pair, sklearn.utils._cython_blas, sklearn.metrics._pairwise_distances_reduction._base, sklearn.metrics._pairwise_distances_reduction._middle_term_computer, sklearn.utils._heap, sklearn.utils._sorting, sklearn.metrics._pairwise_distances_reduction._argkmin, sklearn.metrics._pairwise_distances_reduction._argkmin_classmode, sklearn.utils._vector_sentinel, sklearn.metrics._pairwise_distances_reduction._radius_neighbors, sklearn.metrics._pairwise_distances_reduction._radius_neighbors_classmode, sklearn.metrics._pairwise_fast, PIL._imagingft, cuda_utils, lmdb.cpython, scipy.cluster._vq, scipy.cluster._hierarchy, scipy.cluster._optimal_leaf_ordering (total: 215)
+E0626 00:02:14.260000 695697 site-packages/torch/distributed/elastic/multiprocessing/api.py:874] failed (exitcode: -11) local_rank: 0 (pid: 695763) of binary: /work/gd43/a97003/.conda/envs/vina/bin/python
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/bin/torchrun", line 33, in <module>
+    sys.exit(load_entry_point('torch==2.7.1+cu128', 'console_scripts', 'torchrun')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in main
+    run(args)
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 270, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+========================================================
+reinforce_atom.py FAILED
+--------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+--------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-06-26_00:02:14
+  host      : mg0376
+  rank      : 7 (local_rank: 0)
+  exitcode  : -11 (pid: 695763)
+  error_file: <N/A>
+  traceback : Signal 11 (SIGSEGV) received by PID 695763
+========================================================
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+W0626 00:02:15.917000 200520 site-packages/torch/distributed/elastic/agent/server/api.py:719] Received 15 death signal, shutting down workers
+W0626 00:02:15.919000 200520 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 200591 closing signal SIGTERM
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/bin/torchrun", line 33, in <module>
+    sys.exit(load_entry_point('torch==2.7.1+cu128', 'console_scripts', 'torchrun')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in main
+    run(args)
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 261, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 711, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 870, in _invoke_run
+    time.sleep(monitor_interval)
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/api.py", line 84, in _terminate_process_handler
+    raise SignalException(f"Process {os.getpid()} got signal: {sigval}", sigval=sigval)
+torch.distributed.elastic.multiprocessing.api.SignalException: Process 200520 got signal: 15
+[rank3]:[W626 00:02:16.917421028 TCPStore.cpp:125] [c10d] recvValue failed on SocketImpl(fd=16, addr=mg0181:43904, remote=mg0115:45873): failed to recv, got 0 bytes
+Exception raised from recvBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:678 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x4000f8653ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x4000c9e52ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc6c94 (0x4000c9e56c94 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc7c54 (0x4000c9e57c54 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x1d4 (0x4000c9e58d34 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::heartbeatMonitor() + 0x298 (0x4000ceb75b38 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xd600c (0x4000c275600c in /work/gd43/a97003/.conda/envs/vina/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x857e8 (0x400036b057e8 in /lib64/libc.so.6)
+frame #8: <unknown function> + 0x2bb9c (0x400036aabb9c in /lib64/libc.so.6)
+
+W0626 00:02:16.434000 177390 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 177456 closing signal SIGTERM
+W0626 00:02:16.430000 144618 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 144684 closing signal SIGTERM
+[rank3]:[W626 00:02:16.927997385 ProcessGroupNCCL.cpp:1662] [PG ID 0 PG GUID 0(default_pg) Rank 3] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: failed to recv, got 0 bytes
+[W626 00:02:16.880663304 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0369:56288, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x400070463ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x400041c62ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x400041c65b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x400041c68024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x400041c692d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x400041c6986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x400041c6af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40003bd35248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40003b335cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaaaade51e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaaaad9886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaaaad9c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaaaad3cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaaaae86f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyEval_EvalFrameDefault + 0x145c (0xaaaaaad3cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: <unknown function> + 0x246f64 (0xaaaaaae86f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: _PyObject_FastCallDictTstate + 0x7c (0xaaaaaad98a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call_Prepend + 0xa4 (0xaaaaaad98d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: <unknown function> + 0x1cc2d8 (0xaaaaaae0c2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: _PyObject_Call + 0x68 (0xaaaaaad98628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaaaad3cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaaaae86f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: _PyEval_EvalFrameDefault + 0x145c (0xaaaaaad3cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x246f64 (0xaaaaaae86f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: PyEval_EvalCode + 0xa8 (0xaaaaaae87018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28eedc (0xaaaaaaeceedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: <unknown function> + 0x28f174 (0xaaaaaaecf174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: <unknown function> + 0x28f294 (0xaaaaaaecf294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: _PyRun_SimpleFileObject + 0x144 (0xaaaaaaed2454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: _PyRun_AnyFileObject + 0x9c (0xaaaaaaed2a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: Py_RunMain + 0x8f0 (0xaaaaaaef2a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #31: Py_BytesMain + 0x64 (0xaaaaaaef30e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #32: <unknown function> + 0x2c7a0 (0x40003a1cc7a0 in /lib64/libc.so.6)
+frame #33: __libc_start_main + 0x98 (0x40003a1cc878 in /lib64/libc.so.6)
+frame #34: <unknown function> + 0x1059e0 (0xaaaaaad459e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:16.450000 177390 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0369_177390_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+[W626 00:02:16.898070658 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0369:56288, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x400070463ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x400041c62ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x400041c65b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x400041c68024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x400041c692d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x400041c6986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x400041c6af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40003bd35248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40003b335cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaaaade51e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaaaad9886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaaaad9c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaaaad3cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaaaae86f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyObject_FastCallDictTstate + 0x7c (0xaaaaaad98a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: _PyObject_Call_Prepend + 0xa4 (0xaaaaaad98d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: <unknown function> + 0x1cc2d8 (0xaaaaaae0c2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call + 0x68 (0xaaaaaad98628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: _PyEval_EvalFrameDefault + 0x145c (0xaaaaaad3cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: <unknown function> + 0x246f64 (0xaaaaaae86f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaaaad3cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaaaae86f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: PyEval_EvalCode + 0xa8 (0xaaaaaae87018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x28eedc (0xaaaaaaeceedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: <unknown function> + 0x28f174 (0xaaaaaaecf174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28f294 (0xaaaaaaecf294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: _PyRun_SimpleFileObject + 0x144 (0xaaaaaaed2454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: _PyRun_AnyFileObject + 0x9c (0xaaaaaaed2a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: Py_RunMain + 0x8f0 (0xaaaaaaef2a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: Py_BytesMain + 0x64 (0xaaaaaaef30e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: <unknown function> + 0x2c7a0 (0x40003a1cc7a0 in /lib64/libc.so.6)
+frame #31: __libc_start_main + 0x98 (0x40003a1cc878 in /lib64/libc.so.6)
+frame #32: <unknown function> + 0x1059e0 (0xaaaaaad459e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:16.457000 177390 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0369_177390_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 117, in _call_store
+    return getattr(self._store, store_op)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.distributed.DistNetworkError: failed to recv, got 0 bytes
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/bin/torchrun", line 33, in <module>
+    sys.exit(load_entry_point('torch==2.7.1+cu128', 'console_scripts', 'torchrun')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in main
+    run(args)
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 261, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 711, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 906, in _invoke_run
+    num_nodes_waiting = rdzv_handler.num_nodes_waiting()
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 1263, in num_nodes_waiting
+    self._state_holder.sync()
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 437, in sync
+    get_response = self._backend.get_state()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 75, in get_state
+    base64_state: bytes = self._call_store("get", self._key)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 119, in _call_store
+    raise RendezvousConnectionError(
+torch.distributed.elastic.rendezvous.api.RendezvousConnectionError: The connection to the C10d store has failed. See inner exception for details.
+[W626 00:02:16.390538078 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0320:34996, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x400052603ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x400023e02ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x400023e05b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x400023e08024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x400023e092d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x400023e0986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x400023e0af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40001ded5248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40001d4d5cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaaea4051e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaaea3b886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaaea3bc134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaaea35cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaaea4a6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyEval_EvalFrameDefault + 0x145c (0xaaaaea35cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: <unknown function> + 0x246f64 (0xaaaaea4a6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: _PyObject_FastCallDictTstate + 0x7c (0xaaaaea3b8a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call_Prepend + 0xa4 (0xaaaaea3b8d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: <unknown function> + 0x1cc2d8 (0xaaaaea42c2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: _PyObject_Call + 0x68 (0xaaaaea3b8628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaaea35cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaaea4a6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: _PyEval_EvalFrameDefault + 0x145c (0xaaaaea35cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x246f64 (0xaaaaea4a6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: PyEval_EvalCode + 0xa8 (0xaaaaea4a7018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28eedc (0xaaaaea4eeedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: <unknown function> + 0x28f174 (0xaaaaea4ef174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: <unknown function> + 0x28f294 (0xaaaaea4ef294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: _PyRun_SimpleFileObject + 0x144 (0xaaaaea4f2454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: _PyRun_AnyFileObject + 0x9c (0xaaaaea4f2a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: Py_RunMain + 0x8f0 (0xaaaaea512a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #31: Py_BytesMain + 0x64 (0xaaaaea5130e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #32: <unknown function> + 0x2c7a0 (0x40001c36c7a0 in /lib64/libc.so.6)
+frame #33: __libc_start_main + 0x98 (0x40001c36c878 in /lib64/libc.so.6)
+frame #34: <unknown function> + 0x1059e0 (0xaaaaea3659e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.016000 144618 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0320_144618_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+[W626 00:02:17.465182157 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0320:34996, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x400052603ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x400023e02ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x400023e05b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x400023e08024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x400023e092d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x400023e0986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x400023e0af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40001ded5248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40001d4d5cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaaea4051e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaaea3b886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaaea3bc134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaaea35cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaaea4a6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyObject_FastCallDictTstate + 0x7c (0xaaaaea3b8a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: _PyObject_Call_Prepend + 0xa4 (0xaaaaea3b8d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: <unknown function> + 0x1cc2d8 (0xaaaaea42c2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call + 0x68 (0xaaaaea3b8628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: _PyEval_EvalFrameDefault + 0x145c (0xaaaaea35cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: <unknown function> + 0x246f64 (0xaaaaea4a6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaaea35cd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaaea4a6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: PyEval_EvalCode + 0xa8 (0xaaaaea4a7018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x28eedc (0xaaaaea4eeedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: <unknown function> + 0x28f174 (0xaaaaea4ef174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28f294 (0xaaaaea4ef294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: _PyRun_SimpleFileObject + 0x144 (0xaaaaea4f2454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: _PyRun_AnyFileObject + 0x9c (0xaaaaea4f2a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: Py_RunMain + 0x8f0 (0xaaaaea512a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: Py_BytesMain + 0x64 (0xaaaaea5130e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: <unknown function> + 0x2c7a0 (0x40001c36c7a0 in /lib64/libc.so.6)
+frame #31: __libc_start_main + 0x98 (0x40001c36c878 in /lib64/libc.so.6)
+frame #32: <unknown function> + 0x1059e0 (0xaaaaea3659e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.023000 144618 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0320_144618_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 117, in _call_store
+    return getattr(self._store, store_op)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.distributed.DistNetworkError: failed to recv, got 0 bytes
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/bin/torchrun", line 33, in <module>
+    sys.exit(load_entry_point('torch==2.7.1+cu128', 'console_scripts', 'torchrun')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in main
+    run(args)
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 261, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 711, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 906, in _invoke_run
+    num_nodes_waiting = rdzv_handler.num_nodes_waiting()
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 1263, in num_nodes_waiting
+    self._state_holder.sync()
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 437, in sync
+    get_response = self._backend.get_state()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 75, in get_state
+    base64_state: bytes = self._call_store("get", self._key)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 119, in _call_store
+    raise RendezvousConnectionError(
+torch.distributed.elastic.rendezvous.api.RendezvousConnectionError: The connection to the C10d store has failed. See inner exception for details.
+W0626 00:02:17.028000 135405 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 135476 closing signal SIGTERM
+[W626 00:02:17.475898647 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0181:42622, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x40006f1a3ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x4000409a2ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x4000409a5b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x4000409a8024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x4000409a92d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x4000409a986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x4000409aaf4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40003aa75248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40003a075cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaabc8a51e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaabc85886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaabc85c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaabc7fcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaabc946f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyEval_EvalFrameDefault + 0x145c (0xaaaabc7fcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: <unknown function> + 0x246f64 (0xaaaabc946f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: _PyObject_FastCallDictTstate + 0x7c (0xaaaabc858a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call_Prepend + 0xa4 (0xaaaabc858d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: <unknown function> + 0x1cc2d8 (0xaaaabc8cc2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: _PyObject_Call + 0x68 (0xaaaabc858628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaabc7fcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaabc946f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: _PyEval_EvalFrameDefault + 0x145c (0xaaaabc7fcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x246f64 (0xaaaabc946f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: PyEval_EvalCode + 0xa8 (0xaaaabc947018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28eedc (0xaaaabc98eedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: <unknown function> + 0x28f174 (0xaaaabc98f174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: <unknown function> + 0x28f294 (0xaaaabc98f294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: _PyRun_SimpleFileObject + 0x144 (0xaaaabc992454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: _PyRun_AnyFileObject + 0x9c (0xaaaabc992a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: Py_RunMain + 0x8f0 (0xaaaabc9b2a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #31: Py_BytesMain + 0x64 (0xaaaabc9b30e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #32: <unknown function> + 0x2c7a0 (0x400038f0c7a0 in /lib64/libc.so.6)
+frame #33: __libc_start_main + 0x98 (0x400038f0c878 in /lib64/libc.so.6)
+frame #34: <unknown function> + 0x1059e0 (0xaaaabc8059e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.044000 135405 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0181_135405_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+[W626 00:02:17.508099239 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0181:42622, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x40006f1a3ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x4000409a2ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x4000409a5b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x4000409a8024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x4000409a92d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x4000409a986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x4000409aaf4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40003aa75248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40003a075cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaabc8a51e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaabc85886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaabc85c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaabc7fcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaabc946f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyObject_FastCallDictTstate + 0x7c (0xaaaabc858a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: _PyObject_Call_Prepend + 0xa4 (0xaaaabc858d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: <unknown function> + 0x1cc2d8 (0xaaaabc8cc2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call + 0x68 (0xaaaabc858628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: _PyEval_EvalFrameDefault + 0x145c (0xaaaabc7fcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: <unknown function> + 0x246f64 (0xaaaabc946f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaabc7fcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaabc946f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: PyEval_EvalCode + 0xa8 (0xaaaabc947018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x28eedc (0xaaaabc98eedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: <unknown function> + 0x28f174 (0xaaaabc98f174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28f294 (0xaaaabc98f294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: _PyRun_SimpleFileObject + 0x144 (0xaaaabc992454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: _PyRun_AnyFileObject + 0x9c (0xaaaabc992a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: Py_RunMain + 0x8f0 (0xaaaabc9b2a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: Py_BytesMain + 0x64 (0xaaaabc9b30e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: <unknown function> + 0x2c7a0 (0x400038f0c7a0 in /lib64/libc.so.6)
+frame #31: __libc_start_main + 0x98 (0x400038f0c878 in /lib64/libc.so.6)
+frame #32: <unknown function> + 0x1059e0 (0xaaaabc8059e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.066000 135405 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0181_135405_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 117, in _call_store
+    return getattr(self._store, store_op)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.distributed.DistNetworkError: failed to recv, got 0 bytes
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/bin/torchrun", line 33, in <module>
+    sys.exit(load_entry_point('torch==2.7.1+cu128', 'console_scripts', 'torchrun')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in main
+    run(args)
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 261, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 711, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 906, in _invoke_run
+    num_nodes_waiting = rdzv_handler.num_nodes_waiting()
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 1263, in num_nodes_waiting
+    self._state_holder.sync()
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 437, in sync
+    get_response = self._backend.get_state()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 75, in get_state
+    base64_state: bytes = self._call_store("get", self._key)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 119, in _call_store
+    raise RendezvousConnectionError(
+torch.distributed.elastic.rendezvous.api.RendezvousConnectionError: The connection to the C10d store has failed. See inner exception for details.
+W0626 00:02:17.179000 148090 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 148156 closing signal SIGTERM
+[W626 00:02:17.626490325 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0121:53696, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x40004ae13ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x40001c612ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x40001c615b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x40001c618024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x40001c6192d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x40001c61986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x40001c61af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x4000166e5248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x400015ce5cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaae70a51e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaae705886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaae705c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaae6ffcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaae7146f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyEval_EvalFrameDefault + 0x145c (0xaaaae6ffcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: <unknown function> + 0x246f64 (0xaaaae7146f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: _PyObject_FastCallDictTstate + 0x7c (0xaaaae7058a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call_Prepend + 0xa4 (0xaaaae7058d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: <unknown function> + 0x1cc2d8 (0xaaaae70cc2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: _PyObject_Call + 0x68 (0xaaaae7058628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaae6ffcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaae7146f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: _PyEval_EvalFrameDefault + 0x145c (0xaaaae6ffcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x246f64 (0xaaaae7146f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: PyEval_EvalCode + 0xa8 (0xaaaae7147018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28eedc (0xaaaae718eedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: <unknown function> + 0x28f174 (0xaaaae718f174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: <unknown function> + 0x28f294 (0xaaaae718f294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: _PyRun_SimpleFileObject + 0x144 (0xaaaae7192454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: _PyRun_AnyFileObject + 0x9c (0xaaaae7192a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: Py_RunMain + 0x8f0 (0xaaaae71b2a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #31: Py_BytesMain + 0x64 (0xaaaae71b30e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #32: <unknown function> + 0x2c7a0 (0x400014b7c7a0 in /lib64/libc.so.6)
+frame #33: __libc_start_main + 0x98 (0x400014b7c878 in /lib64/libc.so.6)
+frame #34: <unknown function> + 0x1059e0 (0xaaaae70059e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.196000 148090 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0121_148090_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+[W626 00:02:17.645092565 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0121:53696, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x40004ae13ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x40001c612ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x40001c615b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x40001c618024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x40001c6192d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x40001c61986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x40001c61af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x4000166e5248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x400015ce5cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaae70a51e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaae705886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaae705c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaae6ffcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaae7146f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyObject_FastCallDictTstate + 0x7c (0xaaaae7058a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: _PyObject_Call_Prepend + 0xa4 (0xaaaae7058d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: <unknown function> + 0x1cc2d8 (0xaaaae70cc2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call + 0x68 (0xaaaae7058628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: _PyEval_EvalFrameDefault + 0x145c (0xaaaae6ffcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: <unknown function> + 0x246f64 (0xaaaae7146f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaae6ffcd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaae7146f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: PyEval_EvalCode + 0xa8 (0xaaaae7147018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x28eedc (0xaaaae718eedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: <unknown function> + 0x28f174 (0xaaaae718f174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28f294 (0xaaaae718f294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: _PyRun_SimpleFileObject + 0x144 (0xaaaae7192454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: _PyRun_AnyFileObject + 0x9c (0xaaaae7192a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: Py_RunMain + 0x8f0 (0xaaaae71b2a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: Py_BytesMain + 0x64 (0xaaaae71b30e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: <unknown function> + 0x2c7a0 (0x400014b7c7a0 in /lib64/libc.so.6)
+frame #31: __libc_start_main + 0x98 (0x400014b7c878 in /lib64/libc.so.6)
+frame #32: <unknown function> + 0x1059e0 (0xaaaae70059e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.204000 148090 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0121_148090_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 117, in _call_store
+    return getattr(self._store, store_op)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.distributed.DistNetworkError: failed to recv, got 0 bytes
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/bin/torchrun", line 33, in <module>
+    sys.exit(load_entry_point('torch==2.7.1+cu128', 'console_scripts', 'torchrun')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in main
+    run(args)
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 261, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 711, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 906, in _invoke_run
+    num_nodes_waiting = rdzv_handler.num_nodes_waiting()
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 1263, in num_nodes_waiting
+    self._state_holder.sync()
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 437, in sync
+    get_response = self._backend.get_state()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 75, in get_state
+    base64_state: bytes = self._call_store("get", self._key)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 119, in _call_store
+    raise RendezvousConnectionError(
+torch.distributed.elastic.rendezvous.api.RendezvousConnectionError: The connection to the C10d store has failed. See inner exception for details.
+[rank2]:[W626 00:02:17.701724403 TCPStore.cpp:125] [c10d] recvValue failed on SocketImpl(fd=16, addr=mg0140:37504, remote=mg0115:45873): failed to recv, got 0 bytes
+Exception raised from recvBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:678 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x4000fc083ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x4000cd882ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc6c94 (0x4000cd886c94 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc7c54 (0x4000cd887c54 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x1d4 (0x4000cd888d34 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::heartbeatMonitor() + 0x298 (0x4000d25a5b38 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xd600c (0x4000c618600c in /work/gd43/a97003/.conda/envs/vina/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x857e8 (0x40003a5357e8 in /lib64/libc.so.6)
+frame #8: <unknown function> + 0x2bb9c (0x40003a4dbb9c in /lib64/libc.so.6)
+
+[rank2]:[W626 00:02:17.712748978 ProcessGroupNCCL.cpp:1662] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: failed to recv, got 0 bytes
+W0626 00:02:17.310000 143657 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 143723 closing signal SIGTERM
+[W626 00:02:17.757641268 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=4, addr=mg0140:42248, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x40003f513ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x400010d12ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x400010d15b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x400010d18024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x400010d192d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x400010d1986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x400010d1af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40000ade5248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40000a3e5cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaae17551e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaae170886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaae170c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaae16acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaae17f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyEval_EvalFrameDefault + 0x145c (0xaaaae16acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: <unknown function> + 0x246f64 (0xaaaae17f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: _PyObject_FastCallDictTstate + 0x7c (0xaaaae1708a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call_Prepend + 0xa4 (0xaaaae1708d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: <unknown function> + 0x1cc2d8 (0xaaaae177c2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: _PyObject_Call + 0x68 (0xaaaae1708628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaae16acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaae17f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: _PyEval_EvalFrameDefault + 0x145c (0xaaaae16acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x246f64 (0xaaaae17f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: PyEval_EvalCode + 0xa8 (0xaaaae17f7018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28eedc (0xaaaae183eedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: <unknown function> + 0x28f174 (0xaaaae183f174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: <unknown function> + 0x28f294 (0xaaaae183f294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: _PyRun_SimpleFileObject + 0x144 (0xaaaae1842454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: _PyRun_AnyFileObject + 0x9c (0xaaaae1842a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: Py_RunMain + 0x8f0 (0xaaaae1862a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #31: Py_BytesMain + 0x64 (0xaaaae18630e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #32: <unknown function> + 0x2c7a0 (0x40000927c7a0 in /lib64/libc.so.6)
+frame #33: __libc_start_main + 0x98 (0x40000927c878 in /lib64/libc.so.6)
+frame #34: <unknown function> + 0x1059e0 (0xaaaae16b59e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.320000 143657 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0140_143657_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+[W626 00:02:17.776190089 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=4, addr=mg0140:42248, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x40003f513ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x400010d12ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x400010d15b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x400010d18024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x400010d192d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x400010d1986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x400010d1af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40000ade5248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40000a3e5cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaae17551e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaae170886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaae170c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaae16acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaae17f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyObject_FastCallDictTstate + 0x7c (0xaaaae1708a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: _PyObject_Call_Prepend + 0xa4 (0xaaaae1708d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: <unknown function> + 0x1cc2d8 (0xaaaae177c2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call + 0x68 (0xaaaae1708628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: _PyEval_EvalFrameDefault + 0x145c (0xaaaae16acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: <unknown function> + 0x246f64 (0xaaaae17f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaae16acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaae17f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: PyEval_EvalCode + 0xa8 (0xaaaae17f7018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x28eedc (0xaaaae183eedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: <unknown function> + 0x28f174 (0xaaaae183f174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28f294 (0xaaaae183f294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: _PyRun_SimpleFileObject + 0x144 (0xaaaae1842454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: _PyRun_AnyFileObject + 0x9c (0xaaaae1842a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: Py_RunMain + 0x8f0 (0xaaaae1862a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: Py_BytesMain + 0x64 (0xaaaae18630e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: <unknown function> + 0x2c7a0 (0x40000927c7a0 in /lib64/libc.so.6)
+frame #31: __libc_start_main + 0x98 (0x40000927c878 in /lib64/libc.so.6)
+frame #32: <unknown function> + 0x1059e0 (0xaaaae16b59e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.335000 143657 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0140_143657_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 117, in _call_store
+    return getattr(self._store, store_op)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.distributed.DistNetworkError: failed to recv, got 0 bytes
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/bin/torchrun", line 33, in <module>
+    sys.exit(load_entry_point('torch==2.7.1+cu128', 'console_scripts', 'torchrun')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in main
+    run(args)
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 261, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 711, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 906, in _invoke_run
+    num_nodes_waiting = rdzv_handler.num_nodes_waiting()
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 1263, in num_nodes_waiting
+    self._state_holder.sync()
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 437, in sync
+    get_response = self._backend.get_state()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 75, in get_state
+    base64_state: bytes = self._call_store("get", self._key)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 119, in _call_store
+    raise RendezvousConnectionError(
+torch.distributed.elastic.rendezvous.api.RendezvousConnectionError: The connection to the C10d store has failed. See inner exception for details.
+[rank4]:[W626 00:02:17.750342703 TCPStore.cpp:125] [c10d] recvValue failed on SocketImpl(fd=16, addr=mg0220:51470, remote=mg0115:45873): failed to recv, got 0 bytes
+Exception raised from recvBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:678 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x4000cae73ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x40009c672ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc6c94 (0x40009c676c94 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc7c54 (0x40009c677c54 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x1d4 (0x40009c678d34 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::heartbeatMonitor() + 0x298 (0x4000a1395b38 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xd600c (0x400094f7600c in /work/gd43/a97003/.conda/envs/vina/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x857e8 (0x4000093257e8 in /lib64/libc.so.6)
+frame #8: <unknown function> + 0x2bb9c (0x4000092cbb9c in /lib64/libc.so.6)
+
+[rank4]:[W626 00:02:17.767178890 ProcessGroupNCCL.cpp:1662] [PG ID 0 PG GUID 0(default_pg) Rank 4] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: failed to recv, got 0 bytes
+W0626 00:02:17.332000 236261 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 236327 closing signal SIGTERM
+[W626 00:02:17.779878463 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0220:55356, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x400062263ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x400033a62ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x400033a65b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x400033a68024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x400033a692d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x400033a6986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x400033a6af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40002db35248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40002d135cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaac61551e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaac610886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaac610c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaac60acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaac61f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyEval_EvalFrameDefault + 0x145c (0xaaaac60acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: <unknown function> + 0x246f64 (0xaaaac61f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: _PyObject_FastCallDictTstate + 0x7c (0xaaaac6108a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call_Prepend + 0xa4 (0xaaaac6108d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: <unknown function> + 0x1cc2d8 (0xaaaac617c2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: _PyObject_Call + 0x68 (0xaaaac6108628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaac60acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaac61f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: _PyEval_EvalFrameDefault + 0x145c (0xaaaac60acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x246f64 (0xaaaac61f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: PyEval_EvalCode + 0xa8 (0xaaaac61f7018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28eedc (0xaaaac623eedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: <unknown function> + 0x28f174 (0xaaaac623f174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: <unknown function> + 0x28f294 (0xaaaac623f294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: _PyRun_SimpleFileObject + 0x144 (0xaaaac6242454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: _PyRun_AnyFileObject + 0x9c (0xaaaac6242a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: Py_RunMain + 0x8f0 (0xaaaac6262a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #31: Py_BytesMain + 0x64 (0xaaaac62630e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #32: <unknown function> + 0x2c7a0 (0x40002bfcc7a0 in /lib64/libc.so.6)
+frame #33: __libc_start_main + 0x98 (0x40002bfcc878 in /lib64/libc.so.6)
+frame #34: <unknown function> + 0x1059e0 (0xaaaac60b59e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.342000 236261 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0220_236261_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+[W626 00:02:17.795721081 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=3, addr=mg0220:55356, remote=mg0115:29402): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0xd4 (0x400062263ea4 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5dc2ab0 (0x400033a62ab0 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5dc5b3c (0x400033a65b3c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5dc8024 (0x400033a68024 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::doWait(c10::ArrayRef<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::chrono::duration<long, std::ratio<1l, 1000l> >) + 0x148 (0x400033a692d8 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::TCPStore::doGet(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x2c (0x400033a6986c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #6: c10d::TCPStore::get(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x9c (0x400033a6af4c in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #7: <unknown function> + 0xf95248 (0x40002db35248 in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #8: <unknown function> + 0x595cec (0x40002d135cec in /work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/lib/libtorch_python.so)
+frame #9: <unknown function> + 0x1a51e8 (0xaaaac61551e8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #10: _PyObject_MakeTpCall + 0x98 (0xaaaac610886c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #11: <unknown function> + 0x15c134 (0xaaaac610c134 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #12: _PyEval_EvalFrameDefault + 0x145c (0xaaaac60acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #13: <unknown function> + 0x246f64 (0xaaaac61f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #14: _PyObject_FastCallDictTstate + 0x7c (0xaaaac6108a5c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #15: _PyObject_Call_Prepend + 0xa4 (0xaaaac6108d44 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #16: <unknown function> + 0x1cc2d8 (0xaaaac617c2d8 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #17: _PyObject_Call + 0x68 (0xaaaac6108628 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #18: _PyEval_EvalFrameDefault + 0x145c (0xaaaac60acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #19: <unknown function> + 0x246f64 (0xaaaac61f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #20: _PyEval_EvalFrameDefault + 0x145c (0xaaaac60acd6c in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #21: <unknown function> + 0x246f64 (0xaaaac61f6f64 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #22: PyEval_EvalCode + 0xa8 (0xaaaac61f7018 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #23: <unknown function> + 0x28eedc (0xaaaac623eedc in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #24: <unknown function> + 0x28f174 (0xaaaac623f174 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #25: <unknown function> + 0x28f294 (0xaaaac623f294 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #26: _PyRun_SimpleFileObject + 0x144 (0xaaaac6242454 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #27: _PyRun_AnyFileObject + 0x9c (0xaaaac6242a90 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #28: Py_RunMain + 0x8f0 (0xaaaac6262a50 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #29: Py_BytesMain + 0x64 (0xaaaac62630e4 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+frame #30: <unknown function> + 0x2c7a0 (0x40002bfcc7a0 in /lib64/libc.so.6)
+frame #31: __libc_start_main + 0x98 (0x40002bfcc878 in /lib64/libc.so.6)
+frame #32: <unknown function> + 0x1059e0 (0xaaaac60b59e0 in /work/gd43/a97003/.conda/envs/vina/bin/python)
+
+W0626 00:02:17.354000 236261 site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py:1292] The node 'mg0220_236261_0' has failed to shutdown the rendezvous '100' due to an error of type RendezvousConnectionError.
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 117, in _call_store
+    return getattr(self._store, store_op)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.distributed.DistNetworkError: failed to recv, got 0 bytes
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/work/gd43/a97003/.conda/envs/vina/bin/torchrun", line 33, in <module>
+    sys.exit(load_entry_point('torch==2.7.1+cu128', 'console_scripts', 'torchrun')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in main
+    run(args)
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 261, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 711, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 906, in _invoke_run
+    num_nodes_waiting = rdzv_handler.num_nodes_waiting()
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 1263, in num_nodes_waiting
+    self._state_holder.sync()
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/dynamic_rendezvous.py", line 437, in sync
+    get_response = self._backend.get_state()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 75, in get_state
+    base64_state: bytes = self._call_store("get", self._key)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/gd43/a97003/.conda/envs/vina/lib/python3.11/site-packages/torch/distributed/elastic/rendezvous/c10d_rendezvous_backend.py", line 119, in _call_store
+    raise RendezvousConnectionError(
+torch.distributed.elastic.rendezvous.api.RendezvousConnectionError: The connection to the C10d store has failed. See inner exception for details.
+--------------------------------------------------------------------------
+mpirun detected that one or more processes exited with non-zero status, thus causing
+the job to be terminated. The first process to do so was:
+
+  Process name: [[1450,1],7]
+  Exit code:    1
+--------------------------------------------------------------------------
