@@ -1,0 +1,18 @@
+DeprecationWarning: 'source deactivate' is deprecated. Use 'conda deactivate'.
+[W626 11:16:19.599480116 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:29402 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:19.599703013 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:29402 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:19.109830473 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:29402 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:19.602792498 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:29402 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:19.602641322 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:29402 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:19.113626787 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:29402 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:19.618436660 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:29402 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:19.615630569 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:29402 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:20.854391373 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:33927 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:22.177917843 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:33927 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:22.687503545 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:33927 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:22.686768048 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:33927 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:22.696065327 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:33927 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:22.209575772 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:33927 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:22.705282390 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:33927 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:22.720335719 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:33927 (errno: 97 - Address family not supported by protocol).
+[W626 11:16:22.729116025 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [mg0014]:33927 (errno: 97 - Address family not supported by protocol).

@@ -1,4 +1,5 @@
 import os, psutil, math, copy
+from logging import getLogger
 from collections import defaultdict, Counter
 from typing import Literal, Any
 from contextlib import nullcontext
@@ -18,6 +19,8 @@ from src.data.tokenizer import VocEncoder
 from src.model import Model
 from src.train import get_optimizer_scheduler, get_process_ranks
 from src.train.looper import Looper
+
+logger = getLogger(__name__)
 
 class ReinforceModel(nn.Module):
     def __init__(self, model: Model, baseline):
@@ -60,8 +63,27 @@ def get_sample_stat(values: Tensor, idxs: Tensor) -> tuple[Tensor, Tensor]:
     return sample_means, sample_stds
 
 def all_gather_counter(c: dict) -> dict:
+
+    temps = [None]*dist.get_world_size()
+    
+
+
     cs = [None]*dist.get_world_size()
-    dist.all_gather_object(cs, c)
+    logger.debug(f"{c=}")
+    print(f"{c=}", flush=True)
+    c = dict(c)
+    try:
+        dist.all_gather_object(cs, c)
+    except Exception as e:
+        import sys, pickle
+        rank = dist.get_rank()
+        print(f"{rank=} {c=}", flush=True)
+        print(f"{rank=} {type(c)=}", flush=True)
+        print(f"{rank=} {sys.getsizeof(pickle.dumps(c))=}", flush=True)
+        for k, v in c.items():
+            print(f"{rank=} {k=}, {type(k)=}, {v=}, {type(v)=}", flush=True)
+        print(f"{rank=} log ended.", flush=True)
+        raise e
     all_c = {}
     for c in cs:
         for k, n in c.items():

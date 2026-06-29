@@ -335,7 +335,7 @@ class SampleWhitenNorm(Norm):
     def __call__(self, scores, idxs, weights):
 
 
-        if not self.mean and self.std:
+        if not self.mean and not self.std:
             return scores
 
         idx2mean, idx2std = get_sample_stat(scores, idxs, weights)
