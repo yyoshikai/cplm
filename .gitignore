@@ -11,6 +11,7 @@ tmp
 !/downstream/finetune
 !/downstream/finetune/*.py
 /tests
+/scripts
 /generate/*/*
 !/generate/protein_structure/*.py
 !/generate/pocket_structure/*.py

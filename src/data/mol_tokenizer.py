@@ -117,7 +117,6 @@ def smi_to_mol_orders_inv(smi: str, cls: Literal['rdkit', 'ob']) -> tuple[Chem.M
     orders_inv = np.argsort(orders)
     return mol, orders_inv
 
-
 def coord_stream(n_atom: int) \
         -> Generator[set[str], str, np.ndarray]:
     coord_tokenizer = FloatTokenizer('coord_stream', -250, 250)
