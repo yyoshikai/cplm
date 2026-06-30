@@ -113,6 +113,9 @@ def smi_to_mol_orders_inv(smi: str, cls: Literal['rdkit', 'ob']) -> tuple[Chem.M
         r = obc.ReadString(mol, smi)
         if not r:
             raise ValueError(f'SMILES is invalid: {smi}')
+        # rdkitで読み込めてもエラーになる場合がある
+        if mol.NumAtoms() == 0:
+            raise ValueError(f'SMILES is invalid: {smi}')
         orders = np.arange(mol.NumAtoms())
     orders_inv = np.argsort(orders)
     return mol, orders_inv

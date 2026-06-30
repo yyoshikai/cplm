@@ -8,7 +8,7 @@ from openbabel import openbabel as ob
 from ..lmdb import PickleLMDBDataset
 from ..data import Subset
 from ...chem import array_to_conf
-WORKDIR = os.environ.get('WORKDIR', __file__.split('/cplm/')[0])
+from ...utils.path import WORKDIR
 DEFAULT_UNIMOL_DIR = f"{WORKDIR}/cheminfodata/unimol"
 
 logger = getLogger(__name__)

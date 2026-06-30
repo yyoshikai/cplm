@@ -3,7 +3,6 @@ from logging import Logger, Formatter, Handler, StreamHandler, FileHandler, Filt
 from logging.handlers import RotatingFileHandler
 from collections.abc import Callable
 from tqdm import tqdm as _tqdm
-from .utils import get_git_hash
 
 DEFAULT_FMT = "[{asctime}][{name}][{levelname}]{message}"
 DEFAULT_DATEFMT = "%y%m%d %H:%M:%S"
@@ -91,10 +90,13 @@ def add_stream_handler(logger: Logger, level=logging.INFO, tqdm: bool=True,
 
     return handler
 
-def log_git_hash(logger):
-    logger.info(f"git hash={get_git_hash()}")
-
-from src.utils.rdkit.rdkit import set_rdkit_logger
+def set_rdkit_logger():
+    from rdkit import rdBase
+    rdBase.LogToPythonLogger()
+    rdkit_logger = logging.getLogger('rdkit')
+    for handler in rdkit_logger.handlers: 
+        rdkit_logger.removeHandler(handler)
+    return rdkit_logger
 
 def set_third_party_logger():
     # rdkit

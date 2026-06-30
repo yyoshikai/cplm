@@ -1,19 +1,12 @@
 import logging, gzip
 from collections import defaultdict
 from collections.abc import Iterator
-from rdkit import Chem, rdBase, RDLogger
+from rdkit import Chem, RDLogger
 from rdkit.Chem.Scaffolds import MurckoScaffold
 import numpy as np
 
 def ignore_rdkit_warning():
     RDLogger.DisableLog("rdApp.*")
-
-def set_rdkit_logger():
-    rdBase.LogToPythonLogger()
-    rdkit_logger = logging.getLogger('rdkit')
-    for handler in rdkit_logger.handlers: 
-        rdkit_logger.removeHandler(handler)
-    return rdkit_logger
 
 sanitize_ops = 0
 for k,v in Chem.rdmolops.SanitizeFlags.values.items():

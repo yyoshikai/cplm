@@ -25,7 +25,7 @@ class NoTokenRangeStreamer(WrapperStreamer):
 
 # Verbosity
 class TokenWriteStreamer(WrapperStreamer):
-    def __init__(self, streamer: Streamer, voc_encoder: VocEncoder, prompt_position: list[int], prompt_csv_path: str, new_csv_path: str):
+    def __init__(self, streamer: Streamer, voc_encoder: VocEncoder, prompt_position: list[int], prompt_csv_path: str|None, new_csv_path: str):
         super().__init__(streamer)
         self.voc_encoder = voc_encoder
         self.prompt_position = prompt_position
@@ -37,12 +37,11 @@ class TokenWriteStreamer(WrapperStreamer):
         tokens = self.voc_encoder.decode(tokens)
         if self.is_prompt:
             assert len(tokens) == len(self.prompt_position), f"{len(tokens)=} != {len(self.prompt_position)=}"
-            make_pardir(self.prompt_csv_path)
-            pd.DataFrame({'position': self.prompt_position, 'token': tokens}).to_csv(self.prompt_csv_path, index=False)
+            if self.prompt_csv_path is not None:
+                make_pardir(self.prompt_csv_path)
+                pd.DataFrame({'position': self.prompt_position, 'token': tokens}).to_csv(self.prompt_csv_path, index=False)
             self.prompt_position = None
-            make_pardir(self.new_csv_path)
-            with open(self.new_csv_path, 'w') as f:
-                f.write("position,token\n")
+            mwrite(self.new_csv_path, "position,token\n")
         else:
             if len(tokens) == 0: # generation is ended
                 return False, 0, [self.voc_encoder.pad_token]

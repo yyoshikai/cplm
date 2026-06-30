@@ -9,8 +9,6 @@ from torch.utils.data import Dataset
 from .data import WrapDataset
 from ..chem import obmol2pdb, pdb2obmol
 
-AtomRepr = Literal['none', 'atom', 'all']
-
 non_metals = [
     'H', 'He', 'B', 'C', 'N', 'O', 'F', 'Ne',
     'Si', 'P', 'S', 'Cl', 'Ar', 'As', 'Se', 'Br', 'Kr',

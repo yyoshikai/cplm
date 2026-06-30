@@ -3,6 +3,7 @@ import itertools as itr
 import concurrent.futures as cf
 from argparse import ArgumentParser, Namespace
 from logging import getLogger
+from glob import glob
 from typing import Literal
 warnings.filterwarnings("ignore", category=SyntaxWarning, message=r'".+" is an invalid escape sequence\. Such sequences will not work in the future\. Did you mean ".+"\? A raw string is also an option.')
 import pandas as pd
@@ -18,6 +19,7 @@ from rdkit import Chem
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import get_git_hash, wraps, filter_long, traceback_warning
+from src.utils.path import cleardir
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
 from src.evaluate import eval_vina_atom
@@ -94,13 +96,9 @@ class GetScoreStreamer(WrapperStreamer):
             reward = None
         self.out = reward
 
-
     def error(self):
-        ligand_error = self.ligand_streamer.error()
-        if ligand_error is not None:
-            return ligand_error
-        else:
-            return None
+        return self.ligand_streamer.error()
+
 
 def get_grads(model: nn.Module, prev_grads: dict[str, Tensor]|None):
     grads = { name: param.grad.clone() if param.grad is not None else None 
@@ -201,6 +199,14 @@ class Generator:
 
         rank = dist.get_rank()
 
+        # remove old rotation
+        tmp_dirs = glob(f"{self.result_dir}/generation/tmp/*")
+        if len(tmp_dirs) > 2:
+            tmp_steps = {tmp_dir: int(tmp_dir.split('/')[-1]) for tmp_dir in tmp_dirs}
+            for step, dir in tmp_steps.items():
+                if step > min(tmp_steps.values()):
+                    cleardir(dir)
+
         model.eval()
         with cf.ProcessPoolExecutor(self.num_score_workers) as e:
             self.train_looper.put('generator.get_streamer')
@@ -210,10 +216,9 @@ class Generator:
             streamers = []
             for idx, pdb in enumerate(pdbs):
                 streamer = ligand_streamer = LigandStreamer(self.mol_tokenizer, self.voc_encoder, '[END]', self.lig_cls)
-                out_dir = f"{self.result_dir}/generation/{step if do_save else 'tmp'}/{rank}_{idx}"
-                if do_save:
-                    streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf.sdf")
-                    streamer = TokenWriteStreamer(streamer, self.voc_encoder, positions[idx], f"{out_dir}/prompt_token.csv", f"{out_dir}/new_token.csv")
+                out_dir = f"{self.result_dir}/generation{'' if do_save else '/tmp'}/{step}/{rank}_{idx}"
+                streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf.sdf")
+                streamer = TokenWriteStreamer(streamer, self.voc_encoder, positions[idx], f"{out_dir}/prompt_token.csv", f"{out_dir}/new_token.csv")
                 streamer = GetScoreStreamer(streamer, ligand_streamer, e, self.target, pdb, 
                     out_dir, 
                     cpu=self.cpu, print_prepare=step < 3, valid_reward=self.valid_reward) 

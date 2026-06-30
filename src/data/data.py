@@ -184,32 +184,12 @@ class IndexIDataset(IterableDataset[tuple[int, T_co]]):
     def __iter__(self):
         yield from enumerate(self.dataset)
 
-class ConstantDataset(Dataset[T_co]):
-    def __init__(self, value: T_co, size: int):
-        self.size = size
-        self.value = value
-    def __getitem__(self, idx: int):
-        return self.value
-    def __len__(self):
-        return self.size
-
 class TensorDataset(WrapDataset[Tensor]):
     def __init__(self, dataset: Dataset, dtype=None):
         super().__init__(dataset)
         self.dtype = dtype
     def __getitem__(self, idx: int):
         return torch.tensor(self.dataset[idx], dtype=self.dtype)
-
-class WorkerIDataset(IterableDataset[T_co]):
-    def __init__(self, dataset: IterableDataset[T_co]):
-        self.dataset = dataset
-    def __iter__(self):
-        worker_info = get_worker_info()
-        if worker_info is not None:
-            size, rank = worker_info.num_workers, worker_info.id
-        else:
-            size, rank = 1, 0
-        yield from itr.islice(self.dataset, rank, None, size)
 
 def is_main_worker() -> bool:
     worker_info = get_worker_info()
@@ -330,3 +310,19 @@ def add_time_hook(data: Dataset|Sequence|Mapping, hook: DatasetTimeHook) -> Time
         if len(data) < 10:
             return type(data)({k: add_time_hook(v, hook) for k, v in data.items()})
     return data
+
+class ExceptNoneDataset[T](Dataset[T]):
+    logger = getLogger(f"{__module__}.{__qualname__}")
+
+    def __init__(self, dataset: Dataset[T]):
+        self.dataset = dataset
+    def __len__(self):
+        return len(self.dataset)
+    def __getitem__(self, idx: int):
+        if idx < 0 or len(self) <= idx:
+            raise IndexError
+        try:
+            return self.dataset[idx]
+        except Exception as e:
+            logger.debug(f"Error at {type(self.dataset).__name__}[{idx}]: {type(e).__name__}{e.args}")
+            return None
