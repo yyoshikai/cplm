@@ -5,7 +5,7 @@ from typing import Literal
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import Conformer
-from rdkit.Chem.rdDetermineBonds import DetermineBonds
+from rdkit.Chem.rdDetermineBonds import DetermineBonds, DetermineConnectivity
 from rdkit.Geometry import Point3D
 from openbabel.openbabel import OBMol, OBConversion
 from openbabel import openbabel as ob
@@ -105,7 +105,15 @@ def atoms_coords_to_mol(atoms: list[str], coords: np.ndarray, cls: Literal['rdki
             atom = Chem.Atom('C' if atom == 'CA' else atom)
             mol.AddAtom(atom)
         mol.AddConformer(array_to_conf(coords))
-        DetermineBonds(mol)
+        
+        has_h = any(atom.upper() == 'H' for atom in atoms)
+        if not has_h:
+            DetermineConnectivity(mol)
+            mol = Chem.AddHs(mol, addCoords=True)
+            DetermineBonds(mol)
+            mol = Chem.RemoveHs(mol)
+        else:
+            DetermineBonds(mol)
     else:
         mol = ob.OBMol()
         for i in range(len(atoms)):
