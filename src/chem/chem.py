@@ -101,7 +101,6 @@ def atoms_coords_to_mol(atoms: list[str], coords: np.ndarray, cls: Literal['rdki
     assert coords.shape == (len(atoms), 3)
     if cls == 'rdkit':
         mol = Chem.RWMol()
-        pt = Chem.GetPeriodicTable()
         for atom in atoms:
             atom = Chem.Atom('C' if atom == 'CA' else atom)
             mol.AddAtom(atom)
