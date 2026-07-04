@@ -177,7 +177,7 @@ class LigandStreamer(Streamer):
     def put(self, tokens: list[int]) -> tuple[bool, int, list[int]]:
         if self.is_init:
             pos_offset = len(tokens)
-            stream = self.mol_tokenizer.decode_stream(self.end_token, self.cls)
+            stream = self.mol_tokenizer.decode_stream(self.end_token, 'rdkit')
             stream = pos_offset_stream(stream, pos_offset)
             self.stream = encode_token_stream(stream, self.voc_encoder)
             token_range, position = next(self.stream)
@@ -190,8 +190,6 @@ class LigandStreamer(Streamer):
                 return True, position, token_range
             except StopIteration as e:
                 ligand, self._atom_poss, self._coord_posss = e.value
-                if isinstance(ligand, ob.OBMol):
-                    ligand = obmol2rdmol(ligand, sanitize=False)
                 self._ligand = ligand
                 
                 self._error = None

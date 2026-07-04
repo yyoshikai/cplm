@@ -105,15 +105,7 @@ def atoms_coords_to_mol(atoms: list[str], coords: np.ndarray, cls: Literal['rdki
             atom = Chem.Atom('C' if atom == 'CA' else atom)
             mol.AddAtom(atom)
         mol.AddConformer(array_to_conf(coords))
-        
-        has_h = any(atom.upper() == 'H' for atom in atoms)
-        if not has_h:
-            DetermineConnectivity(mol)
-            mol = Chem.AddHs(mol, addCoords=True)
-            DetermineBonds(mol)
-            mol = Chem.RemoveHs(mol)
-        else:
-            DetermineBonds(mol)
+        DetermineBonds(mol)
     else:
         mol = ob.OBMol()
         for i in range(len(atoms)):

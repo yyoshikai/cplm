@@ -96,10 +96,11 @@ def smi_to_mol_orders_inv(smi: str, cls: Literal['rdkit', 'ob']) -> tuple[Chem.M
         mol = Chem.MolFromSmiles(smi, param)
         if mol is None:
             raise ValueError('SMILES is invalid.')
-        smi_out = Chem.MolToSmiles(mol, canonical=False)
-        if smi_out != smi: 
-            raise ValueError('SMILES mismatch.')
-        orders = np.array(eval(mol.GetProp('_smilesAtomOutputOrder')))
+        # smi_out = Chem.MolToSmiles(mol, canonical=False)
+        # if smi_out != smi: 
+        #     raise ValueError('SMILES mismatch.')
+        # orders = np.array(eval(mol.GetProp('_smilesAtomOutputOrder')))
+        orders = np.arange(mol.GetNumAtoms())
     else:
         # Validate SMILES with RDKit to prevent OpenBabel segmentation fault on invalid strings
         param = Chem.SmilesParserParams()
@@ -529,6 +530,10 @@ def get_mol_tokenizer(
     smiles_voc_dir: str, 
     h: bool,
 ) -> MolTokenizer:
+    if not h and format in ['atoms_coords', 'atom_coords', 'atom_valence_coords', 'ordered_atoms_coords']:
+        # 水素が無いと, DetermineBonds ができないので原子と座標だけから分子を作ることができない
+        # (openbabelならできるが。。)
+        raise ValueError(f"{h=} and {format=} is not supported.")
     assert order in ['residue', 'ran', 'can']
     match format:
         case 'atoms_coords':
