@@ -19,7 +19,7 @@ from rdkit import Chem
 from src.data._sampler import InfiniteRandomSampler
 from src.data import index_dataset
 from src.utils import get_git_hash, wraps, filter_long, traceback_warning
-from src.utils.path import cleardir
+from src.utils.path import _cleardir
 from src.utils.rdkit import ignore_rdkit_warning
 from src.utils.logger import NO_DUP
 from src.evaluate import eval_vina_atom
@@ -184,6 +184,7 @@ class Generator:
         self.device = device
         self.valid_reward = valid_reward
 
+
     def generate(
             self,
             model: Model, 
@@ -201,11 +202,12 @@ class Generator:
 
         # remove old rotation
         tmp_dirs = glob(f"{self.result_dir}/generation/tmp/*")
-        if len(tmp_dirs) > 2:
+        if rank == 0:
             tmp_steps = {tmp_dir: int(tmp_dir.split('/')[-1]) for tmp_dir in tmp_dirs}
-            for step, dir in tmp_steps.items():
-                if step > min(tmp_steps.values()):
-                    cleardir(dir)
+            for dir, step in tmp_steps.items():
+                if step != max(tmp_steps.values()):
+                    _cleardir(dir)
+        dist.barrier(device_ids=[torch.cuda.current_device()]) # OK?
 
         model.eval()
         with cf.ProcessPoolExecutor(self.num_score_workers) as e:
@@ -320,6 +322,26 @@ class ErrorRecordGenerator(Generator):
             self.is_empty = False
         with open(self.path, 'a') as f:
             f.write(','.join(str(e) for e in errors)+'\n')
+        return token, position, weight, scores, errors
+
+class ScoreRecordGenerator(Generator):
+    def __init__(self, generator: Generator, result_dir: str):
+        self.generator = generator
+        self.path = f"{result_dir}/scores/{dist.get_rank()}.csv"
+        self.is_empty = True
+    
+    @wraps(Generator.generate)
+    def generate(self, *args, **kwargs):
+        token, position, weight, scores, errors = self.generator.generate(*args, **kwargs)
+        if self.is_empty:
+            batch_size = len(errors)
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, 'w') as f:
+                f.write(','.join(str(i) for i in range(batch_size))+'\n')
+            self.is_empty = False
+        total_scores = scores.sum(dim=1).tolist()
+        with open(self.path, 'a') as f:
+            f.write(','.join(str(score) for score in scores)+'\n')
         return token, position, weight, scores, errors
 
 def save_and_disable_memory_history(path: str):
@@ -484,6 +506,7 @@ def main():
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)
     generator = ErrorRecordGenerator(generator, result_dir)
+    generator = ScoreRecordGenerator(generator, result_dir)
     
     log_optimizer = 'optimizer' in args.check
     trainer = ReinforceTrainer(model_, args.trainer, args.max_opt, args.weight_decay_all, args.weight_decay, args.schedule_free, args.scheduler, args.lr, args.warmup_ratio, log_optimizer, args.mbatch_size, args.gpu_size, args.adv_sample_whiten, args.loss_scale, args.kl_factor, args.value_factor, train_looper, args.clip_grad_value, args.clip_grad_norm, result_dir)

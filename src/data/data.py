@@ -311,10 +311,10 @@ def add_time_hook(data: Dataset|Sequence|Mapping, hook: DatasetTimeHook) -> Time
             return type(data)({k: add_time_hook(v, hook) for k, v in data.items()})
     return data
 
-class ExceptNoneDataset[T](Dataset[T]):
+class ExceptNoneDatase(Dataset):
     logger = getLogger(f"{__module__}.{__qualname__}")
 
-    def __init__(self, dataset: Dataset[T]):
+    def __init__(self, dataset: Dataset):
         self.dataset = dataset
     def __len__(self):
         return len(self.dataset)
