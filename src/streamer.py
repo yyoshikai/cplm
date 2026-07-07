@@ -86,10 +86,12 @@ class PositionSaveStreamer(WrapperStreamer):
     def __init__(self, streamer: Streamer):
         super().__init__(streamer)
         self.new_positions = []
+        self.last_position = None
     def put(self, tokens: list[int]):
         is_remain, position, token_range = self.streamer.put(tokens)
-        if is_remain:
-            self.new_positions.append(position)
+        if self.last_position is not None:
+            self.new_positions.append(self.last_position)
+        self.last_position = position
         return is_remain, position, token_range
 
 class TimeLogStreamer(WrapperStreamer):
