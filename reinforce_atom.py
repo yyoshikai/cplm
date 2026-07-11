@@ -339,7 +339,7 @@ class ScoreRecordGenerator(Generator):
             with open(self.path, 'w') as f:
                 f.write(','.join(str(i) for i in range(batch_size))+'\n')
             self.is_empty = False
-        total_scores = [score.sum() if score is not None else '' for score in scores]
+        total_scores = [score.sum().item() if score is not None else '' for score in scores]
         with open(self.path, 'a') as f:
             f.write(','.join(map(str, total_scores))+'\n')
         return token, position, weight, scores, errors

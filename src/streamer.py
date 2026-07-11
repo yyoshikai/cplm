@@ -1,19 +1,17 @@
 import re
 from time import time
-from collections.abc import Generator, Callable
+from collections.abc import Callable
 from logging import getLogger
 from typing import Literal
-import numpy as np, pandas as pd
+import pandas as pd
 import torch
 from tqdm import tqdm
 from rdkit import Chem
-from openbabel import openbabel as ob
 from .utils import should_show
 from .utils.path import make_pardir, mwrite
 from .model import Streamer, WrapperStreamer
 from .data.tokenizer import VocEncoder
 from .data.mol_tokenizer import MolTokenizer, encode_token_stream, pos_offset_stream
-from .chem.convert import obmol2rdmol
 
 class NoTokenRangeStreamer(WrapperStreamer):
     def __init__(self, streamer: Streamer, voc_size):
@@ -231,6 +229,7 @@ class SaveLigandStreamer(WrapperStreamer):
         output = self.streamer.put(tokens)
         mol = self.streamer.ligand()
         if mol is not None:
+            make_pardir(self.new_sdf_path)
             with open(self.new_sdf_path, 'w') as f:
                 f.write(Chem.MolToMolBlock(mol))
 

@@ -9,9 +9,10 @@ from src.utils.path import mwrite
 from src.data import StackDataset, Subset, index_dataset
 from src.data.molecule import Mol2PDBDataset
 from src.data.tokenizer import StringTokenizer2, VocEncoder
+from src.data.mol_tokenizer import get_mol_tokenizer
 from src.train.data import get_finetune_data
 from src.generate import generate
-from src.generate.streamer import get_ligand_streamer, SaveLigandStreamer, TokenWriteStreamer, RangeWriteStreamer, NoTokenRangeStreamer
+from src.streamer import LigandStreamer, SaveLigandStreamer, TokenWriteStreamer, RangeWriteStreamer, NoTokenRangeStreamer
 
 
 if __name__ == '__main__':
@@ -59,38 +60,36 @@ if __name__ == '__main__':
         yaml.dump(vars(args), f)
 
     added_vocs = StringTokenizer2(f"src/data/vocs/{fargs.smiles_voc_dir}").vocs()
-    _voc_encoder, _raw, rec_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=False, random_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False)
+    _voc_encoder, _raw, rec_data, _lig, prompt_token_data, position_data, _weight, center_data, data_logs = get_finetune_data(fargs, 'test', 1.0, add_ligand=False, random_ligand=False, random_rotate=False, added_vocs=added_vocs, prompt_score='none' if fargs.no_score else 'low', encode=False, tensor_position=False)
     rec_pdb_data = Mol2PDBDataset(rec_data)
 
     idx_data, prompt_token_data = index_dataset(prompt_token_data)
     prompt_data = StackDataset(idx_data, rec_pdb_data, prompt_token_data, position_data)
+
     if args.n is not None and args.n < len(prompt_data):
         sample_idxs = np.random.default_rng(args.sample_seed).choice(len(prompt_data), args.n, replace=False)
         prompt_data = Subset(prompt_data, sample_idxs)
     N = len(prompt_data)
-
+    mol_tokenizer = get_mol_tokenizer(fargs.lig_format, fargs.lig_order, fargs.smiles_voc_dir, fargs.lig_h)
     get_token_position_fn = lambda item: (item[2], item[3])
 
     with cf.ProcessPoolExecutor() as e:
-        if fargs.lig_format == 'smiles_coords':
-            def streamer_fn(item, i_trial, voc_encoder: VocEncoder):
-                idx, rec_pdb, prompt_token, position = item
-                pdb_path = f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb"
-                mwrite(pdb_path, rec_pdb)
-                streamer = get_ligand_streamer(fargs.lig_format, fargs.coord_range, voc_encoder, fargs.lig_h, fargs.lig_cls, fargs.smiles_voc_dir)
-                if args.no_token_range:
-                    streamer = NoTokenRangeStreamer(streamer, voc_encoder.voc_size)
-                streamer = SaveLigandStreamer(streamer)
-                streamer = TokenWriteStreamer(streamer, voc_encoder,
-                    prompt_position=position,
-                    prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv",
-                    new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}.csv",
-                )
-                if args.check_token_range and (idx*5//N) == i_trial > ((idx-1)*5//N):
-                    streamer = RangeWriteStreamer(streamer, voc_encoder,
-                    range_path=f"{out_dir}/token_range/{idx}_{i_trial}.txt"
-                )
-                return streamer
-        else:
-            raise NotImplementedError
-        generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=None, batch_size=args.batch_size, seed=args.seed)
+        def streamer_fn(item, i_trial, voc_encoder: VocEncoder):
+            idx, rec_pdb, prompt_token, position = item
+            pdb_path = f"{out_dir}/prompt_rec_pdb/{idx}/{i_trial}.pdb"
+            mwrite(pdb_path, rec_pdb)
+            streamer = LigandStreamer(mol_tokenizer, voc_encoder, '[END]', 'rdkit')
+            if args.no_token_range:
+                streamer = NoTokenRangeStreamer(streamer, voc_encoder.voc_size)
+            streamer = SaveLigandStreamer(streamer, f"{out_dir}/new_sdf/{idx}/{i_trial}.sdf")
+            streamer = TokenWriteStreamer(streamer, voc_encoder,
+                prompt_position=position,
+                prompt_csv_path=f"{out_dir}/prompt_token/{idx}/{i_trial}.csv",
+                new_csv_path=f"{out_dir}/new_token/{idx}/{i_trial}.csv",
+            )
+            if args.check_token_range and (idx*5//N) == i_trial > ((idx-1)*5//N):
+                streamer = RangeWriteStreamer(streamer, voc_encoder,
+                range_path=f"{out_dir}/token_range/{idx}_{i_trial}.txt"
+            )
+            return streamer
+        generate(out_dir, fargs, model_path, prompt_data, streamer_fn, get_token_position_fn, max_n_sample=args.trial, max_prompt_len=math.inf, max_new_token=2500, batch_size=args.batch_size, seed=args.seed)

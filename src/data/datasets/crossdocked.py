@@ -63,7 +63,7 @@ class CDProteinTestDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]
                 mol = next(sup)
         else:
             with gzip.open(ligands_path, 'rt') as f:
-                sdf = f.read().split('$$$$')[sdf_idx]
+                sdf = f.read().split('$$$$\n')[sdf_idx]
             if self.out_cls == 'ob':
                 obc = ob.OBConversion()
                 obc.SetInFormat('sdf')
