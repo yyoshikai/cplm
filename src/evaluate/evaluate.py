@@ -110,7 +110,7 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
 
         with subprocess.Popen('/bin/bash', shell=False, stdin=subprocess.PIPE, 
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
-            path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/bin/qvina02")
+            path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/qvina02")
             command = f"cd {out_dir} && {path_to_qvina} --receptor rec.pdbqt --ligand lig.pdbqt --center_x {center[0]:.4f} --center_y {center[1]:.4f} --center_z {center[2]:.4f} --size_x 20 --size_y 20 --size_z 20 --exhaustiveness {exhaustiveness}"
             if cpu is not None:
                 command += f" --cpu {cpu}"

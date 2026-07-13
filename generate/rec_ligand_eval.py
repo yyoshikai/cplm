@@ -1,5 +1,6 @@
 import sys, os, math, yaml
 import itertools as itr
+from contextlib import nullcontext
 import concurrent.futures as cf
 from argparse import ArgumentParser
 from collections import defaultdict
@@ -60,20 +61,29 @@ if __name__ == '__main__':
 
     add_file_handler(get_logger(stream=True), f"{out_dir}/eval.log", mode='a')
 
-    with cf.ProcessPoolExecutor(args.num_workers) as e:
+    with cf.ProcessPoolExecutor(args.num_workers) if args.num_workers > 0 else nullcontext() as e:
         futures = []
         for lig_sdf_path in sorted(glob(f"{out_dir}/new_sdf/*/*.sdf")):
             *_, i, bname = lig_sdf_path.split('/')
             t = bname.split('.')[0]
             with open(lig_sdf_path) as f:
                 lig_sdf = f.read()
+            eargs = out_dir, i, t, lig_sdf
             if not os.path.exists(f"{out_dir}/eval/vina_score/{i}/{t}.txt") \
                     or not os.path.exists(f"{out_dir}/eval/min_vina_score/{i}/{t}.txt"):
-                futures.append(e.submit(eval_vina2, out_dir, i, t, lig_sdf))
+                if e is None:
+                    eval_vina2(*eargs)
+                else:
+                    futures.append(e.submit(eval_vina2, *eargs))
+                
             if not os.path.exists(f"{out_dir}/eval/qvina_score/{i}/{t}.txt"):
-                futures.append(e.submit(eval_qvina2, out_dir, i, t, lig_sdf, ))
-        for f in futures:
-            f.result()
+                if e is None:
+                    eval_qvina2(*eargs)
+                else:
+                    futures.append(e.submit(eval_qvina2, *eargs))
+        if e is not None:
+            for f in futures:
+                f.result()
     
     os.makedirs(f"{out_dir}/eval", exist_ok=True)
     for metric in ['vina', 'min_vina', 'qvina']:
