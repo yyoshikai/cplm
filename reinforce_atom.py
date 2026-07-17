@@ -40,17 +40,18 @@ error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0
 
 class GetScoreStreamer(WrapperStreamer):
     logger = getLogger(__qualname__)
-    def __init__(self, streamer: Streamer, ligand_streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool, valid_reward: float):
+    def __init__(self, streamer: Streamer, ligand_streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool, valid_reward: float, dist_penalty: float):
         super().__init__(streamer)
         self.ligand_streamer = ligand_streamer
         self.e = e
-        self.kwargs = dict(target=target, rec_pdb=rec_pdb)
+        self.rec_pdb = rec_pdb
         self.future = None
         self.out = None
         self.target = target
         self.prompt_size = None
         self.gen_size = 0
         self.valid_reward = valid_reward
+        self.dist_penalty = dist_penalty
     def put(self, tokens):
         is_remain, position, token_range = self.streamer.put(tokens)
         if self.prompt_size is None:
@@ -59,11 +60,11 @@ class GetScoreStreamer(WrapperStreamer):
             assert len(tokens) == 1
             self.gen_size += 1
         if not is_remain and self.ligand_streamer.error() is None:
-            self.future = self.e.submit(eval_vina_atom, molecule=self.ligand_streamer.ligand(), **self.kwargs)
+            self.future = self.e.submit(eval_vina_atom, molecule=self.ligand_streamer.ligand(), protein=self.rec_pdb)
         return is_remain, position, token_range
     def result(self):
         if self.future is not None:
-            free_energy, E_inter, E_intra = self.future.result()
+            free_energy, E_inter, E_intra, penalized = self.future.result()
             score_inter, score_intra = -E_inter, -E_intra
 
             # Reward
@@ -79,8 +80,10 @@ class GetScoreStreamer(WrapperStreamer):
             reward[coord_poss] += score_inter.unsqueeze(-1) * 0.5 / 6
 
             ## distance reward
-
-
+            if self.dist_penalty > 0.0:
+                penalized_t = torch.tensor(penalized, dtype=torch.float)
+                reward[atom_poss] -= penalized_t * self.dist_penalty * 0.5
+                reward[coord_poss] -= penalized_t.unsqueeze(-1) * self.dist_penalty * 0.5 / 6
 
             atom_order = torch.argsort(atom_poss)
             coord_order = torch.argsort(coord_poss[:,0])
@@ -172,7 +175,8 @@ class Generator:
             lig_cls: Literal['rdkit', 'ob'], 
             target: str,
             device: torch.device,
-            valid_reward: float):
+            valid_reward: float,
+            dist_penalty: float):
         self.voc_encoder = voc_encoder
         self.mol_tokenizer = mol_tokenizer
         self.result_dir = result_dir
@@ -184,6 +188,7 @@ class Generator:
         self.target = target
         self.device = device
         self.valid_reward = valid_reward
+        self.dist_penalty = dist_penalty
 
 
     def generate(
@@ -224,7 +229,8 @@ class Generator:
                 streamer = TokenWriteStreamer(streamer, self.voc_encoder, positions[idx], f"{out_dir}/prompt_token.csv", f"{out_dir}/new_token.csv")
                 streamer = GetScoreStreamer(streamer, ligand_streamer, e, self.target, pdb, 
                     out_dir, 
-                    cpu=self.cpu, print_prepare=step < 3, valid_reward=self.valid_reward) 
+                    cpu=self.cpu, print_prepare=step < 3, valid_reward=self.valid_reward,
+                    dist_penalty=self.dist_penalty) 
                 score_streamers.append(streamer)
                 streamer = TokenSaveStreamer(streamer)
                 token_streamers.append(streamer)
@@ -503,7 +509,7 @@ def main():
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
     mol_tokenizer = get_mol_tokenizer(fargs.lig_format, fargs.lig_order, fargs.smiles_voc_dir, fargs.lig_h)
-    generator = Generator(voc_encoder, mol_tokenizer, result_dir, train_looper, args.max_new_token, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward)
+    generator = Generator(voc_encoder, mol_tokenizer, result_dir, train_looper, args.max_new_token, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward, args.dist_penalty)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)

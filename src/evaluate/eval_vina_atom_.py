@@ -483,5 +483,56 @@ def eval_vina_atom(molecule, protein):
     free_energy = E_inter.sum()
 
     # Distance penalty
+    penalized_all = np.zeros(n_atom_all, dtype=bool)
+    
+    # 1. Determine which ligand heavy atoms are close to any protein atom (< 4Å)
+    is_close = {}
+    for latom in lig_atoms:
+        idx = latom['idx']
+        lx, ly, lz = latom['pos']
+        close = False
+        for ratom in rec_atoms:
+            rx, ry, rz = ratom['pos']
+            dist_sq = (lx - rx)**2 + (ly - ry)**2 + (lz - rz)**2
+            if dist_sq < 16.0: # 4.0^2
+                close = True
+                break
+        is_close[idx] = close
 
-    return free_energy, E_inter_all, E_intra_all
+    # 2. Group ligand heavy atom indices by rigid component ID
+    comp_to_atoms = {}
+    for latom in lig_atoms:
+        idx = latom['idx']
+        comp_id = rigid_comps.get(idx)
+        if comp_id is not None:
+            if comp_id not in comp_to_atoms:
+                comp_to_atoms[comp_id] = []
+            comp_to_atoms[comp_id].append(idx)
+            
+    # For each rigid component, check if any of its atoms is close (< 4Å)
+    comp_close = {}
+    for comp_id, atom_idxs in comp_to_atoms.items():
+        comp_close[comp_id] = any(is_close[idx] for idx in atom_idxs)
+
+    # 3. Check penalty conditions for each heavy atom
+    for latom in lig_atoms:
+        idx = latom['idx']
+        
+        # If the atom itself is close, it is not penalized
+        if is_close[idx]:
+            continue
+            
+        # If any adjacent atom is close, it is not penalized
+        nbrs = mol.GetAtomWithIdx(idx).GetNeighbors()
+        if any(is_close.get(nbr.GetIdx(), False) for nbr in nbrs):
+            continue
+            
+        # If any atom in the same rigid component is close, it is not penalized
+        comp_id = rigid_comps.get(idx)
+        if comp_id is not None and comp_close.get(comp_id, False):
+            continue
+            
+        # If we get here, the atom is penalized
+        penalized_all[idx] = True
+
+    return free_energy, E_inter_all, E_intra_all, penalized_all
