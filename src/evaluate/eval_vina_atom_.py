@@ -482,4 +482,6 @@ def eval_vina_atom(molecule, protein):
 
     free_energy = E_inter.sum()
 
+    # Distance penalty
+
     return free_energy, E_inter_all, E_intra_all

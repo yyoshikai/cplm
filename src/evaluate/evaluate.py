@@ -1,4 +1,4 @@
-import os
+import os, subprocess
 from logging import getLogger
 import subprocess
 from typing import TypeVar, Optional
@@ -16,46 +16,52 @@ logger = getLogger(__name__)
 
 T = TypeVar('T')
 
-def eval_vina(ligand: OBMol|str, rec: OBMol|str, rec_pdbqt_path: str) -> tuple[float, float]:
+DELIM = "__REC_LIG_DELIM__"
+
+def _eval_vina(lig_sdf, rec_pdb, rec_pdbqt_path):
+    ligand = sdf2obmol(lig_sdf)
+    obc = OBConversion()
+    obc.SetOutFormat('pdbqt')
+    obc.AddOption('c', obc.OUTOPTIONS)
+    ligand.AddHydrogens()
+    ligand_str = obc.WriteString(ligand)
+    lig_center = get_coords(ligand).mean(axis=0)
+    make_pardir(rec_pdbqt_path)
+    rec = pdb2obmol(rec_pdb)
+    rec.AddHydrogens()
+    obc.AddOption('r', obc.OUTOPTIONS)
+    obc.WriteFile(rec, rec_pdbqt_path)
+    obc.CloseOutFile()
+    v = Vina(verbosity=0)
+    v.set_receptor(rec_pdbqt_path)
+    v.set_ligand_from_string(ligand_str)
+    v.compute_vina_maps(lig_center.tolist(), [20, 20, 20])
+    score = v.score()[0]
+    min_score = v.optimize()[0]
+    return score, min_score
+
+def eval_vina(lig_sdf: str, rec_pdb: str, rec_pdbqt_path: str) -> tuple[float, float]:
     """
-    cf.ProcessPoolExecutorに投げられるよう, strも受け付ける。
+    処理の本体は _eval_vina_worker
+    普通に実行するとVinaでC++のエラー(pythonで捕捉できず処理が止まる) が出ることがあるので, multiprocessingで処理を分離
 
     Parameters
     ----------
-    ligand: OBMol|str
-        OBMol object or SDF string
-    protein: OBMol|str
-        OBMol object or PDB string
+    lig_sdf: str
+        SDF string
+    rec_pdb: str
+        PDB string
     """
-    score = min_score = error = None
-    try:
-        if isinstance(ligand, str):
-            ligand = sdf2obmol(ligand)
-        obc = OBConversion()
-        obc.SetOutFormat('pdbqt')
-        obc.AddOption('c', obc.OUTOPTIONS)
-        ligand.AddHydrogens()
-        ligand_str = obc.WriteString(ligand)
-        lig_center = get_coords(ligand).mean(axis=0)
-
-        make_pardir(rec_pdbqt_path)
-        if isinstance(rec, str):
-            rec = pdb2obmol(rec)
-        rec.AddHydrogens()
-        obc.AddOption('r', obc.OUTOPTIONS)
-        obc.WriteFile(rec, rec_pdbqt_path)
-        obc.CloseOutFile()
-
-        v = Vina(verbosity=0)
-        v.set_receptor(rec_pdbqt_path)
-        v.set_ligand_from_string(ligand_str)
-        v.compute_vina_maps(lig_center.tolist(), [20, 20, 20])
-        score = v.score()[0]
-        min_score = v.optimize()[0]
-        
-    except Exception as e:
-        error = e
-    return score, min_score, error
+    r = subprocess.run(
+        ["python", "-m", "src.evaluate._eval_vina_worker", rec_pdbqt_path],
+        input = f"{lig_sdf}{DELIM}{rec_pdb}", 
+        capture_output=True, text=True
+    )
+    if r.returncode == 0:
+        score, min_score = map(float, r.stdout.strip().split(' '))
+        return score, min_score, None
+    else:
+        return None, None, r.stderr
 
 def parse_qvina_out(path: str) -> float:
     obc = OBConversion()
@@ -107,7 +113,6 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
         
         with silence_print(not print_prepare):
             prepare_receptor4_func(['-r', rec_pdb_path, '-o', f'{out_dir}/rec.pdbqt'])
-
         with subprocess.Popen('/bin/bash', shell=False, stdin=subprocess.PIPE, 
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
             path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/qvina02")

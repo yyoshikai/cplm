@@ -7,7 +7,7 @@ from collections import defaultdict
 from logging import getLogger
 from glob import glob
 import numpy as np, pandas as pd
-from openbabel.openbabel import OBConversion, OBMol
+from openbabel.openbabel import OBConversion
 from tqdm import tqdm
 from src.utils.path import mwrite
 from src.utils.logger import get_logger, add_file_handler
@@ -19,8 +19,8 @@ def eval_vina2(out_dir, i, t, lig_sdf):
     with open(f"{out_dir}/prompt_rec_pdb/{i}/{t}.pdb") as f:
         rec_pdb = f.read()
     vina, min_vina, error = eval_vina(
-        ligand=lig_sdf, 
-        rec=rec_pdb, 
+        lig_sdf=lig_sdf, 
+        rec_pdb=rec_pdb, 
         rec_pdbqt_path=f"{out_dir}/eval/rec_pdbqt/{i}/{t}.pdbqt"
     )
     mwrite(f"{out_dir}/eval/vina_score/{i}/{t}.txt", str(vina))

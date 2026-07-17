@@ -37,7 +37,7 @@ WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
 def get_atom_score(target: str,lig_rdmol: Chem.Mol, rec_pdb: str):
     assert target == 'vina'
-    free_energy, E_inter, E_intra = eval_vina_atom(lig_rdmol, rec_pdb)
+    free_energy, E_inter, E_intra, topo_dist, rigit_comps = eval_vina_atom(lig_rdmol, rec_pdb)
     return -free_energy, -E_inter, -E_intra
 
 # 参考
@@ -64,21 +64,27 @@ class GetScoreStreamer(WrapperStreamer):
             assert len(tokens) == 1
             self.gen_size += 1
         if not is_remain and self.ligand_streamer.error() is None:
-            self.future = self.e.submit(get_atom_score, lig_rdmol=self.ligand_streamer.ligand(), **self.kwargs)
+            self.future = self.e.submit(eval_vina_atom, molecule=self.ligand_streamer.ligand(), **self.kwargs)
         return is_remain, position, token_range
     def result(self):
         if self.future is not None:
-            out = self.future.result()
+            free_energy, E_inter, E_intra, topo_dist, rigit_comps = self.future.result()
+            score_inter, score_intra = -E_inter, -E_intra
+
+            # Reward
             atom_poss, coord_poss = self.ligand_streamer.atom_poss()
             atom_poss = torch.tensor(atom_poss)
             coord_poss = torch.tensor(coord_poss) # [Na, 6]
-            _, score_inter, score_intra = out # [Na,], [Na, Na]
+            reward = torch.zeros(self.gen_size, dtype=torch.float)
+
+            ## score reward
             score_inter = torch.tensor(score_inter, dtype=torch.float)
             score_intra = torch.tensor(score_intra, dtype=torch.float)
-
-            reward = torch.zeros(self.gen_size, dtype=torch.float)
             reward[atom_poss] += score_inter * 0.5
             reward[coord_poss] += score_inter.unsqueeze(-1) * 0.5 / 6
+
+            ## distance reward
+            
 
 
             atom_order = torch.argsort(atom_poss)
@@ -363,6 +369,7 @@ def main():
     parser.add_argument('--sample-whiten', nargs='*', choices=['mean', 'std'], default=['mean', 'std'])
     parser.add_argument('--adv-sample-whiten', nargs='*', choices=['mean', 'std'], default=['mean', 'std'])
     parser.add_argument('--error-score', type=float, default=0.0)
+    parser.add_argument('--dist-penalty', type=float, default=1.0)
     ## Trainer
     ### PPO
     parser.add_argument('--n-ppo-step', type=int, default=5)
