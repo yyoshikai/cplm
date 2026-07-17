@@ -35,11 +35,6 @@ from src.streamer import WrapperStreamer, LigandStreamer, SaveLigandStreamer, To
 from src.train.reinforce_atom import ReinforceTrainer, SaveBatchTrainer, SaveStepTrainer, GetMemoryTrainer, Norms, FillNorm, SampleWhitenNorm
 WORKDIR = os.environ.get('WORKDIR', os.path.abspath('..'))
 
-def get_atom_score(target: str,lig_rdmol: Chem.Mol, rec_pdb: str):
-    assert target == 'vina'
-    free_energy, E_inter, E_intra, topo_dist, rigit_comps = eval_vina_atom(lig_rdmol, rec_pdb)
-    return -free_energy, -E_inter, -E_intra
-
 # 参考
 error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0, 'dummy': 0.0}
 
@@ -68,7 +63,7 @@ class GetScoreStreamer(WrapperStreamer):
         return is_remain, position, token_range
     def result(self):
         if self.future is not None:
-            free_energy, E_inter, E_intra, topo_dist, rigit_comps = self.future.result()
+            free_energy, E_inter, E_intra = self.future.result()
             score_inter, score_intra = -E_inter, -E_intra
 
             # Reward
@@ -84,7 +79,7 @@ class GetScoreStreamer(WrapperStreamer):
             reward[coord_poss] += score_inter.unsqueeze(-1) * 0.5 / 6
 
             ## distance reward
-            
+
 
 
             atom_order = torch.argsort(atom_poss)
