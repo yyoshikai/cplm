@@ -190,7 +190,6 @@ class Generator:
         self.valid_reward = valid_reward
         self.dist_penalty = dist_penalty
 
-
     def generate(
             self,
             model: Model, 
@@ -351,11 +350,33 @@ class ScoreRecordGenerator(Generator):
             f.write(','.join(map(str, total_scores))+'\n')
         return token, position, weight, scores, errors
 
+# タンパク質固定用
+from openbabel import openbabel as ob
+from src.chem import read_pdb_path
+from src.data import TupleDataset
+from src.data.datasets.crossdocked import CDDIR
+from src.data.datasets.unimol import UniMolLigandDataset
+class CDNamedDataset(TupleDataset[tuple[ob.OBMol, None, None]]):
+    """
+    リガンド・スコアはNoneとなる
+    
+    """
+    def __init__(self, names: list[str], out_cls: Literal['ob', 'rdkit', 'text']):
+        super().__init__(3)
+        self.names = names
+        self.out_cls = out_cls
+        self.dummy_mol = UniMolLigandDataset('valid', self.out_cls)[0]
+
+    def __getitem__(self, idx):
+        return read_pdb_path(f"{CDDIR}/CrossDocked2020/{self.names[idx]}_rec.pdb", self.out_cls), self.dummy_mol, None
+
+    def __len__(self):
+        return len(self.names)
+
 def save_and_disable_memory_history(path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.cuda.memory._dump_snapshot(path)
     torch.cuda.memory._record_memory_history(None)
-
 
 @record
 def main():
@@ -377,6 +398,7 @@ def main():
     parser.add_argument('--ppo-clip-eps', type=float, default=0.2)
     ## Data
     parser.add_argument('--max-prompt-len', type=int)
+    parser.add_argument('--protein', nargs='+', help="For fixing protein")
     parser.add_argument('--generate-per-sample', type=int, default=1)
     parser.add_argument('--train-sample', type=float, default=1.0)
     parser.add_argument('--valid-sample', type=float, default=1.0)
@@ -482,8 +504,12 @@ def main():
     model_, voc_encoder = get_model(pargs, None, init_state_path, device)
 
     # data
+    if args.protein:
+        raw_data = CDNamedDataset(args.protein, fargs.pocket_cls)
+    else:
+        raw_data = None
     _voc_encoder, _raw_data, protein_data, _lig, token_data, position_data, _weight_data, _center_data, data_log \
-            = get_finetune_data(fargs, 'train', 1.0, False, False, True, set(voc_encoder.i2voc[1:]), 'none')
+            = get_finetune_data(fargs, 'train', 1.0, False, False, True, set(voc_encoder.i2voc[1:]), 'none', raw_data)
     protein_pdb_data = Mol2PDBDataset(protein_data)
     logs += data_log
     index_data, token_data = index_dataset(token_data)

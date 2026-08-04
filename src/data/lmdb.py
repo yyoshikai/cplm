@@ -28,6 +28,8 @@ class LMDBDataset(Dataset[bytes]):
                 raise ValueError(f"Unsupported {idx_to_key=}")
 
     def __getitem__(self, idx: int) -> bytes:
+        if idx < 0 or len(self) <= idx:
+            raise IndexError # default __iter__ does not refer to __len__. It stops only when IndexError was raised.
         env, txn = load_lmdb(self.path)
         item = txn.get(self.idx_to_key(idx))
         if item is None:
