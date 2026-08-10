@@ -439,7 +439,135 @@ class TransformerModel(Model):
                 range_output = torch.multinomial(F.softmax(range_logit, dim=-1), num_samples=1).item()
                 output = next_token_range[range_output]
                 cur_inputs.append(output)
-                
+
+    @torch.inference_mode()
+    def generate3(self, contexts: list[Tensor], positions: list[list[int]], streamers: list[Streamer], max_new_token: int, 
+            prompt_caches=None, return_prompt_caches=False):
+        """
+        contexts: list[Tensor(L, torch.long)]
+        positions: list[Tensor(L, torch.long)]
+        """
+        # For utility
+        B = len(contexts)
+        for b in range(B):
+            if not isinstance(contexts[b], Tensor):
+                raise ValueError(f"{type(contexts[{b}])=}, but it should be torch.Tensor")
+            if not isinstance(positions[b], list):
+                raise ValueError(F"{type(positions[b])=}, but it should be list[int]")
+
+        # get shape
+        B = len(contexts)
+        H = self.layers[0].self_attn.num_heads
+        Dh = self.layers[0].self_attn.head_dim
+        device = contexts[0].device
+        Lcontext = max([len(context) for context in contexts])
+        Lmax = Lcontext+max_new_token-1
+        
+        # check shape
+        assert len(streamers) == B
+        assert max_new_token >= 1
+        for context, position in zip(contexts, positions):
+            assert len(position) == len(context)
+
+        # Initial forward
+        if prompt_caches is None:
+            prompt_caches = [None] * B
+        is_continues = []
+        next_positions = []
+        caches = []
+        cur_inputs = []
+        generated_prompt_caches = [None] * B
+        kwargs = dict(device=device, dtype=self.embedding.weight.dtype)
+        logger.info("Initial forward started.")
+        for b, (context, position, streamer, prompt_cache) in enumerate(zip(contexts, positions, streamers, prompt_caches)):
+            is_continue, next_position, next_token_range = streamer.put(context)
+            assert is_continue
+            if prompt_cache is not None:
+                cache, logit = prompt_cache
+            else:
+                # Search same result
+                for b0 in range(b):
+                    if contexts[b0].shape == context.shape and torch.all(contexts[b0] == context) and positions[b0] == position:
+                        cache, logit = generated_prompt_caches[b0]
+                        break
+                else:
+                    # inference
+                    cache = [(torch.zeros((1, H, Lmax, Dh), **kwargs), torch.zeros((1, H, Lmax, Dh), **kwargs)) for _ in self.layers]
+                    sin, cos = self.get_pos_buffer(position) # [L, Dh], [L, Dh]
+                    x = context.unsqueeze(-1) # [L, 1(B)]
+                    x = self.embedding(x)
+                    for il, layer in enumerate(self.layers):
+                        x, _ = layer(x, sin, cos, is_causal=True, cache=cache[il], cache_size=0) # [L, 1, D]
+                    logit = self.predictor(self.norm(x[-1, 0])) # [L, 1, D] -> [D]
+            range_logit = logit[next_token_range]
+            range_output = torch.multinomial(F.softmax(range_logit, dim=0), num_samples=1).item()
+            output = next_token_range[range_output]
+            generated_prompt_caches[b] = cache, logit
+            caches.append(cache)
+            is_continues.append(is_continue)
+            cur_inputs.append(output)
+            next_positions.append(next_position)
+        logger.info("Initial forward ended.")
+        if not return_prompt_caches:
+            del generated_prompt_caches
+
+        cache = [
+            (
+                torch.cat([caches[b][il][0] for b in range(B)], dim=0),
+                torch.cat([caches[b][il][1] for b in range(B)], dim=0), 
+            ) for il in range(self.num_layers)
+        ] # [i_layer][k,v][B, H, L, Dh]
+        cache_size = Lcontext
+        del caches
+
+        streamers = list(itr.compress(streamers, is_continues))
+        src_mask = torch.zeros((B, 1, 1, Lmax), **kwargs) # [B, L]
+        for b, context in enumerate(contexts):
+            src_mask[b, :, :, len(context):Lcontext] = -torch.inf
+
+        for i_gen in (range(1, max_new_token) if max_new_token is not None else itr.count(1)):
+            positions = next_positions
+            is_continues, next_positions, next_token_ranges = zip(*[ 
+                streamer.put([cur_input]) for streamer, cur_input in zip(streamers, cur_inputs)
+            ])
+            if not any(is_continues):
+                break
+
+            # remove finished sample
+            if not all(is_continues):
+                cur_inputs, positions, next_positions, next_token_ranges, streamers \
+                    = zip(*itr.compress(zip(cur_inputs, positions, next_positions, next_token_ranges, streamers), is_continues))
+                is_continues = torch.tensor(is_continues, device=device)
+                ## src_mask
+                src_mask = src_mask[is_continues]
+                length_mask = torch.any(src_mask.squeeze(1, 2) == 0, dim=0) # [Lmax, ]
+                src_mask = src_mask[:, :, :, length_mask].contiguous()
+                ## cache
+                for il in range(self.num_layers):
+                    cache[il] = (
+                        cache[il][0][is_continues][:,:,length_mask], 
+                        cache[il][1][is_continues][:,:,length_mask], 
+                    )
+
+            # make position
+            sin, cos = self.get_pos_buffer(positions) # [B, Dh], [B, Dh]
+            sin, cos = sin.unsqueeze(1), cos.unsqueeze(1) # [B, 1, Dh], # [B, 1, Dh]
+
+            x = torch.tensor(cur_inputs, dtype=torch.long, device=device).unsqueeze(0) # [1(L), B]
+            x = self.embedding(x)
+            for il, layer in enumerate(self.layers):
+                x, _ = layer(x, sin, cos, is_causal=False, cache=cache[il], cache_size=cache_size, src_mask=src_mask)
+            cache_size += 1
+            logits = self.predictor(self.norm(x[0])) # [1(L), B, D] -> [B, D]
+            cur_inputs = []
+            for b, (logit, next_token_range) in enumerate(zip(logits, next_token_ranges)):
+                range_logit = logit[next_token_range]
+                range_output = torch.multinomial(F.softmax(range_logit, dim=-1), num_samples=1).item()
+                output = next_token_range[range_output]
+                cur_inputs.append(output)
+        if return_prompt_caches:
+            return generated_prompt_caches        
+        
 
     def _get_mname(self, bf16: bool, kernel: str):        
         mname = f'tf_{kernel.lower()}'

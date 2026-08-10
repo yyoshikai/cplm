@@ -6,7 +6,7 @@ import sys, os, math, yaml
 from argparse import Namespace, ArgumentParser
 from glob import glob
 import torch
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, add_file_handler
 from src.data.tokenizer import StringTokenizer2
 from src.data.mol_tokenizer import get_mol_tokenizer
 from src.train.data import get_finetune_data
@@ -28,9 +28,10 @@ args = parser.parse_args()
 
 # Environment
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-odir = f"generate/rec_ligand1/reinforce/{args.sname}/{args.opt}"
+odir = f"generate/rec_ligand1/{args.sname}/{args.opt}"
 os.makedirs(odir, exist_ok=True)
-logger = get_logger(f"{odir}/debug.log", stream=True)
+logger = get_logger(stream=True)
+add_file_handler(logger, f"{odir}/debug.log")
 
 ## load training args
 with open(f"reinforce/results/{args.sname}/args.yaml") as f:
@@ -65,7 +66,7 @@ for idx in range(len(prompt_token_data)):
     if len(prompt) >= args.max_prompt_len:
         logger.warning(f"Skipped {idx=}: {len(prompt)=}")
         continue
-
+    prompt_cache = None
     for nb in range(math.floor(args.max_trial/args.batch_size)):
         ## streamer
         streamers = []
@@ -73,12 +74,15 @@ for idx in range(len(prompt_token_data)):
             streamer = LigandStreamer(mol_tokenizer, voc_encoder, end_token='[END]', cls='rdkit')
             streamer = SaveLigandStreamer(streamer, f"{odir}/new_sdf/{idx}/{nb*args.batch_size+b}.sdf")
             streamers.append(streamer)
-        model.generate2(
+        generated_prompt_caches = model.generate3(
             contexts=[prompt]*args.batch_size, 
             positions=[position]*args.batch_size, 
             streamers=streamers, 
-            max_new_token=rargs.max_new_token
+            max_new_token=rargs.max_new_token, 
+            prompt_caches = [prompt_cache] * args.batch_size, 
+            return_prompt_caches=True            
         )
+        prompt_cache = generated_prompt_caches[0]
 
         ## count generated sdfs
         if len(glob(f"{odir}/new_sdf/{idx}/*.sdf")) >= args.n_gen:
