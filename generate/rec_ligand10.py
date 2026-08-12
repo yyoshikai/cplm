@@ -47,12 +47,18 @@ model.eval()
 
 # Make data
 ## prompt protein dataset
-added_vocs = StringTokenizer2(f"src/data/vocs/{fargs.smiles_voc_dir}").vocs()
-_voc_encoder, _raw, _rec_data, _lig, prompt_token_data, position_data, _weight, \
+added_vocs = set(voc_encoder.i2voc) - {'[PAD]'}
+data_voc_encoder, _raw, _rec_data, _lig, prompt_token_data, position_data, _weight, \
     _center_data, _data_logs = get_finetune_data(args=fargs, split='test', 
     sample=1.0, add_ligand=False, random_ligand=False, random_rotate=False, 
     added_vocs=added_vocs, 
     prompt_score='none', tensor_position=False)
+
+if data_voc_encoder.i2voc != voc_encoder.i2voc:
+    logger.error(f"{voc_encoder.i2voc=}")
+    logger.error(f"{data_voc_encoder.i2voc=}")
+    raise ValueError
+
 ## mol_tokenizer
 mol_tokenizer = get_mol_tokenizer(fargs.lig_format, fargs.lig_order, fargs.smiles_voc_dir, fargs.lig_h)
 
