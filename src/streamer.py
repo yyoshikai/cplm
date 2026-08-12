@@ -229,8 +229,13 @@ class SaveLigandStreamer(WrapperStreamer):
         output = self.streamer.put(tokens)
         mol = self.streamer.ligand()
         if mol is not None:
-            make_pardir(self.new_sdf_path)
-            with open(self.new_sdf_path, 'w') as f:
-                f.write(Chem.MolToMolBlock(mol))
-
+            try:
+                # Error can be raised in this line.
+                mol_sdf = Chem.MolToMolBlock(mol) 
+            except RuntimeError:
+                mol_sdf = None
+            if mol_sdf is not None:
+                make_pardir(self.new_sdf_path)
+                with open(self.new_sdf_path, 'w') as f:
+                    f.write(mol_sdf)
         return output
