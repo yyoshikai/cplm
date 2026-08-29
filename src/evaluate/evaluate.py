@@ -1,5 +1,6 @@
 import os, subprocess
 from logging import getLogger
+from pathlib import Path
 import subprocess
 from typing import TypeVar, Optional
 from time import time
@@ -13,6 +14,7 @@ from ..utils import silence_print
 from ..utils.path import make_pardir, WORKDIR
 from ..chem import sdf2obmol, pdb2obmol, rdmol2obmol, get_coords
 logger = getLogger(__name__)
+root_dir = Path(__file__).parents[2]
 
 T = TypeVar('T')
 
@@ -53,7 +55,8 @@ def eval_vina(lig_sdf: str, rec_pdb: str, rec_pdbqt_path: str) -> tuple[float, f
         PDB string
     """
     r = subprocess.run(
-        ["python", "-m", "src.evaluate._eval_vina_worker", rec_pdbqt_path],
+        f"python -m src.evaluate._eval_vina_worker {rec_pdbqt_path}".split(' '),
+        cwd=root_dir,
         input = f"{lig_sdf}{DELIM}{rec_pdb}", 
         capture_output=True, text=True
     )
@@ -87,51 +90,70 @@ def eval_qvina(ligand: Chem.Mol|str, rec_pdb_path: str, out_dir: str, use_uff=Tr
     """
     if isinstance(ligand, str):
         ligand = Chem.MolFromMolBlock(ligand)
+    if ligand is None:
+        return None, 'input_ligand_is_invalid', '', ''
 
     stdout = stderr = affinity = None
     obc = OBConversion()
-    try:
-        out_dir = os.path.realpath(out_dir)
-        os.makedirs(out_dir, exist_ok=True)
+    out_dir = os.path.realpath(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
 
-        mol = Chem.AddHs(ligand, addCoords=True)
-        if use_uff:
-            try:
-                not_converge = 10
-                while not_converge > 0:
-                    flag = UFFOptimizeMolecule(mol)
-                    not_converge = min(not_converge - 1, flag * 10)
-            except RuntimeError:
-                pass
-        pos = mol.GetConformer(0).GetPositions()
-        if center is None:
-            center = (pos.max(0) + pos.min(0)) / 2
-        
-        lig_obmol = rdmol2obmol(mol)
-        obc.SetOutFormat('pdbqt')
-        obc.WriteFile(lig_obmol, f"{out_dir}/lig.pdbqt")
-        
-        with silence_print(not print_prepare):
-            prepare_receptor4_func(['-r', rec_pdb_path, '-o', f'{out_dir}/rec.pdbqt'])
-        with subprocess.Popen('/bin/bash', shell=False, stdin=subprocess.PIPE, 
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
-            path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/qvina02")
-            command = f"cd {out_dir} && {path_to_qvina} --receptor rec.pdbqt --ligand lig.pdbqt --center_x {center[0]:.4f} --center_y {center[1]:.4f} --center_z {center[2]:.4f} --size_x 20 --size_y 20 --size_z 20 --exhaustiveness {exhaustiveness}"
-            if cpu is not None:
-                command += f" --cpu {cpu}"
-            proc.stdin.write(command.encode('utf-8'))
-            proc.stdin.close()
-            start = time()
-            while proc.poll() is None:
-                if timeout is not None and time()-start > timeout:
-                    print(f"qvina subprocess reached timeout({timeout})", flush=True)
-                    return None, 'timeout', stdout, stderr
-            stdout = proc.stdout.read().decode()
-            stderr = proc.stderr.read().decode()
-        
+    mol = Chem.AddHs(ligand, addCoords=True)
+    if use_uff:
+        try:
+            not_converge = 10
+            while not_converge > 0:
+                flag = UFFOptimizeMolecule(mol)
+                not_converge = min(not_converge - 1, flag * 10)
+        except RuntimeError:
+            pass
+    pos = mol.GetConformer(0).GetPositions()
+    if center is None:
+        center = (pos.max(0) + pos.min(0)) / 2
+    
+    lig_obmol = rdmol2obmol(mol)
+    obc.SetOutFormat('pdbqt')
+    obc.WriteFile(lig_obmol, f"{out_dir}/lig.pdbqt")
+    
+    with silence_print(not print_prepare):
+        prepare_receptor4_func(['-r', rec_pdb_path, '-o', f'{out_dir}/rec.pdbqt'])
+
+    path_to_qvina = os.environ.get('QVINA_PATH', f"{WORKDIR}/github/qvina/qvina02")
+
+    args = [
+        path_to_qvina,
+        '--receptor', 'rec.pdbqt',
+        '--ligand', 'lig.pdbqt',
+        '--center_x', f'{center[0]:.4f}',
+        '--center_y', f'{center[1]:.4f}',
+        '--center_z', f'{center[2]:.4f}',
+        '--size_x', '20',
+        '--size_y', '20',
+        '--size_z', '20',
+        '--exhaustiveness', str(exhaustiveness),
+    ]
+
+    if cpu is not None:
+        args += ['--cpu', str(cpu)]
+
+    proc = subprocess.Popen(
+        args,
+        cwd=out_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"qvina subprocess reached timeout({timeout})", flush=True)
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        return None, 'timeout', stdout, stderr
+
+    try:
         affinity = parse_qvina_out(f"{out_dir}/lig_out.pdbqt")
         return affinity, None, stdout, stderr
-    except Exception as e:
-        return affinity, e, stdout, stderr
-
-
+    except AttributeError: # /lig_out.pdbqt が存在しないなど
+        return None, 'qvina', stdout, stderr

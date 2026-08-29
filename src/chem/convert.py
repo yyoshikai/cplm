@@ -9,14 +9,18 @@ def rdmol2obmol(rdmol: Chem.Mol) -> OBMol:
     obc.ReadString(obmol, sdf)
     return obmol
 
+def obmol2sdf(obmol: OBMol):
+    obc = OBConversion()
+    obc.SetOutFormat('sdf')
+    sdf = obc.WriteString(obmol)
+    return sdf
+
 def obmol2rdmol(obmol: OBMol, sanitize: bool=True) -> Chem.Mol:
     """
     MolFromMolBlockだとPropが無視される。
     
     """
-    obc = OBConversion()
-    obc.SetOutFormat('sdf')
-    sdf = obc.WriteString(obmol)
+    sdf = obmol2sdf(obmol)
     ms = Chem.SDMolSupplier()
     ms.SetData(sdf, removeHs=False, sanitize=sanitize)
     return next(ms)
