@@ -22,6 +22,7 @@ parser = ArgumentParser()
 parser.add_argument("--sname", required=True)
 parser.add_argument("--opt", type=int, required=True)
 ## generation
+parser.add_argument("--gname")
 parser.add_argument("--n-gen", type=int, default=10)
 parser.add_argument("--max-trial", type=int, default=100)
 parser.add_argument("--protein", nargs='*', default=None)
@@ -32,7 +33,7 @@ args = parser.parse_args()
 
 # Environment
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-odir = f"generate/rec_ligand/{args.sname}/{args.opt}"
+odir = f"generate/rec_ligand/{args.gname or ''}/{args.sname}/{args.opt}"
 os.makedirs(odir, exist_ok=True)
 logger = get_logger(stream=True)
 add_file_handler(logger, f"{odir}/debug.log")
