@@ -6,15 +6,13 @@ import sys, os, math, yaml
 from argparse import Namespace, ArgumentParser
 from glob import glob
 import torch
-from torch.utils.data import Subset
 from reinforce_atom import CDNamedDataset
 from src.utils.logger import get_logger, add_file_handler
 from src.data.datasets.crossdocked import CDProteinTestDataset
-from src.data.tokenizer import StringTokenizer2
 from src.data.mol_tokenizer import get_mol_tokenizer
 from src.train.data import get_finetune_data
 from src.train import get_model
-from src.streamer import WrapperStreamer, LigandStreamer, SaveLigandStreamer, TokenSaveStreamer, TokenWriteStreamer, PositionSaveStreamer, TimeLogStreamer
+from src.streamer import LigandStreamer, SaveLigandStreamer
 
 # Arguments
 parser = ArgumentParser()
@@ -115,3 +113,5 @@ for idx in idxs:
         if len(glob(f"{odir}/new_sdf/{idx}/*.sdf")) >= args.n_gen:
             break
     logger.info(f"{idx}/{len(prompt_token_data)} finished.")
+
+    

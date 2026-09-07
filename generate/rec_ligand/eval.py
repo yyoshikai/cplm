@@ -4,10 +4,8 @@ from contextlib import nullcontext
 import concurrent.futures as cf
 import multiprocessing as mp
 from argparse import ArgumentParser, Namespace
-from collections import defaultdict
 from logging import getLogger
 from glob import glob
-import numpy as np, pandas as pd
 from openbabel.openbabel import OBConversion
 from tqdm import tqdm
 from src.utils.path import mwrite
@@ -15,6 +13,7 @@ from src.utils.logger import get_logger, add_file_handler
 from src.evaluate import eval_vina, eval_qvina
 from src.train.data import get_finetune_data
 from src.data.molecule import Mol2PDBDataset
+from reinforce_atom import CDNamedDataset
 
 def eval_vina2(gdir, idx, t, lig_sdf):
     logger = getLogger("eval_vina")
@@ -51,14 +50,15 @@ def eval_qvina2(gdir, idx, t, lig_sdf):
         mwrite(f"{out_dir}/qvina_stderr.txt", stderr)
     print(f"qvina[{idx}][{t}] ended.", flush=True)
 
-def eval_rec_ligand(fargs: Namespace, gdir: str, num_workers: int):
+def eval_rec_ligand(fargs: Namespace, gdir: str, num_workers: int, protein=None):
     """
     refについても同じ枠組みで評価したかったので。
     """
     logger = getLogger("eval_rec_ligand")
 
     # Protein dataset
-    rec_data = get_finetune_data(fargs, 'test', sample=1.0, add_ligand=False, random_ligand=False, random_rotate=False, added_vocs=set(), prompt_score='none')[2]
+    raw_data = CDNamedDataset(protein, fargs.pocket_cls) if protein is None else None
+    rec_data = get_finetune_data(fargs, 'test', sample=1.0, add_ligand=False, random_ligand=False, random_rotate=False, added_vocs=set(), prompt_score='none', raw_data=raw_data)[2]
     rec_data = Mol2PDBDataset(rec_data)
 
     with cf.ProcessPoolExecutor(num_workers) if num_workers > 0 else nullcontext() as e:
@@ -100,11 +100,12 @@ def eval_rec_ligand(fargs: Namespace, gdir: str, num_workers: int):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
+    parser.add_argument("--gname", required=True)
     parser.add_argument("--sname", required=True)
     parser.add_argument("--opt", required=True)
     parser.add_argument("--num-workers", type=int)
     args = parser.parse_args()
-    gdir = f"generate/rec_ligand/{args.sname}/{args.opt}"
+    gdir = f"generate/rec_ligand/{args.gname}/{args.sname}/{args.opt}"
     obc = OBConversion()
     obc.SetInFormat('pdbqt')
 
@@ -119,4 +120,4 @@ if __name__ == "__main__":
     with open(f"finetune/results/{rargs.finetune_name}/args.yaml") as f:
         fargs = Namespace(**yaml.safe_load(f))
 
-    eval_rec_ligand(fargs, gdir, args.num_workers)
+    eval_rec_ligand(fargs, gdir, args.num_workers, rargs.protein)
