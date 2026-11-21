@@ -6,11 +6,9 @@ import sys, os, math, yaml
 from argparse import Namespace, ArgumentParser
 from glob import glob
 import torch
-from reinforce_atom import CDNamedDataset
 from src.utils.logger import get_logger, add_file_handler
-from src.data.datasets.crossdocked import CDProteinTestDataset
 from src.data.mol_tokenizer import get_mol_tokenizer
-from src.train.data import get_finetune_data
+from src.train.data import get_finetune_data, get_generate_data
 from src.train import get_model
 from src.streamer import LigandStreamer, SaveLigandStreamer
 
@@ -24,6 +22,7 @@ parser.add_argument("--gname")
 parser.add_argument("--n-gen", type=int, default=10)
 parser.add_argument("--max-trial", type=int, default=100)
 parser.add_argument("--protein", nargs='*', default=None)
+parser.add_argument("--protein-paths", nargs='*')
 ## environment
 parser.add_argument("--batch-size", type=int, required=True)
 parser.add_argument("--max-prompt-len", type=int, required=True)
@@ -53,17 +52,7 @@ model.eval()
 
 # Make data
 ## raw data
-if getattr(rargs, "protein", None) is not None:
-    raw_data = CDNamedDataset(rargs.protein, fargs.pocket_cls)
-    idxs = list(range(len(raw_data)))
-else:
-    raw_data = CDProteinTestDataset(fargs.pocket_cls)
-    if args.protein is not None:
-        idxs = [i for i, (pname, lname) in enumerate(raw_data.split_by_name)
-                if pname.split('_rec_')[0] in args.protein]
-        logger.debug(f"{idxs=}")
-    else:
-        idxs = list(range(len(raw_data)))
+raw_data, idxs = get_generate_data(args, fargs, rargs)
 
 ## prompt protein dataset
 added_vocs = set(voc_encoder.i2voc) - {'[PAD]'}

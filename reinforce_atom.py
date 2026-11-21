@@ -26,6 +26,7 @@ from src.evaluate import eval_vina_atom
 from src.data.tokenizer import VocEncoder
 from src.data.molecule import Mol2PDBDataset
 from src.data.mol_tokenizer import MolTokenizer, get_mol_tokenizer
+from src.data.datasets.crossdocked import CDNamedDataset
 from src.model import Model, Streamer
 from src.train import set_env, get_model, get_process_ranks
 from src.train.collator import solve_increasing_fn_left
@@ -40,7 +41,7 @@ error_scores = { 'min_vina': -50.0, 'vina': -50.0, 'mw_max': 0.0, 'qvina': -50.0
 
 class GetScoreStreamer(WrapperStreamer):
     logger = getLogger(__qualname__)
-    def __init__(self, streamer: Streamer, ligand_streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool, valid_reward: float, dist_penalty: float):
+    def __init__(self, streamer: Streamer, ligand_streamer: LigandStreamer, e: cf.ProcessPoolExecutor, target, rec_pdb: str, out_dir: str, cpu: int, print_prepare: bool, valid_reward: float, dist_penalty: float, repulsion_weight):
         super().__init__(streamer)
         self.ligand_streamer = ligand_streamer
         self.e = e
@@ -52,6 +53,7 @@ class GetScoreStreamer(WrapperStreamer):
         self.gen_size = 0
         self.valid_reward = valid_reward
         self.dist_penalty = dist_penalty
+        self.repulsion_weight = repulsion_weight
     def put(self, tokens):
         is_remain, position, token_range = self.streamer.put(tokens)
         if self.prompt_size is None:
@@ -60,7 +62,7 @@ class GetScoreStreamer(WrapperStreamer):
             assert len(tokens) == 1
             self.gen_size += 1
         if not is_remain and self.ligand_streamer.error() is None:
-            self.future = self.e.submit(eval_vina_atom, molecule=self.ligand_streamer.ligand(), protein=self.rec_pdb)
+            self.future = self.e.submit(eval_vina_atom, molecule=self.ligand_streamer.ligand(), protein=self.rec_pdb, weights=[-0.035579, -0.005156, self.repulsion_weight, -0.035069, -0.587439, 50.0, 0.05846])
         return is_remain, position, token_range
     def result(self):
         if self.future is not None:
@@ -176,7 +178,8 @@ class Generator:
             target: str,
             device: torch.device,
             valid_reward: float,
-            dist_penalty: float):
+            dist_penalty: float,
+            repulsion_weight: float):
         self.voc_encoder = voc_encoder
         self.mol_tokenizer = mol_tokenizer
         self.result_dir = result_dir
@@ -189,6 +192,7 @@ class Generator:
         self.device = device
         self.valid_reward = valid_reward
         self.dist_penalty = dist_penalty
+        self.repulsion_weight = repulsion_weight
 
     def generate(
             self,
@@ -229,7 +233,7 @@ class Generator:
                 streamer = GetScoreStreamer(streamer, ligand_streamer, e, self.target, pdb, 
                     out_dir, 
                     cpu=self.cpu, print_prepare=step < 3, valid_reward=self.valid_reward,
-                    dist_penalty=self.dist_penalty) 
+                    dist_penalty=self.dist_penalty, repulsion_weight=self.repulsion_weight) 
                 score_streamers.append(streamer)
                 streamer = TokenSaveStreamer(streamer)
                 token_streamers.append(streamer)
@@ -350,29 +354,6 @@ class ScoreRecordGenerator(Generator):
             f.write(','.join(map(str, total_scores))+'\n')
         return token, position, weight, scores, errors
 
-# タンパク質固定用
-from openbabel import openbabel as ob
-from src.chem import read_pdb_path
-from src.data import TupleDataset
-from src.data.datasets.crossdocked import CDDIR
-from src.data.datasets.unimol import UniMolLigandDataset
-class CDNamedDataset(TupleDataset[tuple[ob.OBMol, None, None]]):
-    """
-    リガンド・スコアはNoneとなる
-    
-    """
-    def __init__(self, names: list[str], out_cls: Literal['ob', 'rdkit', 'text']):
-        super().__init__(3)
-        self.names = names
-        self.out_cls = out_cls
-        self.dummy_mol = UniMolLigandDataset('valid', self.out_cls)[0]
-
-    def __getitem__(self, idx):
-        return read_pdb_path(f"{CDDIR}/CrossDocked2020/{self.names[idx]}_rec.pdb", self.out_cls), self.dummy_mol, None
-
-    def __len__(self):
-        return len(self.names)
-
 def save_and_disable_memory_history(path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.cuda.memory._dump_snapshot(path)
@@ -392,6 +373,7 @@ def main():
     parser.add_argument('--adv-sample-whiten', nargs='*', choices=['mean', 'std'], default=['mean', 'std'])
     parser.add_argument('--error-score', type=float, default=0.0)
     parser.add_argument('--dist-penalty', type=float, default=1.0)
+    parser.add_argument('--repulsion-weight', type=float, default=0.840245)
     ## Trainer
     ### PPO
     parser.add_argument('--n-ppo-step', type=int, default=5)
@@ -535,7 +517,7 @@ def main():
     if 'gpu' in args.check:
         train_looper.append(MemorySnapshotLooper(f"{result_dir}/memory_snapshot.pkl", 1, dump_process=True))
     mol_tokenizer = get_mol_tokenizer(fargs.lig_format, fargs.lig_order, fargs.smiles_voc_dir, fargs.lig_h)
-    generator = Generator(voc_encoder, mol_tokenizer, result_dir, train_looper, args.max_new_token, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward, args.dist_penalty)
+    generator = Generator(voc_encoder, mol_tokenizer, result_dir, train_looper, args.max_new_token, args.cpu, args.num_score_workers, fargs.lig_cls, args.target, device, args.valid_reward, args.dist_penalty, args.repulsion_weight)
     if args.gen_batch_size is not None:
         generator = BatchSplitGenerator(generator, args.gen_batch_size)
     generator = SizeRecordGenerator(generator, result_dir)

@@ -11,9 +11,9 @@ from tqdm import tqdm
 from src.utils.path import mwrite
 from src.utils.logger import get_logger, add_file_handler
 from src.evaluate import eval_vina, eval_qvina
-from src.train.data import get_finetune_data
+from src.train.data import get_finetune_data, get_generate_data
 from src.data.molecule import Mol2PDBDataset
-from reinforce_atom import CDNamedDataset
+from src.data.datasets.crossdocked import CDNamedDataset
 
 def eval_vina2(gdir, idx, t, lig_sdf):
     logger = getLogger("eval_vina")
@@ -50,14 +50,13 @@ def eval_qvina2(gdir, idx, t, lig_sdf):
         mwrite(f"{out_dir}/qvina_stderr.txt", stderr)
     print(f"qvina[{idx}][{t}] ended.", flush=True)
 
-def eval_rec_ligand(fargs: Namespace, gdir: str, num_workers: int, protein=None):
+def eval_rec_ligand(gargs: Namespace, fargs: Namespace, rargs: Namespace, gdir: str, num_workers: int):
     """
     refについても同じ枠組みで評価したかったので。
     """
-    logger = getLogger("eval_rec_ligand")
 
     # Protein dataset
-    raw_data = CDNamedDataset(protein, fargs.pocket_cls) if protein is None else None
+    raw_data, idxs = get_generate_data(gargs, fargs, rargs)
     rec_data = get_finetune_data(fargs, 'test', sample=1.0, add_ligand=False, random_ligand=False, random_rotate=False, added_vocs=set(), prompt_score='none', raw_data=raw_data)[2]
     rec_data = Mol2PDBDataset(rec_data)
 
@@ -115,9 +114,11 @@ if __name__ == "__main__":
     add_file_handler(logger, f"{gdir}/eval.log", mode='a')
 
     ## load training args
+    with open(f"{gdir}/args.yaml") as f:
+        gargs = Namespace(**yaml.safe_load(f))
     with open(f"reinforce/results/{args.sname}/args.yaml") as f:
         rargs = Namespace(**yaml.safe_load(f))
     with open(f"finetune/results/{rargs.finetune_name}/args.yaml") as f:
         fargs = Namespace(**yaml.safe_load(f))
 
-    eval_rec_ligand(fargs, gdir, args.num_workers, rargs.protein)
+    eval_rec_ligand(gargs, fargs, rargs, gdir, args.num_workers)

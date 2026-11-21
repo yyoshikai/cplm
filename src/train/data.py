@@ -8,19 +8,20 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from openbabel.openbabel import OBMol
+
+from src.chem import read_pdb_path
 from ..data import RepeatDataset, Subset, StackDataset, TensorDataset, untuple_dataset, RandomChoiceDataset
 from ..data.tokenizer import FloatTokenizer, TokenizeDataset, SentenceDataset, VocEncoder, BinaryClassTokenizer, TokenEncodeDataset, TokenWeightDataset, RemoveLastDataset
 from ..data.datasets.targetdiff import TargetDiffScafCDProteinDataset
 from ..data.datasets.unimol import UniMolLigandDataset, UniMolLigandNoMolNetDataset
-from ..data.datasets.crossdocked import CDProteinDataset
+from ..data.datasets.crossdocked import CDProteinDataset, CDProteinTestDataset, CDNamedDataset
 from ..data.datasets.pdb import PDBUniMolRandomDataset
 from ..data.protein import SelectDataset
 from ..data.molecule import RemoveIsotopeDataset, SetHydrogenDataset, RandomScoreDataset, RandomClassDataset
 from ..data.mol_tokenizer import MolTokenizerDataset
 from ..data.coord import CoordTransformDataset, AlignCenterDataset
 
-
-def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0):
+def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'], pocket_weight: float=1.0, lig_weight: float=1.0, score_weight: float=5.0, return_mol: bool=False):
     logs = []
 
     assert isinstance(args, Namespace) # not Dict
@@ -30,6 +31,7 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
     token_datas = []
     position_datas = []
     weight_datas = []
+    mol_datas = []
     dnames = []
     vocs = set()
     cls2dtype = {
@@ -70,10 +72,12 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
         mol = SetHydrogenDataset(mol, pargs.h != 'none')
         if not pargs.pre_coord:
             mol = CoordTransformDataset(mol, base_seed=args.seed+d_seed, normalize_coord=True, random_rotate=True, coord_noise_std=args.coord_noise_std).untuple()[0]
-
-        tokens, _orders = MolTokenizerDataset(mol, pargs.format, pargs.order, args.smiles_voc_dir).untuple()
+        mol_datas.append(mol)
+        mol_tokenizer_data = MolTokenizerDataset(mol, pargs.format, pargs.order, args.smiles_voc_dir, pargs.h)
+        tokens, _orders = mol_tokenizer_data.untuple()
         start = '[LIGAND]' if dtype == 'lig' else '[POCKET]'
         sentence = [start, tokens, '[END]']
+        vocs |= mol_tokenizer_data.vocs() | {start, '[END]'}
 
         # weight
         weight = lig_weight if dtype == 'lig' else pocket_weight
@@ -94,8 +98,8 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
             sentence += ['[SCORE]', score, '[END]']
             separates2weight[start, '[END]', '[SCORE]'] = score_weight
             separates2weight[start, '[END]', '[SCORE]', '[END]'] = 0.0
+            vocs |= score.vocs() | {'[SCORE]', '[END]'}
         sentence = SentenceDataset(*sentence)
-        vocs |= sentence.vocs()
         token, position = sentence.untuple()
         position = TensorDataset(position, torch.long)
         
@@ -116,7 +120,11 @@ def get_train_data(args: Namespace, split, score: Literal['none', 'cls', 'reg'],
     ### merge weight
     datas = [StackDataset(token, position, weight) for token, position, weight
             in zip(token_datas, position_datas, weight_datas)]
-    return datas, voc_encoder, dnames, logs
+
+    out = datas, voc_encoder, dnames, logs
+    if return_mol:
+        out = out+(mol_datas,)
+    return out
 
 def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bool, random_ligand: bool, random_rotate: bool, 
         added_vocs: set[str], prompt_score: Literal['data', 'low', 'none'], raw_data: Dataset[OBMol]|None=None, encode: bool=True, tensor_position: bool=True):
@@ -219,6 +227,24 @@ def get_finetune_data(args: Namespace, split: str, sample: float, add_ligand: bo
         voc_encoder = None
 
     return voc_encoder, raw_data, protein, lig, token, position, weight, center, logs
+
+def get_generate_data(args, fargs, rargs): # generate/rec_ligand/__main__ で使用していたが, __main__ 以外でも使用したいためここに置く。
+    if getattr(args, 'protein_paths', None) is not None:
+        dummy_mol = UniMolLigandDataset('train', fargs.lig_cls)[0]
+        raw_data = [(read_pdb_path(path, fargs.pocket_cls), dummy_mol, None) for path in args.protein_paths]
+        idxs = list(range(len(raw_data)))
+    else:
+        if getattr(rargs, "protein", None) is not None:
+            raw_data = CDNamedDataset(rargs.protein, fargs.pocket_cls)
+            idxs = list(range(len(raw_data)))
+        else:
+            raw_data = CDProteinTestDataset(fargs.pocket_cls)
+            if args.protein is not None:
+                idxs = [i for i, (pname, lname) in enumerate(raw_data.split_by_name)
+                        if pname.split('_rec_')[0] in args.protein]
+            else:
+                idxs = list(range(len(raw_data)))
+    return raw_data, idxs
 
 ## Define functions for batch collation
 def collate(data_list: list[tuple[Tensor, Tensor, Tensor]], pad_token):

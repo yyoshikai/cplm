@@ -2,6 +2,7 @@
 251028 前処理のコードは消したので, 古いcommit(04fa7c93等)を参照してください。
 """
 import os, gzip
+from glob import glob
 from typing import Literal
 
 import torch
@@ -98,3 +99,30 @@ class CDProteinDataset(TupleDataset[tuple[OBMol, Chem.Mol, float, str, str]]):
         return self.dataset[self.indices[idx]]
     def __len__(self):
         return len(self.indices)
+
+
+class CDNamedDataset(TupleDataset[tuple[ob.OBMol, None, None]]):
+    """
+    reinforce_atom で タンパク質を固定する用
+    リガンド・スコアはNoneとなる
+    
+    """
+    def __init__(self, names: list[str], out_cls: Literal['ob', 'rdkit', 'text']):
+        super().__init__(3)
+        self.names = names
+        self.out_cls = out_cls
+        # self.dummy_mol = UniMolLigandDataset('valid', self.out_cls)[0]
+
+    def __getitem__(self, idx: int):
+        name = self.names[idx]
+        rec = read_pdb_path(f"{CDDIR}/CrossDocked2020/{self.names[idx]}_rec.pdb", self.out_cls)
+
+        pdbid, chain_id = name.rsplit('_', 1)
+        lig_paths = glob(f"{CDDIR}/CrossDocked2020/{pdbid}_*_lig.pdb")
+        assert len(lig_paths) == 1
+        lig = read_pdb_path(lig_paths[0], self.out_cls)
+
+        return rec, lig, None
+
+    def __len__(self):
+        return len(self.names)

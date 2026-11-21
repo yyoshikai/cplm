@@ -340,7 +340,7 @@ def calculate_pair_energy(r, t1, t2, weights):
          weights[4] * hbond)
     return e
 
-def eval_vina_atom(molecule, protein):
+def eval_vina_atom(molecule, protein, weights: list[float]|None = None):
     """
     Replicates the AutoDock Vina scoring function.
     
@@ -360,7 +360,8 @@ def eval_vina_atom(molecule, protein):
     """
     
     # Default AutoDock Vina weights as defined in src/lib/vina.h (lines 123-126)
-    weights = [-0.035579, -0.005156, 0.840245, -0.035069, -0.587439, 50.0, 0.05846]
+    if weights is None:
+        weights = [-0.035579, -0.005156, 0.840245, -0.035069, -0.587439, 50.0, 0.05846]
     
     # 1. Parse Molecule
     if isinstance(molecule, str):
@@ -441,7 +442,10 @@ def eval_vina_atom(molecule, protein):
     E_intra = np.zeros((len(lig_atoms), len(lig_atoms)), dtype=float)
     topo_dist = Chem.GetDistanceMatrix(mol)
     rigid_comps = get_rigid_components(mol, rot_bonds)
-    
+    n_rigid = 0
+    n_topo = 0
+    n_dist = 0
+    n_ok = 0
     for i in range(len(lig_atoms)):
         la1 = lig_atoms[i]
         idx1 = la1['idx']
@@ -456,10 +460,12 @@ def eval_vina_atom(molecule, protein):
             
             # Exclude pairs in the same rigid component (distance is fixed)
             if rigid_comps.get(idx1) == rigid_comps.get(idx2):
+                n_rigid += 1
                 continue
                 
             # Exclude 1-2, 1-3, 1-4 topological neighbors (bonds path length <= 3)
             if topo_dist[idx1][idx2] <= 3:
+                n_topo += 1
                 continue
                 
             dist_sq = (x1 - x2)**2 + (y1 - y2)**2 + (z1 - z2)**2
@@ -467,8 +473,13 @@ def eval_vina_atom(molecule, protein):
                 r = math.sqrt(dist_sq)
                 pair_e = calculate_pair_energy(r, t1, t2, weights)
                 E_intra[i][j] = curl(pair_e, v=1000.0)
-        
+                n_ok += 1
+            else:
+                n_dist += 1
+    # print(f"{n_rigid=}, {n_topo=}, {n_dist=}, {n_ok=}")
+
     w_rot = weights[6]
+    # print(f"{w_rot=}, {N_rot=}")
 
     E_inter = E_inter / (1.0 + w_rot * N_rot)
     E_intra = E_intra / (1.0 + w_rot * N_rot)
@@ -478,7 +489,7 @@ def eval_vina_atom(molecule, protein):
     E_inter_all = np.zeros(n_atom_all, dtype=float)
     E_intra_all = np.zeros((n_atom_all, n_atom_all), dtype=float)
     E_inter_all[lig_atom_mask] = E_inter
-    E_intra_all[lig_atom_mask][:,lig_atom_mask] = E_intra
+    E_intra_all[np.ix_(lig_atom_mask, lig_atom_mask)] = E_intra
 
     free_energy = E_inter.sum()
 

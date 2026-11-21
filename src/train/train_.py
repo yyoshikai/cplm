@@ -33,7 +33,7 @@ from ..model.model import Model
 from ..utils import git_commit, get_git_hash, should_show, setdefault
 from ..utils.logger import NO_DUP, add_stream_handler, add_file_handler, add_rotating_handler, set_third_party_logger
 from ..utils.model import get_num_params, get_model_size
-from ..utils.path import cleardir
+from ..utils.path import cleardir, WORKDIR
 from ..utils.ddp import reduce_float
 from ..utils.random import ddp_set_random_seed, set_deterministic
 from ..utils import IterateRecorder, remove_module
@@ -428,7 +428,6 @@ def save_batch(dir: str, logger: Logger, input: Tensor, target: Tensor, position
         df.to_csv(f"{dir}/{rank}_{idx}.tsv", index=False, sep='\t')
         with open(f"{dir}/{rank}_{idx}.txt", 'w') as f:
             f.write(df.to_string(index=False))
-
 
 def set_env(result_dir: str, args: Namespace, preparation_logs, subdirs, get_unk_logger: bool=False, get_proc_logger: bool=False):
     # init DDP

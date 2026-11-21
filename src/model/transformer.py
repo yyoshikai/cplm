@@ -23,6 +23,41 @@ logger = logging.getLogger(__name__)
 
 KVCache = tuple[Tensor, Tensor, int]
 
+# from https://docs.pytorch.org/docs/2.14/generated/torch.nn.functional.scaled_dot_product_attention.html
+def scaled_dot_product_attention_with_weight(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    attn_mask: Tensor | None = None,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    scale: float | None = None,
+    enable_gqa: bool = False,
+):
+    L, S = query.size(-2), key.size(-2)
+    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    if is_causal:
+        assert attn_mask is None
+        temp_mask = torch.ones(L, S, dtype=torch.bool, device=query.device).tril(diagonal=0)
+        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+        else:
+            attn_bias = attn_mask + attn_bias
+
+    if enable_gqa:
+        key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
+        value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
+
+    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    attn_weight += attn_bias
+    attn_weight = torch.softmax(attn_weight, dim=-1)
+    attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+    return attn_weight @ value, attn_weight
+
 class MultiheadAttention(nn.Module):
 
     def __init__(self, embed_dim, num_heads, dropout=0., device=None, dtype=None) -> None:
@@ -45,7 +80,7 @@ class MultiheadAttention(nn.Module):
         
         self.n_forward = 0
 
-    def forward(self, x: Tensor, sin: Tensor, cos: Tensor, is_causal: bool=True, src_mask: Tensor|None=None, cache: KVCache|None=None, cache_size: int|None=None) -> tuple[Tensor, Optional[Tensor]]:
+    def forward(self, x: Tensor, sin: Tensor, cos: Tensor, is_causal: bool=True, src_mask: Tensor|None=None, cache: KVCache|None=None, cache_size: int|None=None, out_attn_weight: bool=False) -> tuple[Tensor, Optional[Tensor]]:
         """
         x: Tensor[L, B, D](float)
         src_mask: Tensor expandable to [B, H, Lx, Lc]
@@ -96,12 +131,19 @@ class MultiheadAttention(nn.Module):
             src_mask = src_mask.contiguous()
             k = k.contiguous()
 
-        attn_output = scaled_dot_product_attention(q, k, v, dropout_p = self.dropout if self.training else 0.0, attn_mask=src_mask, is_causal=is_causal)
+        kwargs = dict(query=q, key=k, value=v, dropout_p=self.dropout if self.training else 0.0, attn_mask=src_mask, is_causal=is_causal)
+        if out_attn_weight:
+            attn_output, attn_weight = scaled_dot_product_attention_with_weight(**kwargs)
+        else:
+            attn_output = scaled_dot_product_attention(**kwargs)
         attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(B * L, D)
 
         attn_output = F.linear(attn_output, self.out_proj.weight, self.out_proj.bias)
         attn_output = attn_output.view(L, B, attn_output.size(1))
-        return attn_output, cache
+        if out_attn_weight:
+            return attn_output, cache, attn_weight
+        else:
+            return attn_output, cache
 
 class TransformerEncoderLayer(nn.Module):
     __constants__ = ['norm_first']

@@ -290,15 +290,6 @@ class SentenceDataset(TupleDataset[tuple[list[str], list[int]]]):
     def __len__(self):
         return self.len
     
-    def vocs(self) -> set[str]:
-        vocs = set()
-        for word in self.sentence:
-            if isinstance(word, str):
-                vocs.add(word)
-            else:
-                vocs |= word.vocs()
-        return vocs
-    
     def word_vocs(self) -> set[str]:
         return {word for word in self.sentence if isinstance(word, str)}
     
